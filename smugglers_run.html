@@ -1,0 +1,1566 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SMUGGLER'S RUN — Turf Wars (GLM 5.3)</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#1a1a1a; font-family:'Courier New', monospace; color:#eee; }
+  #c { display:block; width:100%; height:100%; }
+
+  /* HUD */
+  #hud { position:fixed; inset:0; pointer-events:none; z-index:10; }
+  .hud-corner { position:absolute; padding:10px 14px; background:rgba(0,0,0,0.45); border:2px solid #6c6; border-radius:6px; font-size:13px; line-height:1.5em; }
+  #hud-tl { top:12px; left:12px; }
+  #hud-tr { top:12px; right:12px; text-align:right; }
+  #hud-bl { bottom:12px; left:12px; max-width:260px; }
+  .lbl { color:#9e9; font-weight:bold; }
+  .val { color:#fff; }
+  .row { display:flex; justify-content:space-between; gap:14px; }
+  #team-bar { display:flex; gap:10px; align-items:center; }
+  .team-pip { width:16px; height:16px; border-radius:3px; display:inline-block; }
+  #score-t { font-size:22px; color:#4f9; font-weight:bold; }
+  #score-o { font-size:22px; color:#f55; font-weight:bold; }
+
+  /* Center direction arrow (green to contraband, red to delivery) */
+  #dir-arrow-wrap { position:absolute; top:18%; left:50%; transform:translateX(-50%); text-align:center; }
+  #dir-arrow { font-size:64px; color:#3f3; text-shadow:0 0 12px #3f3, 0 0 4px #000; transition:color 0.2s; }
+  #dir-label { font-size:14px; color:#fff; text-shadow:0 0 4px #000; margin-top:4px; font-weight:bold; }
+
+  /* Contraband banner */
+  #banner { position:absolute; top:50%; left:50%; transform:translate(-50%,-50%); font-size:40px; font-weight:bold; color:#ffd; text-shadow:0 0 16px #f80, 0 0 4px #000; opacity:0; transition:opacity 0.4s; pointer-events:none; }
+  #banner.show { opacity:1; }
+
+  /* Minimap */
+  #minimap-wrap { position:absolute; bottom:12px; right:12px; }
+  #minimap { border:2px solid #6c6; border-radius:6px; background:#222; }
+
+  /* Search box */
+  #search-wrap { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:20; display:flex; gap:6px; pointer-events:auto; }
+  #search-input { width:260px; padding:8px 10px; background:rgba(0,0,0,0.6); border:2px solid #6c6; border-radius:6px; color:#cfc; font-family:inherit; font-size:13px; }
+  #search-input::placeholder { color:#7a7; }
+  #search-input:focus { outline:none; border-color:#9f9; }
+  #search-btn { padding:8px 14px; background:#2a5; color:#fff; border:2px solid #4f8; border-radius:6px; font-family:inherit; font-weight:bold; cursor:pointer; }
+  #search-btn:hover { background:#3c6; }
+  #search-btn:disabled { background:#555; border-color:#777; cursor:wait; }
+  #key-wrap { display:flex; gap:6px; }
+  #key-input { width:180px; padding:8px 10px; background:rgba(0,0,0,0.6); border:2px solid #6a6; border-radius:6px; color:#cfc; font-family:inherit; font-size:12px; }
+  #key-input::placeholder { color:#6a6; }
+  #key-input:focus { outline:none; border-color:#9f9; }
+
+  /* View controls (zoom + car scale) */
+  #view-wrap { position:fixed; top:60px; left:50%; transform:translateX(-50%); z-index:20; display:flex; gap:18px; padding:8px 14px; background:rgba(0,0,0,0.45); border:2px solid #6c6; border-radius:6px; pointer-events:auto; }
+  .vc-row { display:flex; flex-direction:column; gap:2px; }
+  .vc-row label { font-size:11px; color:#9e9; }
+  .vc-row label span { color:#fff; font-weight:bold; }
+  .vc-row input[type=range] { width:130px; accent-color:#4f9; cursor:pointer; }
+
+  /* Loading overlay */
+  #loader { position:fixed; inset:0; background:rgba(0,0,0,0.82); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:30; }
+  #loader.hidden { display:none; }
+  #loader-msg { font-size:18px; color:#9f9; margin-top:16px; text-align:center; max-width:420px; line-height:1.5em; }
+  .spin { width:48px; height:48px; border:5px solid #444; border-top-color:#4f9; border-radius:50%; animation:sp 0.8s linear infinite; }
+  @keyframes sp { to { transform:rotate(360deg); } }
+
+  /* Start / intro overlay */
+  #intro { position:fixed; inset:0; background:rgba(10,20,10,0.92); display:flex; flex-direction:column; align-items:center; justify-content:center; z-index:40; padding:20px; }
+  #intro.hidden { display:none; }
+  #intro h1 { font-size:38px; color:#4f9; text-shadow:0 0 16px #2c5; margin-bottom:8px; letter-spacing:2px; }
+  #intro h2 { font-size:16px; color:#9e9; margin-bottom:24px; font-weight:normal; }
+  #intro p { max-width:560px; text-align:center; line-height:1.6em; margin:6px 0; font-size:14px; color:#ddd; }
+  #intro .controls { margin:18px 0; font-size:14px; color:#9e9; }
+  #intro .controls span { color:#fff; font-weight:bold; }
+  #start-btn { margin-top:18px; padding:12px 28px; background:#2a5; color:#fff; border:2px solid #4f8; border-radius:8px; font-family:inherit; font-size:18px; font-weight:bold; cursor:pointer; pointer-events:auto; }
+  #start-btn:hover { background:#3c6; }
+  .hint { font-size:12px; color:#888; margin-top:18px; max-width:520px; text-align:center; line-height:1.5em; }
+
+  /* respawn / reset flash */
+  #flash { position:fixed; inset:0; background:rgba(255,200,80,0.0); z-index:15; pointer-events:none; transition:background 0.15s; }
+  #flash.on { background:rgba(255,200,80,0.25); }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<!-- HUD -->
+<div id="hud">
+  <div class="hud-corner" id="hud-tl">
+    <div class="row"><span class="lbl">SPD</span><span class="val" id="spd">0</span></div>
+    <div class="row"><span class="lbl">DMG</span><span class="val" id="dmg">0%</span></div>
+    <div class="row"><span class="lbl">VEH</span><span class="val" id="veh">SUV</span></div>
+  </div>
+  <div class="hud-corner" id="hud-tr">
+    <div class="row"><span id="score-t">0</span><span id="score-o">0</span></div>
+    <div style="font-size:11px; color:#9e9;">YOU &nbsp; RIVAL</div>
+    <div id="team-bar"></div>
+  </div>
+  <div class="hud-corner" id="hud-bl">
+    <div id="objective">FIND CONTRABAND</div>
+    <div id="carrier-info" style="font-size:11px; color:#9e9; margin-top:4px;"></div>
+  </div>
+  <div id="dir-arrow-wrap">
+    <div id="dir-arrow">▲</div>
+    <div id="dir-label">CONTRABAND</div>
+  </div>
+  <div id="banner">CONTRABAND ACQUIRED</div>
+  <div id="minimap-wrap"><canvas id="minimap" width="170" height="170"></canvas></div>
+</div>
+
+<!-- Search + API key -->
+<div id="search-wrap">
+  <input id="key-input" type="password" placeholder="Google API key (optional)"></input>
+  <input id="search-input" type="text" placeholder="Search any place on Earth…"></input>
+  <button id="search-btn">RELOCATE</button>
+</div>
+
+<!-- View controls: zoom + car scale -->
+<div id="view-wrap">
+  <div class="vc-row">
+    <label>Zoom <span id="zoom-val">1.0×</span></label>
+    <input id="zoom-slider" type="range" min="1" max="10" step="0.1" value="1"></input>
+  </div>
+  <div class="vc-row">
+    <label>Car scale <span id="carscale-val">1.0×</span></label>
+    <input id="carscale-slider" type="range" min="1" max="3" step="0.1" value="1"></input>
+  </div>
+</div>
+
+<!-- Loader -->
+<div id="loader" class="hidden"><div class="spin"></div><div id="loader-msg">Loading…</div></div>
+
+<!-- Flash -->
+<div id="flash"></div>
+
+<!-- Intro -->
+<div id="intro">
+  <h1>SMUGGLER'S RUN</h1>
+  <h2>TURF WARS — CROOKS 'N SMUGGLERS (4v4 AI)</h2>
+  <p>A single piece of contraband spawns on the map. Grab it, rush it to the green smoke drop-off. Get rammed and it transfers to the attacker. First team to <b>5 deliveries</b> wins.</p>
+  <div class="controls">
+    <span>W / ↑</span> accelerate &nbsp;·&nbsp; <span>S / ↓</span> brake/reverse &nbsp;·&nbsp; <span>A·D / ←·→</span> steer &nbsp;·&nbsp; <span>Space</span> handbrake/jump-boost<br>
+    <span>R</span> reset car &nbsp;·&nbsp; <span>C</span> camera &nbsp;·&nbsp; <span>1-5</span> switch vehicle &nbsp;·&nbsp; <span>sliders</span> zoom &amp; car scale
+  </div>
+  <button id="start-btn">START ENGINE</button>
+  <div class="hint">Plays instantly on a procedural desert. Optional: paste a Google Maps API key (Maps JavaScript + Elevation) above, then search any place — terrain + satellite imagery is fetched live and the match relocates there.</div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.169.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.169.0/examples/jsm/"
+  }
+}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+// ============================================================
+//  SMUGGLER'S RUN — Turf Wars (Crooks 'n Smugglers), 4v4 AI
+//  Floaty arcade physics, ram-to-steal contraband, real-world
+//  terrain via Google Maps (optional). Single-file, zero setup.
+// ============================================================
+
+// ---- Constants ----
+const MAP = 420;            // half-extent of the play field (world units)
+const GRAVITY = 22;         // tuned floaty: lower than earth for hang time
+const DRIVE_FORCE = 62;
+const MAX_SPEED = 78;
+const BRAKE_FORCE = 80;
+const TURN_RATE = 2.6;      // rad/s at full steer & low speed
+const JUMP_BOOST = 1.55;    // upward impulse on space (dune launch)
+const AIR_CONTROL = 2.1;    // pitch/roll torque while airborne
+const ROLL_RECOVER = 4.2;   // auto-righting
+const TRANSFER_DIST = 4.2;  // ram-contact distance for contraband steal
+const TRANSFER_COOLDOWN = 0.6;
+const SCORE_GOAL = 5;
+const DELIVERY_RADIUS = 22;
+const CONTRABAND_RADIUS = 4.5;
+// 1 real-world meter = this many world units. Used by the heightfield, llToWorld,
+// and the 3D-tile matrix chain so real terrain and streamed building geometry
+// share one true-to-scale mapping.
+const WORLD_M_PER_M = 0.15;
+
+// ---- Globals ----
+let scene, camera, renderer, clock;
+let terrain, terrainMesh, terrainGeo, waterMesh;
+let heightfield = { size: MAP*2, segs: 128, data: null };
+let vehicles = [];
+let player;
+let contraband, contrabandLight;
+let dropZone, dropMarker;
+let scores = { team:0, opp:0 };
+let carrier = null;
+let lastTransfer = 0;
+let gameOver = false;
+let camMode = 0;
+let location = { name:'Procedural Desert', lat:0, lon:0, real:false };
+let obstacles = [];
+let trees = [];
+let rocks = [];
+let apiKey = '';
+
+// View scale: zoom pulls the camera back (tactical view); carScale grows the
+// vehicles and their collision/pickup/delivery distances together so a
+// bigger car still rams and delivers at the same visual contact point.
+const viewScale = { zoom:1, carScale:1 };
+
+// 3D Tiles: real photorealistic building/terrain geometry streamed from
+// Google's tile endpoint, layered on top of the heightmap (which still
+// drives physics). tilesRoot is the loaded tileset.json; loadedTiles
+// tracks GLB meshes already in the scene so we don't double-load.
+const gltfLoader = new GLTFLoader();
+let tilesRoot = null;
+let tilesSession = null;
+const loadedTiles = new Map();   // uri -> THREE.Group
+const tilesGroup = new THREE.Group();  // parent for all tile meshes
+let tilesLoadEnabled = false;
+// Building colliders: world-space AABBs extracted from loaded 3D-tile meshes.
+// This is the "building detection" — collidable boxes mined from the real
+// geometry, not guesses. Cars resolve against these so you smash into real
+// buildings instead of driving through them.
+const buildingColliders = [];  // {min:Vector3, max:Vector3, mesh:Object3D}
+let buildingCollidersDirty = false;
+
+// ---- Input ----
+const keys = {};
+// Ignore game controls while the user is typing in a text field — otherwise
+// Space/WASD/arrows get swallowed by the game (Space couldn't type a space
+// in the search box). Text inputs own those keys until focus leaves them.
+function typingInField(){
+  const el = document.activeElement;
+  return el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.isContentEditable);
+}
+window.addEventListener('keydown', e=>{
+  if(typingInField()) return;          // let the field have the key
+  keys[e.code] = true;
+  if(['ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space'].includes(e.code)) e.preventDefault();
+  if(e.code==='KeyR') resetPlayer();
+  if(e.code==='KeyC') camMode=(camMode+1)%3;
+  if(e.code.startsWith('Digit')){ const n=+e.code.slice(5); if(n>=1&&n<=5) switchVehicle(n-1); }
+});
+window.addEventListener('keyup', e=>{
+  if(typingInField()) return;          // don't leave a key "held" from a field
+  keys[e.code]=false;
+});
+
+// ============================================================
+//  Heightfield — shared by physics, rendering, and minimap.
+// ============================================================
+heightfield.get = function(x,z){
+  const s = this.size, d = this.data, seg = this.segs;
+  if(!d) return 0;
+  const u = (x/(s))*0.5 + 0.5;
+  const v = (z/(s))*0.5 + 0.5;
+  const fx = THREE.MathUtils.clamp(u*(seg), 0, seg-1);
+  const fz = THREE.MathUtils.clamp(v*(seg), 0, seg-1);
+  const i0 = Math.floor(fx), j0 = Math.floor(fz);
+  const i1 = Math.min(i0+1, seg), j1 = Math.min(j0+1, seg);
+  const tx = fx-i0, tz = fz-j0;
+  const h00 = d[j0*(seg+1)+i0], h10 = d[j0*(seg+1)+i1];
+  const h01 = d[j1*(seg+1)+i0], h11 = d[j1*(seg+1)+i1];
+  const a = h00+(h10-h00)*tx, b = h01+(h11-h01)*tx;
+  return a+(b-a)*tz;
+};
+
+function generateDesertHeightfield(){
+  const seg = 256, size = MAP*2;
+  const data = new Float32Array((seg+1)*(seg+1));
+  // Multi-octave value noise via hashed gradients for rolling dunes + big cliffs
+  function hash(i,j){ let h=(i*374761393 + j*668265263) ^ 0x9e3779b9; h=(h^(h>>13))*1274126177; return ((h^(h>>16))&0xffff)/0xffff; }
+  function vnoise(x,z){
+    const xi=Math.floor(x), zi=Math.floor(z);
+    const xf=x-xi, zf=z-zi;
+    const a=hash(xi,zi), b=hash(xi+1,zi), c=hash(xi,zi+1), d=hash(xi+1,zi+1);
+    const sx=xf*xf*(3-2*xf), sz=zf*zf*(3-2*zf);
+    const top=a+(b-a)*sx, bot=c+(d-c)*sx;
+    return top+(bot-top)*sz;
+  }
+  for(let j=0;j<=seg;j++){
+    for(let i=0;i<=seg;i++){
+      const nx=i/seg, nz=j/seg;
+      let h=0, amp=1, freq=1, tot=0;
+      for(let o=0;o<5;o++){
+        h += vnoise(nx*freq*4, nz*freq*4)*amp;
+        tot += amp; amp*=0.5; freq*=2;
+      }
+      h/=tot;
+      // Rolling dunes baseline + occasional big buttes
+      h = h*16;
+      const butte = Math.max(0, 1-Math.abs(nx-0.5)*3.5) * Math.max(0,1-Math.abs(nz-0.68)*3.5);
+      h += butte*40;
+      // a canyon cut
+      const canyon = (1-Math.min(1, Math.abs(nz-0.25)*6)) * 14;
+      h -= canyon;
+      data[j*(seg+1)+i] = h;
+    }
+  }
+  heightfield.segs = seg; heightfield.size = size; heightfield.data = data;
+  window.__hfSegs = seg; window.__mapHalf = MAP;
+}
+
+// ============================================================
+//  Terrain mesh from heightfield (shared geometry).
+// ============================================================
+function buildTerrainMesh(){
+  if(terrainMesh){ scene.remove(terrainMesh); terrainMesh.geometry.dispose(); }
+  const seg = heightfield.segs, size = heightfield.size;
+  const geo = new THREE.PlaneGeometry(size, size, seg, seg);
+  geo.rotateX(-Math.PI/2);
+  const pos = geo.attributes.position;
+  const colors = new Float32Array(pos.count*3);
+  const col = new THREE.Color();
+  for(let i=0;i<pos.count;i++){
+    const x=pos.getX(i), y=pos.getY(i), z=pos.getZ(i);
+    const h = heightfield.get(x,z);
+    pos.setY(i, h);
+    // Desert palette: low=sand, mid=rock, high=snow cap (rare), canyon=dark
+    let r,g,b;
+    if(h<1){ r=0.76; g=0.62; b=0.42; }           // dry riverbed
+    else if(h<10){ r=0.82; g=0.68; b=0.45; }      // sand
+    else if(h<26){ r=0.6; g=0.5; b=0.36; }        // rock
+    else { r=0.85; g=0.85; b=0.82; }              // snow cap
+    // slight per-point variation
+    const n=(Math.sin(x*0.3)+Math.cos(z*0.27))*0.03;
+    col.setRGB(Math.max(0,Math.min(1,r+n)), Math.max(0,Math.min(1,g+n)), Math.max(0,Math.min(1,b+n)));
+    colors[i*3]=col.r; colors[i*3+1]=col.g; colors[i*3+2]=col.b;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors,3));
+  geo.computeVertexNormals();
+  const mat = new THREE.MeshStandardMaterial({ vertexColors:true, roughness:0.95, metalness:0.0 });
+  terrainMesh = new THREE.Mesh(geo, mat);
+  terrainMesh.receiveShadow = false;
+  scene.add(terrainMesh);
+  terrainGeo = geo;
+}
+
+function terrainHeightAt(x,z){ return heightfield.get(x,z); }
+
+// ============================================================
+//  Vehicles — floaty arcade physics.
+//  Each vehicle: position, velocity, orientation quaternion,
+//  angular velocity, type stats, team, AI flag.
+// ============================================================
+const VEHICLE_TYPES = [
+  { name:'Dune Buggy',  color:0xffcc33, mass:1.0, accel:1.4, maxSpeed:1.15, durability:0.55, steer:1.25, grip:0.82 },
+  { name:'Rally Car',   color:0xff4444, mass:0.9, accel:1.5, maxSpeed:1.3,  durability:0.45, steer:1.1,  grip:0.7 },
+  { name:'SUV',         color:0x3399ff, mass:1.4, accel:1.0, maxSpeed:1.0,  durability:1.0,  steer:1.0,  grip:1.0 },
+  { name:'Trophy Truck',color:0x33cc66, mass:1.3, accel:1.1, maxSpeed:1.05, durability:0.9,  steer:1.05, grip:0.95 },
+  { name:'Monster Truck',color:0xaa55ff, mass:2.0, accel:0.75, maxSpeed:0.85,durability:1.5,  steer:0.85, grip:1.2 },
+];
+
+function makeVehicleMesh(type){
+  const t = VEHICLE_TYPES[type];
+  const g = new THREE.Group();
+  // body
+  const bodyGeo = new THREE.BoxGeometry(2.2, 1.0, 4.0);
+  const bodyMat = new THREE.MeshLambertMaterial({ color:t.color });
+  const body = new THREE.Mesh(bodyGeo, bodyMat);
+  body.position.y = 1.1;
+  g.add(body);
+  // cabin
+  const cabGeo = new THREE.BoxGeometry(1.8, 0.7, 2.0);
+  const cab = new THREE.Mesh(cabGeo, new THREE.MeshLambertMaterial({color:0x222831}));
+  cab.position.set(0,1.7,-0.2);
+  g.add(cab);
+  // wheels
+  const wheelGeo = new THREE.CylinderGeometry(0.7,0.7,0.5,12);
+  const wheelMat = new THREE.MeshLambertMaterial({color:0x111111});
+  const wp=[ [0.95,0.7,1.3],[-0.95,0.7,1.3],[0.95,0.7,-1.3],[-0.95,0.7,-1.3] ];
+  for(const p of wp){
+    const w=new THREE.Mesh(wheelGeo,wheelMat);
+    w.rotation.z=Math.PI/2; w.position.set(...p); g.add(w);
+  }
+  // roll bar / bumper
+  const barGeo=new THREE.BoxGeometry(2.4,0.2,0.2);
+  const bar=new THREE.Mesh(barGeo,new THREE.MeshLambertMaterial({color:0x444}));
+  bar.position.set(0,1.4,2.0); g.add(bar);
+  return g;
+}
+
+function createVehicle(type, team, isPlayer){
+  const v = {
+    type, team, isPlayer,
+    pos: new THREE.Vector3(0,5,0),
+    vel: new THREE.Vector3(),
+    quat: new THREE.Quaternion(),
+    angVel: new THREE.Vector3(),
+    speed: 0,
+    damage: 0,
+    onGround: false,
+    mesh: makeVehicleMesh(type),
+    stats: VEHICLE_TYPES[type],
+    targetSteer:0, targetThrottle:0, jumpHeld:false,
+    lastContact:0,
+    ai: { state:'seek', target:null, timer:0, wander:new THREE.Vector3() },
+    cooldown:0,
+  };
+  const color = team===0 ? 0x44ff66 : 0xff5544;
+  // tint body to team color for readability
+  v.mesh.children[0].material = new THREE.MeshStandardMaterial({color, roughness:0.6, metalness:0.3});
+  // apply current car scale so freshly created/switched cars match
+  v.mesh.scale.setScalar(viewScale.carScale);
+  // health bar sprite
+  const hb = makeHealthBar(team);
+  v.mesh.add(hb);
+  v.healthBar = hb;
+  scene.add(v.mesh);
+  return v;
+}
+
+function makeHealthBar(team){
+  const c = document.createElement('canvas'); c.width=64; c.height=8;
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({map:tex, depthTest:false, transparent:true});
+  const s = new THREE.Sprite(mat);
+  s.scale.set(4,0.5,1); s.position.set(0,3.2,0);
+  s.userData = { canvas:c, tex, team };
+  return s;
+}
+function updateHealthBar(v){
+  const hb = v.healthBar, c = hb.userData.canvas, ctx=c.getContext('2d');
+  ctx.clearRect(0,0,64,8);
+  ctx.fillStyle='#000'; ctx.fillRect(0,0,64,8);
+  const frac = 1 - v.damage;
+  ctx.fillStyle = v.team===0 ? '#3f3' : '#f33';
+  ctx.fillRect(1,1,62*frac,6);
+  hb.userData.tex.needsUpdate = true;
+}
+
+// ---- Vehicle physics step ----
+function stepVehicle(v, dt, input){
+  const stats = v.stats;
+  // local axes from quaternion
+  const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(v.quat);
+  const right = new THREE.Vector3(1,0,0).applyQuaternion(v.quat);
+  const up = new THREE.Vector3(0,1,0).applyQuaternion(v.quat);
+
+  // ground height
+  const gh = terrainHeightAt(v.pos.x, v.pos.z);
+  const groundDist = v.pos.y - gh;
+  v.onGround = groundDist < 1.2;
+
+  // throttle / brake
+  const throttle = input.throttle||0;
+  const brake = input.brake||0;
+  const steer = input.steer||0;
+  const maxSp = MAX_SPEED * stats.maxSpeed;
+
+  if(v.onGround){
+    const driveF = DRIVE_FORCE*stats.accel*throttle;
+    v.vel.addScaledVector(fwd, driveF*dt);
+    if(brake>0){
+      // brake opposes motion
+      const sp = v.vel.length();
+      if(sp>0.1){
+        const dec = BRAKE_FORCE*dt*brake;
+        const sp2 = Math.max(0, sp-dec);
+        v.vel.setLength(sp2);
+      }
+    }
+    // natural friction / rolling resistance
+    v.vel.multiplyScalar(1 - 0.9*dt);
+    // grip: sideways friction (reduce lateral slide)
+    const sideVel = v.vel.dot(right);
+    v.vel.addScaledVector(right, -sideVel * (1 - Math.pow(0.001, dt*stats.grip)));
+    // steering changes heading
+    const speedFactor = Math.min(1, v.vel.length()/8);
+    v.quat.multiply(new THREE.Quaternion().setFromAxisAngle(up, steer*TURN_RATE*stats.steer*dt*speedFactor));
+    // jump
+    if(input.jump && !v.jumpHeld){
+      v.vel.y += JUMP_BOOST*14;
+      v.onGround=false;
+    }
+  } else {
+    // Air control: let the player nudge heading (yaw) and a little pitch/roll
+    // while airborne, but don't let it accumulate into an uncontrolled barrel
+    // roll. Old code added roll from steer with no air damping, so holding
+    // steer mid-jump piled on roll angular velocity that nothing bled off —
+    // a direct path to landing roof-down.
+    const yawAxis = new THREE.Vector3(0,1,0);
+    v.angVel.y += -steer * AIR_CONTROL * 0.5 * dt;
+    v.angVel.x += (input.pitch||0) * AIR_CONTROL * 0.4 * dt;
+    // air angular drag + clamp so a spin settles instead of growing forever
+    v.angVel.multiplyScalar(1 - 1.6*dt);
+    const ANG_CAP = 3.2;
+    if(v.angVel.length() > ANG_CAP) v.angVel.setLength(ANG_CAP);
+    // gentle airborne self-leveling: ease roll/pitch toward upright so that
+    // letting go of the stick naturally lands you wheels-down
+    const upW = new THREE.Vector3(0,1,0).applyQuaternion(v.quat);
+    const tilt = upW.dot(yawAxis);
+    if(tilt < 0.9){
+      let axis = new THREE.Vector3().crossVectors(upW, yawAxis);
+      if(axis.lengthSq() < 1e-4){ axis = new THREE.Vector3(0,0,-1).applyQuaternion(v.quat); axis.y=0; if(axis.lengthSq()<1e-4) axis.set(1,0,0); }
+      axis.normalize();
+      const ang = Math.acos(THREE.MathUtils.clamp(tilt,-1,1));
+      v.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, Math.min(ang, 1.4*dt)));
+    }
+    // gravity
+    v.vel.y -= GRAVITY*dt;
+    // mild air drag
+    v.vel.multiplyScalar(1-0.06*dt);
+  }
+  v.jumpHeld = input.jump;
+
+  // integrate angular velocity
+  if(v.angVel.lengthSq()>1e-6){
+    const w = v.angVel.clone().multiplyScalar(dt);
+    const dq = new THREE.Quaternion().setFromAxisAngle(w.clone().normalize(), w.length());
+    v.quat.premultiply(dq);
+  }
+  // auto-righting on ground: roll the car's up vector back toward world-up.
+  // The old version used the axis worldUp x upW, which rotates upW AWAY from
+  // world-up — so any small tilt was amplified toward a full flip — and that
+  // axis collapses to zero when the car is perfectly inverted, leaving it
+  // stuck on its roof. Correct axis is upW x worldUp, with an explicit
+  // fallback (roll around the car's forward) for the upside-down degenerate case.
+  if(v.onGround){
+    const worldUp = new THREE.Vector3(0,1,0);
+    const upW = new THREE.Vector3(0,1,0).applyQuaternion(v.quat);
+    const tilt = THREE.MathUtils.clamp(upW.dot(worldUp), -1, 1);
+    if(tilt < 0.95){
+      let axis = new THREE.Vector3().crossVectors(upW, worldUp);
+      if(axis.lengthSq() < 1e-4){
+        if(tilt < 0){
+          // upside down: roll over around the car's forward (made horizontal)
+          axis = new THREE.Vector3(0,0,-1).applyQuaternion(v.quat);
+          axis.y = 0;
+          if(axis.lengthSq() < 1e-4) axis.set(1,0,0);
+        } else {
+          axis.set(1,0,0);
+        }
+      }
+      axis.normalize();
+      const ang = Math.acos(tilt);
+      // recover faster the more overturned it is, so a full flip rights itself
+      // in well under a second instead of slowly drifting back
+      const rate = THREE.MathUtils.lerp(ROLL_RECOVER, ROLL_RECOVER*2.4, 1 - (tilt+1)/2);
+      v.quat.premultiply(new THREE.Quaternion().setFromAxisAngle(axis, Math.min(ang, rate*dt)));
+    }
+    v.angVel.multiplyScalar(1 - 5*dt);
+  }
+
+  // integrate position
+  v.pos.addScaledVector(v.vel, dt);
+
+  // ground collision: keep above terrain, bounce a bit
+  if(v.pos.y < gh+1.0){
+    v.pos.y = gh+1.0;
+    if(v.vel.y < -4){
+      // hard landing: damage + bounce
+      const impact = -v.vel.y;
+      v.damage = Math.min(1, v.damage + impact*0.004);
+      v.vel.y = impact*0.18;
+      // tumble on very hard landings — biased to pitch (forward flip) rather
+      // than random roll, so a botched jump skids instead of going roof-down
+      if(impact>18){
+        const dir = Math.random()<0.5 ? 1 : -1;
+        v.angVel.x += dir * Math.min(impact,30) * 0.04;
+        v.angVel.z += (Math.random()-0.5) * Math.min(impact,30) * 0.015;
+      }
+    } else if(v.vel.y<0){
+      v.vel.y = 0;
+    }
+  }
+
+  // world bounds — bounce back
+  const B = MAP-8;
+  if(Math.abs(v.pos.x)>B){ v.pos.x = Math.sign(v.pos.x)*B; v.vel.x*=-0.3; }
+  if(Math.abs(v.pos.z)>B){ v.pos.z = Math.sign(v.pos.z)*B; v.vel.z*=-0.3; }
+
+  // building collision: resolve the car (treated as a sphere) against each
+  // loaded building AABB. Push the car out of penetration and kill/bounce
+  // velocity into the struck face so cars smash into real 3D-tile buildings
+  // instead of passing through them.
+  const r = 2.2 * viewScale.carScale;   // car collision radius
+  for(let ci=0; ci<buildingColliders.length; ci++){
+    const c = buildingColliders[ci];
+    // closest point on the box to the car center
+    const cx = THREE.MathUtils.clamp(v.pos.x, c.min.x, c.max.x);
+    const cy = THREE.MathUtils.clamp(v.pos.y, c.min.y, c.max.y);
+    const cz = THREE.MathUtils.clamp(v.pos.z, c.min.z, c.max.z);
+    const dx=v.pos.x-cx, dy=v.pos.y-cy, dz=v.pos.z-cz;
+    const d2 = dx*dx+dy*dy+dz*dz;
+    if(d2 < r*r){
+      const d = Math.sqrt(d2) || 0.0001;
+      let nx, ny, nz;
+      if(d > 0.0001){ nx=dx/d; ny=dy/d; nz=dz/d; }
+      else { // center inside box — push out along smallest axis overlap
+        const ox = r - Math.min(Math.abs(v.pos.x-c.min.x), Math.abs(v.pos.x-c.max.x));
+        const oy = r - Math.min(Math.abs(v.pos.y-c.min.y), Math.abs(v.pos.y-c.max.y));
+        const oz = r - Math.min(Math.abs(v.pos.z-c.min.z), Math.abs(v.pos.z-c.max.z));
+        if(ox<=oy && ox<=oz){ nx=Math.sign(v.pos.x-(c.min.x+c.max.x)/2)||1; ny=0; nz=0; }
+        else if(oy<=oz){ nx=0; ny=Math.sign(v.pos.y-(c.min.y+c.max.y)/2)||1; nz=0; }
+        else { nx=0; ny=0; nz=Math.sign(v.pos.z-(c.min.z+c.max.z)/2)||1; }
+      }
+      // push out of the building
+      const push = r - d + 0.05;
+      v.pos.x += nx*push; v.pos.y += ny*push; v.pos.z += nz*push;
+      // remove velocity into the face (with a small bounce + damage)
+      const vn = v.vel.x*nx + v.vel.y*ny + v.vel.z*nz;
+      if(vn < 0){
+        v.vel.x -= 1.3*vn*nx; v.vel.y -= 1.3*vn*ny; v.vel.z -= 1.3*vn*nz;
+        const impact = Math.abs(vn);
+        if(impact > 6){
+          v.damage = Math.min(1, v.damage + impact*0.01);
+          // spin out a bit on hard hits
+          v.angVel.y += (Math.random()-0.5)*impact*0.04;
+        }
+      }
+    }
+  }
+
+  // damage regen
+  v.damage = Math.max(0, v.damage - 0.02*dt);
+
+  // update mesh
+  v.mesh.position.copy(v.pos);
+  v.mesh.quaternion.copy(v.quat);
+  v.speed = v.vel.length();
+  if (v.isPlayer) {
+    window.__px = v.pos.x; window.__pz = v.pos.z; window.__py = v.pos.y;
+    window.__speed = v.speed;
+    const upW = new THREE.Vector3(0,1,0).applyQuaternion(v.quat);
+    window.__upright = upW.y > 0.7 ? 1 : 0;
+  }
+  updateHealthBar(v);
+}
+
+// ---- Vehicle-vehicle collision (ram = contraband transfer) ----
+function vehicleCollisions(){
+  const RAM = TRANSFER_DIST * viewScale.carScale;  // collision radius scales with car size
+  for(let i=0;i<vehicles.length;i++){
+    for(let j=i+1;j<vehicles.length;j++){
+      const a=vehicles[i], b=vehicles[j];
+      const d = a.pos.distanceTo(b.pos);
+      if(d<RAM && d>0.01){
+        // push apart
+        const n = b.pos.clone().sub(a.pos).normalize();
+        const overlap = RAM-d;
+        const ma=a.stats.mass, mb=b.stats.mass, tot=ma+mb;
+        a.pos.addScaledVector(n, -overlap*mb/tot);
+        b.pos.addScaledVector(n, overlap*ma/tot);
+        // exchange momentum (simplified elastic-ish)
+        const va = a.vel.dot(n), vb = b.vel.dot(n);
+        const newva = (va*(ma-mb)+2*mb*vb)/tot;
+        const newvb = (vb*(mb-ma)+2*ma*va)/tot;
+        a.vel.addScaledVector(n, newva-va);
+        b.vel.addScaledVector(n, newvb-vb);
+        // spin out light cars when hit by heavy
+        const rel = Math.abs(va-vb);
+        if(rel>8){
+          const light = ma<mb?a:b, heavy=ma<mb?b:a;
+          if(light.stats.mass < heavy.stats.mass*0.8){
+            light.angVel.add(new THREE.Vector3((Math.random()-0.5)*4,(Math.random()-0.5)*2,(Math.random()-0.5)*4));
+            light.damage = Math.min(1, light.damage + rel*0.01);
+          }
+        }
+        // CONTRABAND TRANSFER on ram contact
+        if(carrier && (carrier===a||carrier===b) && performance.now()/1000 - lastTransfer > TRANSFER_COOLDOWN){
+          const attacker = carrier===a?b:a;
+          if(a.team!==b.team){
+            transferContraband(attacker);
+          }
+        }
+      }
+    }
+  }
+}
+
+// ============================================================
+//  Contraband + delivery
+// ============================================================
+function spawnContraband(){
+  // random spot away from current vehicles
+  let x,z,tries=0;
+  do { x=(Math.random()-0.5)*MAP*1.6; z=(Math.random()-0.5)*MAP*1.6; tries++; }
+  while(tries<20 && vehicles.some(v=>v.pos.distanceTo(new THREE.Vector3(x,0,z))<40));
+  contraband.pos.set(x, terrainHeightAt(x,z)+3, z);
+  contraband.mesh.position.copy(contraband.pos);
+  carrier=null;
+  updateObjective();
+}
+function transferContraband(to){
+  carrier=to;
+  lastTransfer=performance.now()/1000;
+  showBanner('CONTRABAND STOLEN!', 800);
+  updateObjective();
+}
+function showBanner(text, ms){
+  const b=document.getElementById('banner'); b.textContent=text; b.classList.add('show');
+  setTimeout(()=>b.classList.remove('show'), ms||1200);
+}
+function updateObjective(){
+  const o=document.getElementById('objective');
+  if(carrier){
+    o.textContent='DELIVER CONTRABAND';
+    o.style.color = carrier===player ? '#3f3' : (carrier.team===player.team?'#3f3':'#f33');
+    document.getElementById('dir-label').textContent='DELIVERY ZONE';
+    document.getElementById('dir-arrow').style.color='#f33';
+  } else {
+    o.textContent='FIND CONTRABAND';
+    o.style.color='#9e9';
+    document.getElementById('dir-label').textContent='CONTRABAND';
+    document.getElementById('dir-arrow').style.color='#3f3';
+  }
+  const ci=document.getElementById('carrier-info');
+  ci.textContent = carrier ? ('Held by: '+(carrier===player?'YOU':carrier.stats.name+(carrier.team===0?' (ally)':' (foe)'))) : '';
+}
+
+function checkContraband(){
+  if(carrier) return; // only check pickup when free
+  const R = CONTRABAND_RADIUS * viewScale.carScale;
+  for(const v of vehicles){
+    if(v.pos.distanceTo(contraband.pos) < R){
+      carrier=v;
+      showBanner('CONTRABAND ACQUIRED', 1200);
+      updateObjective();
+      break;
+    }
+  }
+}
+function checkDelivery(){
+  if(!carrier) return;
+  if(carrier.pos.distanceTo(dropZone.pos) < DELIVERY_RADIUS * viewScale.carScale){
+    // score
+    if(carrier.team===0) scores.team++;
+    else scores.opp++;
+    showBanner('DELIVERED! '+(carrier.team===0?'YOUR TEAM':'RIVAL TEAM'), 1500);
+    carrier=null;
+    updateScores();
+    updateObjective();
+    if(scores.team>=SCORE_GOAL || scores.opp>=SCORE_GOAL){
+      gameOver=true;
+      showBanner(scores.team>=SCORE_GOAL?'YOUR TEAM WINS!':'RIVAL TEAM WINS!', 4000);
+    } else {
+      spawnContraband();
+      relocateDropZone();
+    }
+  }
+}
+function relocateDropZone(){
+  let x,z,tries=0;
+  do { x=(Math.random()-0.5)*MAP*1.7; z=(Math.random()-0.5)*MAP*1.7; tries++; }
+  while(tries<20 && vehicles.some(v=>v.pos.distanceTo(new THREE.Vector3(x,0,z))<60));
+  dropZone.pos.set(x, terrainHeightAt(x,z), z);
+  dropMarker.position.copy(dropZone.pos);
+}
+
+function updateScores(){
+  document.getElementById('score-t').textContent=scores.team;
+  document.getElementById('score-o').textContent=scores.opp;
+}
+
+// ============================================================
+//  AI — 7 bots. States: seek contraband / chase carrier /
+//  defend drop / wander. Simple steering behaviors.
+// ============================================================
+function aiControl(v, dt){
+  const ai=v.ai; ai.timer-=dt;
+  // decide state
+  if(ai.timer<=0){
+    ai.timer = 0.5 + Math.random()*0.5;
+    if(!carrier){
+      ai.state='seek';
+    } else if(carrier.team!==v.team){
+      // enemy has it -> chase
+      ai.state='chase';
+    } else if(carrier===v){
+      // I have it -> deliver
+      ai.state='deliver';
+    } else {
+      // ally has it -> support: go to drop zone to defend, or seek next
+      ai.state = Math.random()<0.6 ? 'deliver' : 'seek';
+    }
+  }
+  let target = new THREE.Vector3();
+  if(ai.state==='seek'){
+    target.copy(contraband.pos);
+  } else if(ai.state==='chase'){
+    // predict carrier position
+    target.copy(carrier.pos).addScaledVector(carrier.vel, 0.3);
+  } else if(ai.state==='deliver'){
+    target.copy(dropZone.pos);
+  }
+  // steer toward target
+  const toTarget = target.clone().sub(v.pos);
+  toTarget.y=0;
+  const dist = toTarget.length();
+  if(dist<1) { ai.targetSteer=0; ai.targetThrottle=0; return; }
+  toTarget.normalize();
+  const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(v.quat); fwd.y=0; fwd.normalize();
+  const cross = fwd.cross(toTarget);
+  const dot = fwd.dot(toTarget);
+  const angle = Math.atan2(cross.y, dot);
+  ai.targetSteer = THREE.MathUtils.clamp(angle*1.8, -1, 1);
+  // throttle: slow down to turn if sharp
+  if(Math.abs(angle)>1.3 && v.speed>20){
+    ai.targetThrottle = 0.1;
+    ai.brakeInput = 0.5;
+  } else {
+    ai.targetThrottle = 1;
+    ai.brakeInput = 0;
+  }
+  // occasional jump over bumps for flavor
+  if(v.onGround && Math.random()<0.003) ai.jump=true;
+}
+
+function gatherAIInput(v){
+  const inp = { throttle:v.ai.targetThrottle, brake:v.ai.brakeInput||0, steer:v.ai.targetSteer, jump:v.ai.jump };
+  v.ai.jump=false;
+  return inp;
+}
+
+// ============================================================
+//  Player input
+// ============================================================
+function gatherPlayerInput(){
+  const inp={throttle:0,brake:0,steer:0,jump:false};
+  if(keys.KeyW||keys.ArrowUp) inp.throttle=1;
+  if(keys.KeyS||keys.ArrowDown) inp.brake=1;
+  if(keys.KeyA||keys.ArrowLeft) inp.steer=1;
+  if(keys.KeyD||keys.ArrowRight) inp.steer=-1;
+  if(keys.Space) inp.jump=true;
+  return inp;
+}
+
+// ============================================================
+//  Camera — chase / orbit / hood
+// ============================================================
+function updateCamera(dt){
+  if(!player) return;
+  const p = player.pos, q = player.quat;
+  const z = viewScale.zoom;
+  let desired;
+  if(camMode===0){
+    // chase
+    const back = new THREE.Vector3(0,0,14*z).applyQuaternion(q);
+    desired = p.clone().add(new THREE.Vector3(0,6*z,0)).add(back);
+    desired.y = Math.max(desired.y, terrainHeightAt(desired.x,desired.z)+4);
+  } else if(camMode===1){
+    // far chase
+    const back = new THREE.Vector3(0,0,24*z).applyQuaternion(q);
+    desired = p.clone().add(new THREE.Vector3(0,10*z,0)).add(back);
+  } else {
+    // hood
+    const fwd = new THREE.Vector3(0,0,-6).applyQuaternion(q);
+    desired = p.clone().add(new THREE.Vector3(0,2.5,0)).add(fwd);
+  }
+  // tighter lerp at high zoom so the wider view stays settled
+  const lerpK = 1-Math.pow(0.001/(1+z*0.15), dt);
+  camera.position.lerp(desired, lerpK);
+  const look = p.clone().add(new THREE.Vector3(0,2,0));
+  camera.lookAt(look);
+}
+
+// ============================================================
+//  HUD updates
+// ============================================================
+let dirArrowWorld=new THREE.Vector3();
+function updateHUD(){
+  document.getElementById('spd').textContent = Math.round(player.speed*3.6);
+  document.getElementById('dmg').textContent = Math.round(player.damage*100)+'%';
+  document.getElementById('veh').textContent = player.stats.name;
+  // direction arrow: rotate in screen space toward target
+  const target = carrier ? dropZone.pos : contraband.pos;
+  const toT = target.clone().sub(player.pos);
+  const fwd = new THREE.Vector3(0,0,-1).applyQuaternion(player.quat); fwd.y=0; fwd.normalize();
+  const right = new THREE.Vector3(1,0,0).applyQuaternion(player.quat); right.y=0; right.normalize();
+  toT.y=0;
+  if(toT.lengthSq()>1){
+    toT.normalize();
+    const relAngle = Math.atan2(toT.dot(right), toT.dot(fwd));
+    const arrow = document.getElementById('dir-arrow');
+    arrow.style.transform = `rotate(${ -relAngle }rad)`;
+  }
+  const dist = player.pos.distanceTo(target);
+  document.getElementById('dir-label').textContent =
+    (carrier?'DELIVERY':'CONTRABAND') + ' · ' + Math.round(dist)+'m';
+}
+
+// ---- Minimap ----
+const mm = document.getElementById('minimap');
+const mmCtx = mm.getContext('2d');
+function drawMinimap(){
+  const S=170, hS=S/2, scale = S/(MAP*2);
+  mmCtx.clearRect(0,0,S,S);
+  mmCtx.fillStyle='#3a2a1a'; mmCtx.fillRect(0,0,S,S);
+  // drop zone
+  const dz = worldToMM(dropZone.pos, hS, scale);
+  mmCtx.fillStyle='rgba(0,255,80,0.4)'; mmCtx.beginPath(); mmCtx.arc(dz.x,dz.y,8,0,7); mmCtx.fill();
+  // contraband
+  if(!carrier){
+    const c = worldToMM(contraband.pos, hS, scale);
+    mmCtx.fillStyle='#ff0'; mmCtx.beginPath(); mmCtx.arc(c.x,c.y,4,0,7); mmCtx.fill();
+  }
+  // vehicles
+  for(const v of vehicles){
+    const p=worldToMM(v.pos,hS,scale);
+    mmCtx.fillStyle = v.team===0?'#3f3':'#f33';
+    mmCtx.beginPath(); mmCtx.arc(p.x,p.y, v.isPlayer?4:3, 0,7); mmCtx.fill();
+    if(v===carrier){ mmCtx.strokeStyle='#fff'; mmCtx.lineWidth=2; mmCtx.stroke(); }
+  }
+  // border
+  mmCtx.strokeStyle='#6c6'; mmCtx.lineWidth=2; mmCtx.strokeRect(0,0,S,S);
+}
+function worldToMM(p, hS, scale){
+  return { x:hS+p.x*scale, y:hS+p.z*scale };
+}
+
+// ============================================================
+//  Scene setup
+// ============================================================
+function initScene(){
+  scene = new THREE.Scene();
+  scene.background = new THREE.Color(0xbcd8ec);
+  scene.fog = new THREE.Fog(0xbcd8ec, 200, 700);
+
+  camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.5, 2000);
+  camera.position.set(0,20,30);
+
+  renderer = new THREE.WebGLRenderer({canvas:document.getElementById('c'), antialias:true});
+  renderer.setSize(innerWidth, innerHeight);
+  renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+  // Correct color + filmic tone mapping so satellite textures read as real
+  // daylight instead of washed-out flat Lambert
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure = 1.05;
+
+  // lights
+  const sun = new THREE.DirectionalLight(0xfff2dd, 1.4);
+  sun.position.set(120,200,80); scene.add(sun);
+  scene.add(new THREE.AmbientLight(0x8899bb, 0.6));
+  const hemi = new THREE.HemisphereLight(0xbcd8ec, 0x6b5a3a, 0.5);
+  scene.add(hemi);
+
+  clock = new THREE.Clock();
+
+  // 3D tiles group (populated on relocate; empty until then)
+  scene.add(tilesGroup);
+
+  // terrain
+  generateDesertHeightfield();
+  buildTerrainMesh();
+
+  // sky-ish
+  // contraband object
+  const cg = new THREE.IcosahedronGeometry(1.6, 0);
+  const cm = new THREE.MeshStandardMaterial({color:0xffcc00, emissive:0xff8800, emissiveIntensity:0.6, metalness:0.3, roughness:0.4});
+  contraband = { pos:new THREE.Vector3(), mesh:new THREE.Mesh(cg,cm) };
+  contraband.mesh.scale.set(1,1,1);
+  scene.add(contraband.mesh);
+  contrabandLight = new THREE.PointLight(0xffaa00, 2, 40); contraband.mesh.add(contrabandLight);
+
+  // drop zone smoke marker (green cylinder + light)
+  dropZone = { pos:new THREE.Vector3() };
+  const dzGeo = new THREE.CylinderGeometry(DELIVERY_RADIUS, DELIVERY_RADIUS, 20, 24, 1, true);
+  const dzMat = new THREE.MeshBasicMaterial({color:0x44ff66, transparent:true, opacity:0.22, side:THREE.DoubleSide});
+  dropMarker = new THREE.Mesh(dzGeo, dzMat);
+  scene.add(dropMarker);
+  const dzLight = new THREE.PointLight(0x44ff66, 1.5, 80);
+  dropMarker.add(dzLight);
+
+  // scatter obstacles: rocks, cacti (placeholders for forest/snow props)
+  scatterObstacles();
+
+  // vehicles: player + 7 AI, 4v4
+  spawnAllVehicles();
+
+  // dropzone + contraband
+  relocateDropZone();
+  spawnContraband();
+
+  updateScores();
+  updateObjective();
+}
+
+function scatterObstacles(){
+  // clear old
+  for(const o of obstacles) scene.remove(o);
+  obstacles=[];
+  // On real satellite terrain the imagery already carries visual detail
+  // (trees/roads/buildings), so keep props sparse for cover only and skip
+  // the desert-only cacti. Procedural desert gets the full scatter.
+  const real = location.real;
+  const nRocks = real ? 36 : 80;
+  const nCacti = real ? 0 : 60;
+  const rockMat=new THREE.MeshStandardMaterial({color:0x6a5a4a, roughness:0.95});
+  const rockGeo=new THREE.DodecahedronGeometry(2,0);
+  for(let i=0;i<nRocks;i++){
+    const x=(Math.random()-0.5)*MAP*1.9, z=(Math.random()-0.5)*MAP*1.9;
+    const y=terrainHeightAt(x,z);          // sample the CURRENT ground
+    const r=new THREE.Mesh(rockGeo, rockMat);
+    const s=0.5+Math.random()*1.8;
+    r.scale.set(s,s*0.8,s); r.position.set(x,y+s*1.2,z); r.rotation.set(Math.random(),Math.random(),Math.random());
+    scene.add(r); obstacles.push(r);
+  }
+  // cacti (desert only)
+  const cactMat=new THREE.MeshStandardMaterial({color:0x3a7a3a, roughness:0.9});
+  const cactGeo=new THREE.CapsuleGeometry(0.6,3,2,6);
+  for(let i=0;i<nCacti;i++){
+    const x=(Math.random()-0.5)*MAP*1.9, z=(Math.random()-0.5)*MAP*1.9;
+    const y=terrainHeightAt(x,z);          // sample the CURRENT ground
+    const c=new THREE.Mesh(cactGeo,cactMat);
+    c.position.set(x,y+2,z); c.scale.set(1,1+Math.random(),1);
+    scene.add(c); obstacles.push(c);
+  }
+}
+
+function spawnAllVehicles(){
+  for(const v of vehicles) scene.remove(v.mesh);
+  vehicles=[];
+  // team 0 (player's): player + 3 AI
+  player = createVehicle(2, 0, true); // SUV
+  vehicles.push(player);
+  for(let i=0;i<3;i++) vehicles.push(createVehicle(pickVehicleType(), 0, false));
+  // team 1 (opponent): 4 AI
+  for(let i=0;i<4;i++) vehicles.push(createVehicle(pickVehicleType(), 1, false));
+  // place around center
+  for(let i=0;i<vehicles.length;i++){
+    const ang=(i/vehicles.length)*Math.PI*2;
+    const r=20+i*2;
+    const x=Math.cos(ang)*r, z=Math.sin(ang)*r;
+    vehicles[i].pos.set(x, terrainHeightAt(x,z)+3, z);
+    vehicles[i].vel.set(0,0,0);
+    vehicles[i].quat.identity();
+    vehicles[i].quat.setFromAxisAngle(new THREE.Vector3(0,1,0), -ang+Math.PI/2);
+  }
+  buildTeamBar();
+}
+function pickVehicleType(){
+  // weight toward balanced vehicles
+  const r=Math.random();
+  if(r<0.3) return 2; // SUV
+  if(r<0.5) return 3; // trophy
+  if(r<0.7) return 1; // rally
+  if(r<0.85) return 0; // buggy
+  return 4; // monster
+}
+function buildTeamBar(){
+  const bar=document.getElementById('team-bar'); bar.innerHTML='';
+  for(const v of vehicles){
+    const pip=document.createElement('span'); pip.className='team-pip';
+    pip.style.background = v.team===0?'#3f3':'#f33';
+    if(v.isPlayer) pip.style.border='2px solid #fff';
+    bar.appendChild(pip);
+  }
+}
+function switchVehicle(n){
+  if(!player||n<0||n>=VEHICLE_TYPES.length) return;
+  // change player's type, keep position
+  const pos=player.pos.clone(), quat=player.quat.clone(), vel=player.vel.clone();
+  scene.remove(player.mesh);
+  player = createVehicle(n, 0, true);
+  player.pos.copy(pos); player.quat.copy(quat); player.vel.copy(vel);
+  // replace in array
+  const idx = vehicles.findIndex(v=>v.isPlayer);
+  vehicles[idx]=player;
+  buildTeamBar();
+}
+function resetPlayer(){
+  if(!player) return;
+  const x=(Math.random()-0.5)*60, z=(Math.random()-0.5)*60;
+  player.pos.set(x, terrainHeightAt(x,z)+3, z);
+  player.vel.set(0,0,0); player.angVel.set(0,0,0); player.quat.identity();
+}
+
+// Apply carScale to every vehicle mesh visually. Called live from the slider.
+function applyCarScale(){
+  for(const v of vehicles) v.mesh.scale.setScalar(viewScale.carScale);
+}
+
+// Test hook for verifying view-scale state from the page context.
+window.__viewState = ()=>({zoom:viewScale.zoom, carScale:viewScale.carScale, fov:camera.fov, carMeshScale:vehicles[0]?vehicles[0].mesh.scale.x:null});
+
+// ============================================================
+//  Google Maps relocation (optional)
+// ============================================================
+const loader=document.getElementById('loader'), loaderMsg=document.getElementById('loader-msg');
+function showLoader(m){ loaderMsg.textContent=m; loader.classList.remove('hidden'); }
+function hideLoader(){ loader.classList.add('hidden'); }
+
+document.getElementById('search-btn').addEventListener('click', doSearch);
+document.getElementById('search-input').addEventListener('keydown', e=>{ if(e.key==='Enter') doSearch(); });
+document.getElementById('key-input').addEventListener('change', e=>{ apiKey=e.target.value.trim(); localStorage.setItem('gmap_key', apiKey); });
+// restore key
+(function(){ const k=localStorage.getItem('gmap_key'); if(k){ apiKey=k; document.getElementById('key-input').value=k; } })();
+
+// View scale sliders — live zoom + car scale
+const zoomSlider=document.getElementById('zoom-slider');
+const carSlider=document.getElementById('carscale-slider');
+zoomSlider.addEventListener('input', ()=>{
+  viewScale.zoom = parseFloat(zoomSlider.value);
+  document.getElementById('zoom-val').textContent = viewScale.zoom.toFixed(1)+'x';
+  // widen FOV slightly when zoomed out so the wider view feels natural
+  camera.fov = 62 + (viewScale.zoom-1)*2.4;
+  camera.updateProjectionMatrix();
+});
+carSlider.addEventListener('input', ()=>{
+  viewScale.carScale = parseFloat(carSlider.value);
+  document.getElementById('carscale-val').textContent = viewScale.carScale.toFixed(1)+'x';
+  applyCarScale();
+});
+
+async function doSearch(){
+  const q=document.getElementById('search-input').value.trim();
+  if(!q) return;
+  if(!apiKey){ alert('Paste a Google Maps API key first (Maps JavaScript + Elevation enabled).'); return; }
+  const btn=document.getElementById('search-btn'); btn.disabled=true;
+  showLoader('Loading Google Maps API');
+  try{
+    await loadMapsApi();
+    showLoader('Geocoding "'+q+'"');
+    const r0 = await geocode(q);
+    const lat=r0.geometry.location.lat(), lon=r0.geometry.location.lng();
+    location={ name:r0.formatted_address, lat, lon, real:true };
+    showLoader('Fetching elevation grid for '+r0.formatted_address);
+    const grid = await fetchElevationGrid(lat, lon);
+    showLoader('Fetching satellite imagery');
+    const sat = await fetchSatellite(lat, lon);
+    applyRealTerrain(grid, sat);
+    // 3D tiles: stream real building geometry on top of the terrain
+    showLoader('Streaming 3D building tiles');
+    try { await load3DTiles(lat, lon); }
+    catch(e){ console.warn('3D tiles failed (terrain still loaded):', e); }
+    showBanner('RELOCATED: '+r0.formatted_address, 2500);
+  } catch(err){
+    alert('Relocation failed: '+err.message);
+  } finally {
+    hideLoader(); btn.disabled=false;
+  }
+}
+
+// Load the Maps JavaScript API once, on first search. It handles its own
+// cross-origin auth — raw REST fetches lack CORS headers (Elevation REST
+// sends none) so the browser blocks them with a generic "Failed to fetch".
+let _mapsApiPromise=null;
+function loadMapsApi(){
+  if(window.google && window.google.maps) return Promise.resolve();
+  if(_mapsApiPromise) return _mapsApiPromise;
+  _mapsApiPromise = new Promise((resolve, reject)=>{
+    const cb='__gmapsCb';
+    window[cb]=()=>resolve();
+    const s=document.createElement('script');
+    s.src=`https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&libraries=places&callback=${cb}`;
+    s.onerror=()=>reject(new Error('Could not load Google Maps JS API - check that Maps JavaScript API is enabled for your key.'));
+    document.head.appendChild(s);
+  });
+  return _mapsApiPromise;
+}
+
+function geocode(query){
+  return new Promise((resolve, reject)=>{
+    const geocoder=new google.maps.Geocoder();
+    geocoder.geocode({address:query}, (results, status)=>{
+      if(status==='OK' && results.length) resolve(results[0]);
+      else reject(new Error('Geocode failed: '+status));
+    });
+  });
+}
+
+async function fetchElevationGrid(lat, lon){
+  // Real-world scale: sample a fine grid of real elevations (meters) in
+  // batches that respect the ElevationService 512-locations-per-call limit,
+  // then map lat/lon to world units using a true equirectangular projection.
+  // Old version sampled only 22x22 and normalized all relief to a fixed 45
+  // units, so a 50m city and a 2000m peak looked identical.
+  const N=64;               // 64x64 = 4096 samples
+  const spanDeg=0.05;       // ~5.5km N-S
+  const dlat=spanDeg/2;
+  const cosLat=Math.max(0.2, Math.cos(lat*Math.PI/180));
+  const dlon=spanDeg/2/cosLat;
+  // build full grid of LatLng (row-major: index = j*N + i)
+  const all=[];
+  for(let j=0;j<N;j++){
+    for(let i=0;i<N;i++){
+      const la=lat-dlat + (j/(N-1))*spanDeg;
+      const lo=lon-dlon + (i/(N-1))*spanDeg*2*cosLat; // match the visual span
+      all.push(new google.maps.LatLng(la, lo));
+    }
+  }
+  // chunk into <=512 per request
+  const elevator=new google.maps.ElevationService();
+  const results=new Array(all.length);
+  const CHUNK=500;
+  for(let s=0;s<all.length;s+=CHUNK){
+    const chunk=all.slice(s, s+CHUNK);
+    const part=await new Promise((resolve, reject)=>{
+      elevator.getElevationForLocations({locations:chunk}, (res, status)=>{
+        if(status==='OK') resolve(res);
+        else reject(new Error('Elevation failed: '+status+' (chunk '+(s/CHUNK)+')'));
+      });
+    });
+    for(let k=0;k<part.length;k++) results[s+k]=part[k];
+  }
+  return { results, gridN:N, seg:heightfield.segs, lat, lon, spanDeg, cosLat };
+}
+
+async function fetchSatellite(lat, lon){
+  // Stitch a grid of Static Maps satellite tiles into one high-res canvas.
+  // Old version draped a single 640px image over ~5.5km — hopelessly blurry.
+  // We now composite a GRID x GRID tiling at higher zoom for sharp detail.
+  // Static Maps returns access-control-allow-origin: *, so an <img> with
+  // crossOrigin='anonymous' stays untainted and uploads cleanly as a GL texture.
+  const TILE=640, GRID=3, zoom=15;
+  const spanDeg=0.05, cosLat=Math.max(0.2, Math.cos(lat*Math.PI/180));
+  const dlat=spanDeg/2, dlon=spanDeg/2/cosLat;
+  // Each tile centers on a sub-point of the bounding box.
+  const canvas=document.createElement('canvas');
+  canvas.width=TILE*GRID; canvas.height=TILE*GRID;
+  const ctx=canvas.getContext('2d');
+  const loadImg=(url)=>new Promise((res,rej)=>{
+    const img=new Image(); img.crossOrigin='anonymous';
+    img.onload=()=>res(img); img.onerror=()=>rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+    img.src=url;
+  });
+  // fetch tiles row by row (limit concurrency to be polite)
+  for(let r=0;r<GRID;r++){
+    const rowPromises=[];
+    for(let c=0;c<GRID;c++){
+      const la=lat+dlat - (r/(GRID-1))*spanDeg;
+      const lo=lon-dlon + (c/(GRID-1))*spanDeg*2*cosLat;
+      const url=`https://maps.googleapis.com/maps/api/staticmap?center=${la},${lo}&zoom=${zoom}&size=${TILE}x${TILE}&maptype=satellite&key=${encodeURIComponent(apiKey)}`;
+      rowPromises.push(loadImg(url));
+    }
+    const imgs=await Promise.all(rowPromises);
+    for(let c=0;c<GRID;c++) ctx.drawImage(imgs[c], c*TILE, r*TILE, TILE, TILE);
+  }
+  return canvas;
+}
+
+function applyRealTerrain(grid, img){
+  // Build a heightfield from real elevations (meters) with proportional scale.
+  // Relief is scaled by the global WORLD_M_PER_M so terrain is true-to-scale;
+  // a modest adaptive boost is added so flat cities still have enough rise for jumps.
+  const seg=256;                 // denser mesh to resolve the 64x64 grid
+  const size=MAP*2;
+  const data=new Float32Array((seg+1)*(seg+1));
+  const gN=grid.gridN, res=grid.results;
+  let minH=Infinity, maxH=-Infinity;
+  for(const e of res){ const h=e.elevation; if(h<minH)minH=h; if(h>maxH)maxH=h; }
+  const realRange=(maxH-minH);
+  // Adaptive relief boost: flat areas (small range) get a bigger exaggeration
+  // so they're not a featureless plane; mountains are kept close to true scale.
+  // e.g. 50m city -> 2.2x, 500m hills -> 1.3x, 2000m peak -> ~1.0x
+  const boost = realRange < 80 ? 2.2 : realRange < 300 ? 1.5 : realRange < 1000 ? 1.2 : 1.0;
+  location._boost = boost;   // 3D tiles use the same relief scaling for Y
+  for(let j=0;j<=seg;j++){
+    for(let i=0;i<=seg;i++){
+      const fx=i/seg*(gN-1), fz=j/seg*(gN-1);
+      const i0=Math.floor(fx), j0=Math.floor(fz), i1=Math.min(i0+1,gN-1), j1=Math.min(j0+1,gN-1);
+      const tx=fx-i0, tz=fz-j0;
+      const h00=res[j0*gN+i0].elevation, h10=res[j0*gN+i1].elevation;
+      const h01=res[j1*gN+i0].elevation, h11=res[j1*gN+i1].elevation;
+      const a = h00 + (h10-h00)*tx;
+      const b = h01 + (h11-h01)*tx;
+      const h = a+(b-a)*tz;
+      data[j*(seg+1)+i] = (h-minH) * WORLD_M_PER_M * boost + 2;
+    }
+  }
+  heightfield.data=data; heightfield.segs=seg; heightfield.size=size;
+  // rebuild mesh with satellite texture
+  if(terrainMesh){ scene.remove(terrainMesh); terrainMesh.geometry.dispose(); if(terrainMesh.material.map) terrainMesh.material.map.dispose(); }
+  const geo=new THREE.PlaneGeometry(size,size,seg,seg); geo.rotateX(-Math.PI/2);
+  const pos=geo.attributes.position;
+  for(let i=0;i<pos.count;i++){ pos.setY(i, heightfield.get(pos.getX(i),pos.getZ(i))); }
+  geo.computeVertexNormals();
+  // PBR material + satellite texture with crisp filtering
+  const tex=new THREE.Texture(img);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.wrapS = tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
+  tex.generateMipmaps = true;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  tex.needsUpdate=true;
+  const mat=new THREE.MeshStandardMaterial({
+    map:tex, roughness:0.96, metalness:0.0, vertexColors:false,
+  });
+  terrainMesh=new THREE.Mesh(geo,mat); scene.add(terrainMesh);
+  terrainGeo=geo;
+  // reposition everything onto new terrain
+  for(const v of vehicles){ v.pos.y=terrainHeightAt(v.pos.x,v.pos.z)+3; v.vel.set(0,0,0); v.angVel.set(0,0,0); }
+  scatterObstacles();   // re-seat props on the new ground (was the float bug)
+  relocateDropZone(); spawnContraband();
+  // sky tint
+  scene.background=new THREE.Color(0x9ec5e8); scene.fog.color.set(0x9ec5e8);
+}
+
+// Test hook: synthetic relocation (no network) to verify props re-seat.
+window.__testRelocate = function(){
+  location.real = true;
+  const gN=64, results=[];
+  for(let j=0;j<gN;j++) for(let i=0;i<gN;i++){
+    const dx=(i-gN/2)/(gN/2), dz=(j-gN/2)/(gN/2);
+    results.push({ elevation: 400*Math.max(0,1-dx*dx-dz*dz) });
+  }
+  const cv=document.createElement('canvas'); cv.width=8; cv.height=8;
+  applyRealTerrain({results, gridN:gN, seg:heightfield.segs}, cv);
+  let maxGap=0;
+  for(const o of obstacles){
+    const gh=terrainHeightAt(o.position.x, o.position.z);
+    maxGap=Math.max(maxGap, Math.abs(o.position.y - gh));
+  }
+  return {
+    obstacleCount: obstacles.length,
+    maxObstacleGap: maxGap,
+    contrabandGap: Math.abs(contraband.pos.y - terrainHeightAt(contraband.pos.x, contraband.pos.z)),
+    dropGap: Math.abs(dropZone.pos.y - terrainHeightAt(dropZone.pos.x, dropZone.pos.z)),
+    hfSegs: heightfield.segs,
+  };
+};
+
+// ============================================================
+//  Photorealistic 3D Tiles (real building/terrain geometry)
+//  Endpoint: https://tile.googleapis.com/v1/3dtiles/root
+//  Auth: X-Goog-Api-Key header (CORS-confirmed). Session tokens are NOT
+//  used for 3D tiles. Response is a 3D Tiles 1.0 tileset.json; child tiles
+//  are GLB meshes referenced by root.content.uri (relative, on tile.googleapis.com).
+//  We traverse children whose boundingVolume.region overlaps the target
+//  lat/lon box and load their GLB into the scene, transforming from
+//  ECEF/WGS84 into the game's local world frame centered on the location.
+// ============================================================
+
+// Fetch the root tileset.json with the API key in the header (CORS-allowed;
+// confirmed via preflight: access-control-allow-headers includes x-goog-api-key).
+async function fetchTilesRoot(){
+  const res = await fetch('https://tile.googleapis.com/v1/3dtiles/root', {
+    headers: { 'X-Goog-Api-Key': apiKey }
+  });
+  if(!res.ok) throw new Error('3D tiles root HTTP '+res.status);
+  return res.json();
+}
+
+// ECEF (earth-centered, earth-fixed) -> local east/north/up frame at (lat0,lon0).
+// Google's 3D tiles come in an ECEF coordinate frame; we rotate them into a
+// local tangent plane so they line up with our heightmap (X=east, Z=north, Y=up).
+// ECEF -> world rotation: rows are world axes (X=east, Y=up, Z=south) expressed
+// in ECEF, so vWorld = M * vECEF. Used for tile mesh vertices (which live in
+// ECEF after applying the tile's `transform`). This is ecefToENU with the
+// ENU->world axis swap baked in as a single matrix to avoid mixing conventions.
+function ecefToWorldMatrix(lat0, lon0){
+  const lat=lat0*Math.PI/180, lon=lon0*Math.PI/180;
+  const ex=-Math.sin(lon), ey=Math.cos(lon), ez=0;            // east  -> world X
+  const nx=-Math.sin(lat)*Math.cos(lon), ny=-Math.sin(lat)*Math.sin(lon), nz=Math.cos(lat); // north
+  const ux=Math.cos(lat)*Math.cos(lon), uy=Math.cos(lat)*Math.sin(lon), uz=Math.sin(lat);   // up -> world Y
+  // world Z = south = -north
+  const m=new THREE.Matrix4();
+  m.set(ex,ey,ez,0,  ux,uy,uz,0,  -nx,-ny,-nz,0,  0,0,0,1);
+  return m;
+}
+
+// lat/lon/alt (degrees/meters) -> world (x,y,z) centered on the location,
+// matching the heightfield's equirectangular mapping so tiles sit on the
+// terrain. X=east, Z=south (matches our -Z forward), Y=up * WORLD_M_PER_M.
+function llToWorld(lat, lon, alt, lat0, lon0){
+  const R=6378137; // earth radius (m)
+  const dLat=(lat-lat0)*Math.PI/180;
+  const dLon=(lon-lon0)*Math.PI/180;
+  const cosLat=Math.cos(lat0*Math.PI/180);
+  const east = R*dLon*cosLat;
+  const north = R*dLat;
+  const x = east * WORLD_M_PER_M;
+  const z = -north * WORLD_M_PER_M;   // north is -Z in our world
+  const y = alt * WORLD_M_PER_M * (location._boost||1);
+  return new THREE.Vector3(x, y, z);
+}
+
+// Recursively walk the tile tree, collecting tile nodes whose region overlaps
+// the target lat/lon box (in degrees) and whose content.uri is a GLB.
+// The 3D Tiles spec says region lat/lon are in RADIANS, but Google's
+// photorealistic tiles use DEGREES — so detect by magnitude and normalize.
+function collectTiles(node, box, out){
+  if(!node) return;
+  const bv=node.boundingVolume;
+  let inside=false;
+  if(bv && bv.region){
+    let [w,s,e,n] = bv.region;
+    // values > Pi indicate degrees (a radian longitude can't exceed ~3.14)
+    if(Math.abs(w) > Math.PI) { /* already degrees */ }
+    else { w*=180/Math.PI; s*=180/Math.PI; e*=180/Math.PI; n*=180/Math.PI; }
+    if(e>=box.w && w<=box.e && n>=box.s && s<=box.n) inside=true;
+  } else if(bv && bv.box){
+    inside=true; // aabb fallback — accept and let later filtering handle it
+  }
+  if(!inside) return;
+  if(node.content && node.content.uri && /\.glb$/i.test(node.content.uri)){
+    out.push(node);
+  }
+  if(node.children) for(const c of node.children) collectTiles(c, box, out);
+}
+
+// Load a single GLB tile and add its mesh to tilesGroup, transformed to world.
+async function loadTileGlb(tile, lat0, lon0){
+  const uri = tile.content.uri;
+  if(loadedTiles.has(uri)) return;
+  // uri is relative to tile.googleapis.com — prepend base if needed. Normalize
+  // the separator so a uri with or without a leading slash both resolve (Google's
+  // URIs typically start with '/', but don't assume it).
+  const base='https://tile.googleapis.com';
+  const url = uri.startsWith('http') ? uri : (base + (uri.startsWith('/') ? '' : '/') + uri);
+  // GLB fetch needs the API key header; GLTFLoader uses fetch under the hood
+  // via resource path, so we fetch the arraybuffer ourselves to set the header.
+  let buf;
+  try {
+    const res = await fetch(url, { headers:{'X-Goog-Api-Key':apiKey} });
+    if(!res.ok){ console.warn('tile fetch HTTP '+res.status+' for', url); return; }
+    buf = await res.arrayBuffer();
+  } catch(e){ console.warn('tile fetch threw for', url, e); return; }
+  const gltf = await gltfLoader.parseAsync(buf, '');
+  const root = gltf.scene;
+  // Google's photorealistic GLB vertices are in a tile-local frame. The tile's
+  // `transform` (16-element column-major matrix, 3D Tiles spec) maps
+  // tile-local -> ECEF (earth-centered, earth-fixed, meters). We composite
+  // (see the region branch below for the full chain) so that the match center
+  // maps to world origin and the tile lands at its correct east/north/up
+  // offset, sitting on the heightfield. Unit-tested in _math_test.mjs.
+  const bv=tile.boundingVolume;
+  // tile-local -> ECEF (identity if the tile omits `transform`)
+  const tileTf = new THREE.Matrix4();
+  if(tile.transform && tile.transform.length===16){
+    tileTf.fromArray(tile.transform);   // three.js Matrix4.fromArray expects column-major — matches the spec
+  }
+  if(bv && bv.region){
+    // Match center is world origin (0,0,0). A tile-local vertex p maps to world as:
+    //   world = Scale(s, s*boost, s) * R(ecefToWorld) * Translate(-ecef0) * tileTransform * p
+    // The Translate(-ecef0) is the load-bearing step: the tile `transform` encodes
+    // the tile's *absolute* ECEF position (~6.3M m). Without subtracting the
+    // match-center ECEF first, the rotation projects that entire Earth radius
+    // onto the up axis and the tile renders at Y~956720 while the terrain sits
+    // at Y~0. Verified against _math_test.mjs: a vertex 1km N +100E +50U from
+    // the match center lands at (15, 7.5, -150.3) as expected.
+    const R=6378137;
+    const ecef0 = new THREE.Vector3(R*Math.cos(lat0*Math.PI/180)*Math.cos(lon0*Math.PI/180),
+                                    R*Math.cos(lat0*Math.PI/180)*Math.sin(lon0*Math.PI/180),
+                                    R*Math.sin(lat0*Math.PI/180));
+    root.matrixAutoUpdate=false;
+    const ecefToWorldRot = ecefToWorldMatrix(lat0, lon0);
+    const s = WORLD_M_PER_M, sb = s*(location._boost||1);
+    // composite Scale * Rot * Translate(-ecef0) * tileTf
+    root.matrix.identity();
+    root.matrix.scale(new THREE.Vector3(s, sb, s));     // Scale(s, s*boost, s)
+    root.matrix.multiply(ecefToWorldRot);               // R(ecefToWorld)
+    root.matrix.multiply(new THREE.Matrix4().makeTranslation(-ecef0.x,-ecef0.y,-ecef0.z)); // Translate(-ecef0)
+    root.matrix.multiply(tileTf);                        // tile-local -> ECEF
+    root.matrixWorldNeedsUpdate=true;
+  } else {
+    // no region — leave at origin as best effort
+    root.matrixAutoUpdate=false;
+    root.matrix.copy(tileTf);
+  }
+  tilesGroup.add(root);
+  loadedTiles.set(uri, root);
+  // Building detection: mine world-space AABBs from this tile's meshes so
+  // the physics can collide with real buildings. We skip trivially thin
+  // meshes (roads/ground planes) by requiring a minimum world height.
+  root.updateMatrixWorld(true);
+  const tmpBox = new THREE.Box3();
+  root.traverse(obj=>{
+    if(!obj.isMesh || !obj.geometry) return;
+    // geometry bounding box in the mesh's local frame
+    if(!obj.geometry.boundingBox) obj.geometry.computeBoundingBox();
+    tmpBox.copy(obj.geometry.boundingBox);
+    tmpBox.applyMatrix4(obj.matrixWorld);
+    const sy = tmpBox.max.y - tmpBox.min.y;
+    // require >= 2 world units tall to count as a building, not a road/ground
+    if(sy >= 2){
+      buildingColliders.push({ min: tmpBox.min.clone(), max: tmpBox.max.clone(), mesh:obj });
+    }
+  });
+  buildingCollidersDirty = true;
+}
+
+// Public entry: clear old tiles, fetch root, load tiles overlapping the box.
+async function load3DTiles(lat, lon){
+  // clear previous
+  for(const [,g] of loadedTiles){ tilesGroup.remove(g); }
+  loadedTiles.clear();
+  buildingColliders.length = 0;
+  tilesRoot = await fetchTilesRoot();
+  tilesLoadEnabled = true;
+  // target box ~ the elevation grid span
+  const span=0.05, cosLat=Math.max(0.2,Math.cos(lat*Math.PI/180));
+  const box = { w:lon-span*cosLat, e:lon+span*cosLat, s:lat-span/2, n:lat+span/2 };
+  const nodes=[];
+  collectTiles(tilesRoot.root || tilesRoot, box, nodes);
+  // load with a small concurrency cap to avoid hammering the API
+  const CONC=6;
+  let idx=0;
+  async function worker(){
+    while(idx<nodes.length){
+      const i=idx++; if(i>=nodes.length) break;
+      try { await loadTileGlb(nodes[i], lat, lon); }
+      catch(e){ console.warn('tile load failed:', nodes[i]?.content?.uri, e); }
+    }
+  }
+  const workers=[]; for(let k=0;k<CONC;k++) workers.push(worker());
+  await Promise.all(workers);
+  window.__tilesCount = loadedTiles.size;
+}
+// test hook: drive the tiles pipeline with mocked fetch (no API key needed)
+window.__load3DTiles = load3DTiles;
+// test hook: return loaded-tile bounding box + collider count for verification
+window.__tilesDebug = function(){
+  if(loadedTiles.size===0) return {count:0, buildingCount:buildingColliders.length};
+  const box=new THREE.Box3().setFromObject(tilesGroup);
+  return {count:loadedTiles.size, buildingCount:buildingColliders.length,
+          yMax:box.max.y, yMin:box.min.y, xMax:box.max.x, zMax:box.max.z, zMin:box.min.z};
+};
+
+
+function animate(){
+  requestAnimationFrame(animate);
+  let dt=clock.getDelta(); dt=Math.min(dt,0.05);
+  if(!gameOver && started){
+    // AI
+    for(const v of vehicles) if(!v.isPlayer) aiControl(v, dt);
+    // inputs
+    const playerIn=gatherPlayerInput();
+    for(const v of vehicles){
+      const inp = v.isPlayer ? playerIn : gatherAIInput(v);
+      stepVehicle(v, dt, inp);
+    }
+    vehicleCollisions();
+    checkContraband();
+    checkDelivery();
+    // contraband follows carrier or bobs
+    if(carrier){
+      // attach behind carrier
+      const back=new THREE.Vector3(0,2,2.2).applyQuaternion(carrier.quat);
+      contraband.pos.copy(carrier.pos).add(back);
+      contraband.mesh.position.copy(contraband.pos);
+    } else {
+      contraband.pos.y = terrainHeightAt(contraband.pos.x,contraband.pos.z)+3 + Math.sin(performance.now()/300)*0.4;
+      contraband.mesh.position.copy(contraband.pos);
+      contraband.mesh.rotation.y += dt*2;
+    }
+    dropMarker.position.y = dropZone.pos.y + 10;
+    updateHUD(); drawMinimap();
+  }
+  updateCamera(dt);
+  renderer.render(scene,camera);
+}
+
+let started=false;
+document.getElementById('start-btn').addEventListener('click', ()=>{
+  document.getElementById('intro').classList.add('hidden');
+  started=true;
+  window.__gameStarted = true;
+  clock.start();
+});
+
+// resize
+addEventListener('resize', ()=>{
+  camera.aspect=innerWidth/innerHeight; camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth,innerHeight);
+});
+
+// ---- boot ----
+initScene();
+animate();
+</script>
+</body>
+</html>
