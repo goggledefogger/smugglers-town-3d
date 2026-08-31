@@ -1,9 +1,9 @@
 {
-  "name": "smugglers-run",
+  "name": "smugglers-town-3d",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Smuggler's Run: Turf Wars — a 4v4 arcade vehicle combat game with real-world terrain",
+  "description": "Smugglers Town 3D: Turf Wars — a 4v4 arcade vehicle combat game with real-world terrain",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

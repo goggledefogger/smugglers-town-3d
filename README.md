@@ -1,4 +1,4 @@
-# Smuggler's Run: Turf Wars
+# Smugglers Town 3D: Turf Wars
 
 A 4v4 arcade vehicle combat game — a single piece of contraband spawns on the
 map. Grab it, rush it to the green smoke drop-off. Get rammed and it transfers

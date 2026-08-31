@@ -37,7 +37,7 @@ export class IntroScreen extends LitElement {
   override render() {
     return html`
       ${!this.visible ? '' : html`
-        <h1>SMUGGLER'S <span class="ac">RUN</span></h1>
+        <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
         <p class="sub">Turf Wars — a single piece of contraband spawns on the map. Grab it, rush it to the green
         smoke drop-off. Get rammed and it transfers to the attacker. First team to 5 deliveries wins.</p>
         <div class="controls">
