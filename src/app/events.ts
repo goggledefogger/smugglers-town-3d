@@ -1,0 +1,45 @@
+/**
+ * Typed pub/sub for game events. UI and render layers subscribe; core emits.
+ */
+export interface GameEventMap {
+  'contraband:pickup': { vehicleId: number };
+  'contraband:stolen': { attackerId: number; victimId: number };
+  'contraband:delivered': { team: 0 | 1 };
+  'match:win': { team: 0 | 1 };
+  'location:changed': { label: string; isReal: boolean };
+  'relocate:failed': { message: string };
+  'relocate:status': { message: string };
+  [k: string]: unknown;
+}
+
+type Handler<T> = (payload: T) => void;
+
+export class EventBus<EventMap extends Record<string, unknown>> {
+  private readonly handlers = new Map<string, Set<Handler<never>>>();
+
+  on<K extends keyof EventMap & string>(event: K, handler: Handler<EventMap[K]>): () => void {
+    let set = this.handlers.get(event);
+    if (!set) {
+      set = new Set();
+      this.handlers.set(event, set);
+    }
+    set.add(handler as Handler<never>);
+    return () => this.off(event, handler);
+  }
+
+  off<K extends keyof EventMap & string>(event: K, handler: Handler<EventMap[K]>): void {
+    this.handlers.get(event)?.delete(handler as Handler<never>);
+  }
+
+  emit<K extends keyof EventMap & string>(event: K, payload: EventMap[K]): void {
+    const set = this.handlers.get(event);
+    if (!set) return;
+    for (const h of set) (h as Handler<EventMap[K]>)(payload);
+  }
+
+  clear(): void {
+    this.handlers.clear();
+  }
+}
+
+export type GameEvents = EventBus<GameEventMap>;

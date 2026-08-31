@@ -1,0 +1,45 @@
+import { html, css, LitElement } from 'lit';
+
+/**
+ * End screen: winner, final score, and a rematch button.
+ */
+export class EndScreen extends LitElement {
+  static override styles = css`
+    :host { position:fixed; inset:0; background:rgba(26,20,16,.9); display:flex;
+      flex-direction:column; align-items:center; justify-content:center; z-index:35; }
+    :host([hidden]) { display:none; }
+    h2 { font-family:'Russo One',sans-serif; font-size:clamp(36px,7vw,72px); margin:0; }
+    h2.win { color:var(--accent); }
+    h2.lose { color:var(--cool); }
+    p { color:var(--muted); margin:8px 0 24px; font-size:15px; }
+    .rematch { padding:12px 40px; background:var(--accent); color:#1a1410;
+      font-family:'Russo One',sans-serif; font-size:18px; border:none; border-radius:10px; cursor:pointer;
+      box-shadow:0 6px 0 #b0390f; }
+    .rematch:hover { transform:translateY(-2px); }
+  `;
+
+  static override properties = {
+    winner: { type: Number },
+    scores: { type: Object }
+  };
+  declare winner: 0 | 1 | null;
+  declare scores: Record<number, number>;
+
+  constructor() {
+    super();
+    this.winner = null;
+    this.scores = { 0: 0, 1: 0 };
+  }
+
+  onRematch?: () => void;
+
+  override render() {
+    const won = this.winner === 0;
+    return html`
+      <h2 class="${won ? 'win' : 'lose'}">${won ? 'YOUR CREW WINS' : 'RIVALS WIN'}</h2>
+      <p>Final score ${this.scores[0] ?? 0} — ${this.scores[1] ?? 0}</p>
+      <button class="rematch" @click=${() => this.onRematch?.()}>REMATCH</button>
+    `;
+  }
+}
+customElements.define('sr-end', EndScreen);
