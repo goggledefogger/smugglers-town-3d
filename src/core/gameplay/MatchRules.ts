@@ -95,6 +95,11 @@ export class MatchRules {
     this.dropZonePos.set(p.x, this.ground.sample(p.x, p.z), p.z);
   }
 
+  /** A body was replaced in place (vehicle switch): the contraband stays with the driver. */
+  swapVehicle(from: VehicleBody, to: VehicleBody): void {
+    if (this.carrier === from) this.carrier = to;
+  }
+
   /** Called for every ramming pair from the collision resolver. */
   onRam(a: VehicleBody, b: VehicleBody, nowS: number): void {
     if (!this.carrier) return;

@@ -33,6 +33,8 @@ const _tmpV = new Vector3();
 
 export class Game {
   readonly vehicles: VehicleActor[] = [];
+  /** Live body list shared with MatchRules (same array, mutated in place). */
+  private readonly bodies: VehicleBody[] = [];
   private match: MatchRules;
   private teams = new Map<number, 0 | 1>();
   private accumulator = 0;
@@ -46,7 +48,7 @@ export class Game {
     private readonly deps: GameDeps
   ) {
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
+      config.scoring, this.bodies, this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
     );
   }
 
@@ -73,7 +75,7 @@ export class Game {
   reset(terrain: TerrainProvider): void {
     this.terrain = terrain;
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
+      config.scoring, this.bodies, this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
     );
     this.winner = null;
     this.timeS = 0;
@@ -81,6 +83,7 @@ export class Game {
     // building colliders belong to the terrain, not the match: a rematch on
     // real terrain keeps them and a relocation replaces them explicitly
     this.vehicles.length = 0;
+    this.bodies.length = 0;
     this.teams.clear();
     this.spawnAllVehicles();
     this.match.spawnContraband();
@@ -108,6 +111,7 @@ export class Game {
       body.pos.set(x, hf.sample(x, z) + 3, z);
       body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -ang + Math.PI / 2);
       this.teams.set(body.id, team);
+      this.bodies.push(body);
       this.vehicles.push({
         body,
         team,
@@ -147,6 +151,8 @@ export class Game {
     replacement.quat.copy(quat);
     replacement.vel.copy(vel);
     this.teams.set(replacement.id, player.team);
+    this.bodies[this.bodies.indexOf(player.body)] = replacement;
+    this.match.swapVehicle(player.body, replacement);
     const idx = this.vehicles.indexOf(player);
     this.vehicles[idx] = {
       body: replacement,
@@ -186,7 +192,7 @@ export class Game {
       actor.body.step(dt, input, this.terrain.heightfield, this.buildingColliders);
     }
     resolveVehicleCollisions(
-      this.vehicles.map(a => a.body),
+      this.bodies,
       { ramRadius: config.ram.ramRadius, transferCooldownS: config.scoring.transferCooldownS },
       1,
       (a, b) => this.match.onRam(a, b, this.timeS)
