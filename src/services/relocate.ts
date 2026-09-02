@@ -1,7 +1,7 @@
 /**
  * LocationRelocator: end-to-end relocation to a real place. Geocodes the
  * query, fetches elevation + satellite imagery, streams 3D building tiles,
- * and returns the new TerrainProvider. Surface failures via the events bus.
+ * and returns the new TerrainProvider.
  */
 import { Group } from 'three';
 import { buildRealTerrain, type ElevationGrid } from '../core/terrain/RealTerrain.ts';
@@ -40,7 +40,11 @@ export async function relocate(
   let tilesGroup: Group | null = null;
   try {
     onProgress('Streaming 3D building tiles');
-    const tiles = await load3DTiles(lat, lon, terrain.reliefBoost, apiKey);
+    const tiles = await load3DTiles({
+      lat, lon, apiKey, terrain,
+      onProgress: (n, total) => onProgress(`Streaming 3D building tiles ${n}/${total}`)
+    });
+    console.info(`3D tiles: ${tiles.tileCount} tiles, ${tiles.buildingCount} building colliders`);
     colliders = tiles.colliders;
     tilesGroup = tiles.tilesGroup;
   } catch (e) {

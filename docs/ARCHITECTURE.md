@@ -100,6 +100,10 @@ against hand-computed values:
 
 - `llToWorld` — lat/lon/alt → world (equirectangular, X=east, Z=south,
   Y=up × `WORLD_M_PER_M`).
+- `latLonToEcef` — geodetic → WGS84 ECEF. It must be the ellipsoid: a
+  spherical earth puts the origin ~24 km from Google's tiles at mid
+  latitudes, far enough that a tight-radius walk of the tile tree never
+  reaches the city.
 - `ecefToWorldMatrix` — orthonormal ECEF → world rotation.
 - `tileTransformChain` — the full Google 3D Tiles transform:
   `Scale(s, s·boost, s) · R(ecefToWorld) · Translate(-ecef0) · tileTransform`.
@@ -121,13 +125,29 @@ one canvas; `crossOrigin='anonymous'` is safe because the endpoint sends
 `access-control-allow-origin: *`, keeping the canvas untainted for GL upload.
 
 ### `services/tiles/Tileset.ts`
-Traverses the 3D Tiles tree for regions overlapping the target box. Region
-lat/lon arrive in *degrees* despite the spec saying radians — detected by
-magnitude (`> π`) and normalized. GLBs are fetched as arraybuffers with the
-`X-Goog-Api-Key` header (GLTFLoader's own fetch can't set headers), then
-placed via `tileTransformChain`. `mineBuildingColliders` extracts world-space
-AABBs from meshes ≥2 world-units tall — the "building detection" that makes
-cars smash into real buildings instead of driving through them.
+Google's tree, as probed: WGS84 ECEF with oriented-box bounding volumes,
+~22 levels deep, `REPLACE` refinement, and a GLB at *every* level whose
+`geometricError` halves per level (16 km at depth 8, 32 m at depth 20).
+Content URIs alternate between `.glb` and external `.json` sub-tilesets, and
+every nested fetch must forward the `?session=` from the root's URIs or
+Google answers 400.
+
+`collectTiles` walks level by level (sub-tileset fetches within a level run
+in parallel), keeps nodes whose box lies within the load radius of the match
+center, and takes the first GLB on each path whose error satisfies the
+distance-based `LodPolicy` — never its ancestors, which would render
+continent-sized slabs over the field. GLBs are fetched as arraybuffers with
+the `X-Goog-Api-Key` header (GLTFLoader's own fetch can't set headers). They
+are glTF Y-up with the ECEF placement baked into the node matrix, so
+`glbPlacement` is `tileTransformChain` × a +90° X rotation.
+
+A tile is one merged photogrammetry mesh, so per-mesh bounds say nothing
+about buildings. `buildingCollidersFrom` stamps every triangle's top into a
+3-unit height grid, calls any cell rising ≥4 units above the terrain a
+building, and merges runs along X into the AABBs `VehicleBody` already
+resolves against. The terrain mesh sits `GROUND_LIFT` above the tile datum
+so the satellite drape covers the photogrammetry ground instead of
+z-fighting with it.
 
 ## Extension points
 

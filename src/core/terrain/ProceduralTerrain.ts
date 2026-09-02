@@ -54,6 +54,7 @@ export function createDesertTerrain(heightfield: Heightfield): TerrainProvider {
     isReal: false,
     heightfield,
     satelliteCanvas: null,
-    reliefBoost: 1
+    reliefBoost: 1,
+    datumAltM: 0
   };
 }

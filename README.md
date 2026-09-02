@@ -19,7 +19,7 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (38 tests, node env) |
+| `npm test` | Vitest suite (47 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |
@@ -91,6 +91,13 @@ in `localStorage` only. Required APIs on the key:
 Elevation sampling respects the ElevationService 512-locations-per-call limit
 (64×64 grid in 9 chunks). 3D tiles are best-effort — if they fail, real terrain
 still loads.
+
+The tile loader walks Google's ~22-level tree to a distance-based level of
+detail (`DEFAULT_LOD` in `services/tiles/Tileset.ts`: 16 m geometric error
+near the match center, 64 m toward the field edge — roughly 75 tiles / 20 MB
+for a downtown). Each tile is one merged photogrammetry mesh, so building
+colliders come from rasterizing those meshes into a height grid and boxing
+every cell that rises well above the terrain.
 
 ## Origin
 

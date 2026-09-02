@@ -52,7 +52,9 @@ export class MatchRules {
     private readonly vehicles: readonly VehicleBody[],
     private readonly teams: ReadonlyMap<number, TeamId>,
     private readonly ground: Heightfield,
-    private readonly mapHalf: number
+    private readonly mapHalf: number,
+    /** True where a point sits inside a building — no spawning there. */
+    private readonly blocked: (x: number, z: number) => boolean = () => false
   ) {}
 
   get state(): MatchState {
@@ -65,16 +67,16 @@ export class MatchRules {
     };
   }
 
-  /** Random point clear of vehicles, for contraband / drop zone placement. */
+  /** Random point clear of vehicles and buildings, for contraband / drop zone placement. */
   private randomClearPoint(minDist: number, spread = 1.6): Vector3 {
     let x = 0, z = 0;
-    for (let tries = 0; tries < 20; tries++) {
+    for (let tries = 0; tries < 40; tries++) {
       x = (Math.random() - 0.5) * this.mapHalf * spread;
       z = (Math.random() - 0.5) * this.mapHalf * spread;
-      const far = this.vehicles.every(
+      const far = !this.blocked(x, z) && this.vehicles.every(
         v => Math.hypot(x - v.pos.x, z - v.pos.z) > minDist
       );
-      if (far || tries === 19) break;
+      if (far) break;
     }
     return new Vector3(x, 0, z);
   }

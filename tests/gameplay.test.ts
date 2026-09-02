@@ -14,6 +14,16 @@ function makeMatch(bodies: VehicleBody[], teams: ReadonlyMap<number, 0 | 1>): Ma
 }
 
 describe('MatchRules', () => {
+  it('never spawns contraband or the drop zone inside a building', () => {
+    const m = new MatchRules(DEFAULT_SCORING, [], new Map(), FLAT, 420, (x) => x > 0);
+    for (let i = 0; i < 25; i++) {
+      m.spawnContraband();
+      m.relocateDropZone();
+      expect(m.state.contrabandPos.x).toBeLessThanOrEqual(0);
+      expect(m.state.dropZonePos.x).toBeLessThanOrEqual(0);
+    }
+  });
+
   it('picks up contraband when a vehicle is inside the radius', () => {
     const a = new VehicleBody(VEHICLE_TYPES[2]!);
     const teams = new Map([[a.id, 0 as const]]);

@@ -9,7 +9,6 @@ export class IntroScreen extends LitElement {
     :host { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center;
       justify-content:center; background:radial-gradient(120% 90% at 50% 20%, #2a201800, rgba(26,20,16,.92));
       z-index:40; padding:20px; }
-    .hidden { display:none; }
     h1 { font-family:'Russo One',sans-serif; font-size:clamp(40px,8vw,86px); line-height:.92;
       margin:0; text-align:center; text-shadow:0 4px 0 #0006; }
     .ac { color:var(--accent); }
@@ -26,27 +25,17 @@ export class IntroScreen extends LitElement {
 
   onStart?: () => void;
 
-  static override properties = { visible: { type: Boolean } };
-  declare visible: boolean;
-
-  constructor() {
-    super();
-    this.visible = true;
-  }
-
   override render() {
     return html`
-      ${!this.visible ? '' : html`
-        <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
-        <p class="sub">Turf Wars — a single piece of contraband spawns on the map. Grab it, rush it to the green
-        smoke drop-off. Get rammed and it transfers to the attacker. First team to 5 deliveries wins.</p>
-        <div class="controls">
-          <kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake/reverse ·
-          <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump-boost<br>
-          <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>1-5</kbd> switch vehicle
-        </div>
-        <button class="play" @click=${() => this.onStart?.()}>START ENGINE</button>
-      `}
+      <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
+      <p class="sub">Turf Wars — a single piece of contraband spawns on the map. Grab it, rush it to the green
+      smoke drop-off. Get rammed and it transfers to the attacker. First team to 5 deliveries wins.</p>
+      <div class="controls">
+        <kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake/reverse ·
+        <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump-boost<br>
+        <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>1-5</kbd> switch vehicle
+      </div>
+      <button class="play" @click=${() => this.onStart?.()}>START ENGINE</button>
     `;
   }
 }

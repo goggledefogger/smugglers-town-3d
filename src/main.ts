@@ -22,6 +22,7 @@ import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import { KeyboardState } from './ui/controls.ts';
 import { relocate } from './services/relocate.ts';
+import { disposeTiles } from './services/tiles/Tileset.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
@@ -151,9 +152,6 @@ events.on('match:win', ({ team }) => {
     endEl.scores = { ...game.state.scores };
   }, 1500);
 });
-events.on('relocate:status', ({ message }) => {
-  loaderEl.message = message;
-});
 events.on('location:changed', ({ label }) => {
   bannerEl.show(`RELOCATED: ${label}`, 2500);
 });
@@ -166,7 +164,9 @@ introEl.onStart = () => {
 endEl.onRematch = () => {
   endEl.hidden = true;
   endEl.winner = null;
-  game.reset(desertTerrain);
+  // rematch on whatever terrain is loaded; a relocation's tiles and
+  // colliders stay in place
+  game.reset(game.terrainProvider);
   rebuildViews();
   propScatter.scatter(game.terrainProvider.heightfield, config.world.mapHalf, game.terrainProvider.isReal);
 };
@@ -184,15 +184,18 @@ relocateBarEl.onSearch = async (q, key) => {
     const { terrain, colliders, tilesGroup: newTiles } = await relocate(q, key, (msg) => {
       loaderEl.message = msg;
     });
-    if (tilesGroup) renderer.scene.remove(tilesGroup);
+    if (tilesGroup) {
+      renderer.scene.remove(tilesGroup);
+      disposeTiles(tilesGroup);
+    }
     tilesGroup = newTiles;
     if (tilesGroup) renderer.scene.add(tilesGroup);
     const oldMesh = terrainMesh.mesh;
     if (oldMesh) renderer.scene.remove(oldMesh);
     renderer.scene.add(terrainMesh.build(terrain, renderer.maxAnisotropy));
     propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal);
-    game.reset(terrain);
     game.setBuildingColliders(colliders);
+    game.reset(terrain);
     rebuildViews();
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {

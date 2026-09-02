@@ -5,6 +5,23 @@ import { latLonToEcef, WORLD_M_PER_M } from '../src/core/geo/ecef.ts';
 
 const ORIGIN = { lat: 37.7749, lon: -122.4194 }; // San Francisco
 const R = 6_378_137;
+const E2 = 0.00669437999014; // WGS84 first eccentricity squared
+
+describe('latLonToEcef', () => {
+  it('is on the WGS84 ellipsoid, not a sphere', () => {
+    const p = latLonToEcef(45, 0, 0);
+    // geocentric radius at 45° geodetic latitude: 6367.49 km, ~10.6 km under
+    // the equatorial radius a sphere would give
+    expect(Math.hypot(p.x, p.y, p.z)).toBeCloseTo(6_367_490, -2);
+    expect(p.y).toBeCloseTo(0, 6);
+  });
+
+  it('adds height along the geodetic normal', () => {
+    const a = latLonToEcef(45, 10, 0);
+    const b = latLonToEcef(45, 10, 100);
+    expect(Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z)).toBeCloseTo(100, 6);
+  });
+});
 
 describe('llToWorld', () => {
   it('maps the origin to the world origin', () => {
@@ -50,9 +67,12 @@ describe('ecefToWorldMatrix', () => {
 
   it('takes ECEF up at the origin to world +Y', () => {
     const m = ecefToWorldMatrix(ORIGIN);
-    const ecef0 = latLonToEcef(ORIGIN.lat, ORIGIN.lon, 0);
-    // unit ECEF-up at the origin: the normalized position vector itself
-    const up = new Vector3(ecef0.x, ecef0.y, ecef0.z).normalize().multiplyScalar(50);
+    // geodetic up (the ellipsoid normal, not the geocentric direction)
+    const lat = (ORIGIN.lat * Math.PI) / 180;
+    const lon = (ORIGIN.lon * Math.PI) / 180;
+    const up = new Vector3(
+      Math.cos(lat) * Math.cos(lon), Math.cos(lat) * Math.sin(lon), Math.sin(lat)
+    ).multiplyScalar(50);
     const p = up.applyMatrix4(new Matrix4().copy(m));
     expect(p.x).toBeCloseTo(0, 3);
     expect(p.y).toBeCloseTo(50, 3);
@@ -64,7 +84,8 @@ describe('tileTransformChain', () => {
   it('lands a vertex 100m E + 50m U + 1km N of the match center at true scale', () => {
     const origin = { lat: 0, lon: 0 };
     const ecef0 = latLonToEcef(0, 0, 0);
-    const latN = (1000 / R) * (180 / Math.PI);
+    // 1 km along the meridian: its radius of curvature at the equator is a(1-e²)
+    const latN = (1000 / (R * (1 - E2))) * (180 / Math.PI);
     const lonE = (100 / R) * (180 / Math.PI);
     const vEcef = latLonToEcef(latN, lonE, 50);
     const m = tileTransformChain(new Matrix4(), origin, ecef0, 1);

@@ -34,8 +34,9 @@ export function llToWorld(
 /**
  * Rotation taking ECEF vectors into the local world frame at the origin.
  * Rows are world axes (X = east, Y = up, Z = south) expressed in ECEF, so
- * vWorld = M * vECEF. Equivalent to ecefToEnu with the ENU->world axis swap
- * (north is -Z here) baked in as a single matrix.
+ * vWorld = M * vECEF. The standard ECEF->ENU rotation (geodetic normal, so
+ * it matches WGS84 tiles) with the ENU->world axis swap (north is -Z here)
+ * baked in as a single matrix.
  */
 export function ecefToWorldMatrix(origin: GeoOrigin): Matrix4 {
   const lat = (origin.lat * Math.PI) / 180;

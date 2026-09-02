@@ -16,4 +16,6 @@ export interface TerrainProvider {
   readonly satelliteCanvas: HTMLCanvasElement | null;
   /** Relief exaggeration applied to real elevations (1 = true scale). */
   readonly reliefBoost: number;
+  /** Real altitude (m) that maps to world y = 0; the datum streamed tiles are placed against. */
+  readonly datumAltM: number;
 }

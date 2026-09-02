@@ -39,7 +39,6 @@ export class Game {
   private timeS = 0;
   private winner: 0 | 1 | null = null;
   private buildingColliders: BuildingCollider[] = [];
-  private carScale = 1;
   private hudTimer = 0;
 
   constructor(
@@ -47,20 +46,24 @@ export class Game {
     private readonly deps: GameDeps
   ) {
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf
+      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.insideBuilding
     );
   }
 
-  /** Full reset for a new match (new terrain or rematch). */
+  private readonly insideBuilding = (x: number, z: number): boolean =>
+    this.buildingColliders.some(c => x >= c.min.x && x <= c.max.x && z >= c.min.z && z <= c.max.z);
+
+  /** Full reset for a new match (new terrain or rematch). Set colliders first so spawns avoid them. */
   reset(terrain: TerrainProvider): void {
     this.terrain = terrain;
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf
+      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.insideBuilding
     );
     this.winner = null;
     this.timeS = 0;
     this.accumulator = 0;
-    this.buildingColliders = [];
+    // building colliders belong to the terrain, not the match: a rematch on
+    // real terrain keeps them and a relocation replaces them explicitly
     this.vehicles.length = 0;
     this.teams.clear();
     this.spawnAllVehicles();
@@ -77,9 +80,14 @@ export class Game {
       const typeIdx = isPlayer ? 2 : pickVehicleType();
       const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!);
       const ang = (i / total) * Math.PI * 2;
-      const r = 20 + i * 2;
-      const x = Math.cos(ang) * r;
-      const z = Math.sin(ang) * r;
+      // walk outward along the spawn ray until clear of buildings
+      let x = 0, z = 0;
+      for (let tries = 0; tries < 12; tries++) {
+        const r = 20 + i * 2 + tries * 8;
+        x = Math.cos(ang) * r;
+        z = Math.sin(ang) * r;
+        if (!this.insideBuilding(x, z)) break;
+      }
       body.pos.set(x, hf.sample(x, z) + 3, z);
       body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -ang + Math.PI / 2);
       this.teams.set(body.id, team);
@@ -107,10 +115,6 @@ export class Game {
 
   setBuildingColliders(c: BuildingCollider[]): void {
     this.buildingColliders = c;
-  }
-
-  setCarScale(s: number): void {
-    this.carScale = s;
   }
 
   /** Swap the player's vehicle type in place, keeping position and velocity. */
@@ -162,16 +166,16 @@ export class Game {
         actor.brain!.think(dt, actor.body, this.match.state);
         input = actor.brain!.input();
       }
-      actor.body.step(dt, input, this.terrain.heightfield, this.buildingColliders, this.carScale);
+      actor.body.step(dt, input, this.terrain.heightfield, this.buildingColliders);
     }
     resolveVehicleCollisions(
       this.vehicles.map(a => a.body),
       { ramRadius: config.ram.ramRadius, transferCooldownS: config.scoring.transferCooldownS },
-      this.carScale,
+      1,
       (a, b) => this.match.onRam(a, b, this.timeS)
     );
-    this.match.checkPickup(this.carScale);
-    this.match.checkDelivery(this.carScale);
+    this.match.checkPickup(1);
+    this.match.checkDelivery(1);
     this.processMatchEvents();
   }
 
@@ -245,4 +249,3 @@ function pickVehicleType(): number {
 }
 
 const NEUTRAL_INPUT: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
-void _tmpV;

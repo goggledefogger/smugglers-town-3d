@@ -5,9 +5,7 @@
 export const config = {
   world: {
     /** Half-extent of the play field in world units. */
-    mapHalf: 420,
-    /** World units per real-world meter (terrain + 3D tile scale). */
-    worldMPerM: 0.15
+    mapHalf: 420
   },
   physics: {
     gravity: 22,

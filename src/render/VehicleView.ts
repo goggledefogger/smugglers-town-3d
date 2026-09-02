@@ -16,11 +16,8 @@ export class VehicleView {
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
   private readonly team: number;
-  private carScale = 1;
 
   constructor(private readonly actor: VehicleActor) {
-    const body = actor.body;
-    const stats = body.stats;
     const teamColor = actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1];
     const g = new Group();
     // body
@@ -56,8 +53,6 @@ export class VehicleView {
     );
     bar.position.set(0, 1.4, 2);
     g.add(bar);
-    void stats;
-
     this.group.add(g);
 
     // health bar sprite above the vehicle
@@ -76,11 +71,6 @@ export class VehicleView {
     this.sync();
   }
 
-  setCarScale(s: number): void {
-    this.carScale = s;
-    this.group.scale.setScalar(s);
-  }
-
   private updateHealthBar(): void {
     const ctx = this.barCanvas.getContext('2d')!;
     ctx.clearRect(0, 0, 64, 8);
@@ -96,7 +86,6 @@ export class VehicleView {
     const body = this.actor.body;
     this.group.position.copy(body.pos);
     this.group.quaternion.copy(body.quat);
-    void this.carScale;
     this.updateHealthBar();
   }
 

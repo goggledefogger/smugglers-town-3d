@@ -10,6 +10,13 @@ import type { TerrainProvider } from './TerrainProvider.ts';
 
 const SEGS = 256;
 
+/**
+ * World-unit lift of the terrain mesh above the tile datum, so the satellite
+ * drape covers the photogrammetry ground instead of z-fighting with it.
+ * Buildings shorter than this (in boosted world units) stay hidden under it.
+ */
+export const GROUND_LIFT = 2;
+
 export interface ElevationGrid {
   /** Row-major N×N elevation samples in meters (index = j*N + i). */
   readonly samples: readonly number[];
@@ -53,7 +60,7 @@ export function buildRealTerrain(
       const a = h00 + (h10 - h00) * tx;
       const b = h01 + (h11 - h01) * tx;
       const h = a + (b - a) * tz;
-      data[j * (seg + 1) + i] = (h - minH) * WORLD_M_PER_M * boost + 2;
+      data[j * (seg + 1) + i] = (h - minH) * WORLD_M_PER_M * boost + GROUND_LIFT;
     }
   }
   return {
@@ -61,6 +68,7 @@ export function buildRealTerrain(
     isReal: true,
     heightfield: new Heightfield(size, seg, data),
     satelliteCanvas,
-    reliefBoost: boost
+    reliefBoost: boost,
+    datumAltM: minH
   };
 }

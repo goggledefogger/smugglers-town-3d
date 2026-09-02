@@ -7,14 +7,11 @@ export interface GameEventMap {
   'contraband:delivered': { team: 0 | 1 };
   'match:win': { team: 0 | 1 };
   'location:changed': { label: string; isReal: boolean };
-  'relocate:failed': { message: string };
-  'relocate:status': { message: string };
-  [k: string]: unknown;
 }
 
 type Handler<T> = (payload: T) => void;
 
-export class EventBus<EventMap extends Record<string, unknown>> {
+export class EventBus<EventMap extends object> {
   private readonly handlers = new Map<string, Set<Handler<never>>>();
 
   on<K extends keyof EventMap & string>(event: K, handler: Handler<EventMap[K]>): () => void {

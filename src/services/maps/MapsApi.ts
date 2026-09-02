@@ -23,7 +23,7 @@ export function loadMapsApi(apiKey: string): Promise<void> {
     const cb = '__gmapsCb';
     window[cb] = () => resolve();
     const s = document.createElement('script');
-    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&libraries=places&callback=${cb}`;
+    s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&callback=${cb}`;
     s.onerror = () => reject(new Error(
       'Could not load Google Maps JS API — check that Maps JavaScript API is enabled for your key.'
     ));
