@@ -1,6 +1,6 @@
 /**
- * Google Photorealistic 3D Tiles: tree traversal, GLB placement, and
- * building-collider extraction.
+ * Google Photorealistic 3D Tiles: tree traversal, GLB placement, streaming
+ * refinement around the player, and building-collider extraction.
  *
  * Endpoint https://tile.googleapis.com/v1/3dtiles/root, auth via the
  * X-Goog-Api-Key header (CORS-confirmed). What Google's tree actually looks
@@ -18,10 +18,10 @@
  * - A tile is one merged photogrammetry mesh (ground + buildings + trees),
  *   ~5k triangles, 100–450 KB.
  */
-import { Matrix4, Vector3, Group, type Object3D, type Mesh, type Material, type Texture } from 'three';
+import { Matrix4, Vector3, Box3, Group, type Object3D, type Mesh, type Material, type Texture } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { tileTransformChain } from '../../core/geo/projection.ts';
-import { latLonToEcef, type Ecef, type GeoOrigin } from '../../core/geo/ecef.ts';
+import { latLonToEcef, WORLD_M_PER_M, type Ecef, type GeoOrigin } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
 import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
@@ -37,14 +37,7 @@ interface TilesetRoot extends TileNode {
   root?: TileNode;
 }
 
-export interface TilesResult {
-  readonly tileCount: number;
-  readonly buildingCount: number;
-  readonly tilesGroup: Group;
-  readonly colliders: BuildingCollider[];
-}
-
-/** Level of detail: the geometricError accepted grows with distance from the match center. */
+/** Level of detail: the geometricError accepted grows with distance from a center. */
 export interface LodPolicy {
   /** Finest error accepted (m), used near the center. */
   readonly minErrorM: number;
@@ -52,19 +45,27 @@ export interface LodPolicy {
   readonly maxErrorM: number;
   /** Error allowed per meter of distance, between the two clamps. */
   readonly errorPerMeter: number;
-  /** Hard cap on GLB tiles; the closest win. */
-  readonly maxTiles: number;
 }
 
 /**
- * Google's levels carry errors of 16.05, 32.1, 64.2 m (525957 m halved per
- * level), so the clamps sit just above them. 16 m tiles within 640 m, 32 m
- * out to 1.3 km, 64 m beyond: ~70 tiles, ~17 MB for a downtown.
+ * Initial load, relative to the match center. Google's levels carry errors
+ * of 16.05, 32.1, 64.2 m (525957 m halved per level), so the clamps sit just
+ * above them. 16 m tiles within 640 m, 32 m out to 1.3 km, 64 m beyond:
+ * ~85 tiles, ~20 MB for a downtown.
  */
-export const DEFAULT_LOD: LodPolicy = { minErrorM: 20, maxErrorM: 70, errorPerMeter: 1 / 20, maxTiles: 150 };
+export const DEFAULT_LOD: LodPolicy = { minErrorM: 20, maxErrorM: 70, errorPerMeter: 1 / 20 };
+/** Streaming, relative to the player: 8 m tiles within 360 m, 16 m to 640 m, 32 m to 1.3 km. */
+export const STREAM_LOD: LodPolicy = { minErrorM: 9, maxErrorM: 70, errorPerMeter: 1 / 40 };
 
 /** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
+/** Initial-load cap; the closest win. */
+const MAX_INITIAL_TILES = 150;
+/**
+ * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
+ * ponytail: no coarsening; evict the farthest tiles first if memory bites
+ */
+const MAX_TILES = 250;
 const CONCURRENCY = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
@@ -91,9 +92,9 @@ export function boxDistanceM(p: Ecef, box: readonly number[]): number {
   return Math.sqrt(sq);
 }
 
-function nodeDistM(node: TileNode, ecef0: Ecef): number {
+function nodeDistM(node: TileNode, p: Ecef): number {
   const box = node.boundingVolume?.box;
-  return box ? boxDistanceM(ecef0, box) : 0;
+  return box ? boxDistanceM(p, box) : 0;
 }
 
 /** path part of a content uri, minus any ?session=... query */
@@ -113,6 +114,9 @@ function withSession(url: string, session: string | null): string {
   if (!session || /[?&]session=/.test(url)) return url;
   return url + (url.includes('?') ? '&' : '?') + 'session=' + session;
 }
+
+const isJson = (uri: string | undefined): uri is string => uri !== undefined && /\.json$/i.test(uriPath(uri));
+const isGlb = (uri: string | undefined): uri is string => uri !== undefined && /\.glb$/i.test(uriPath(uri));
 
 export async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
   const res = await fetch(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
@@ -156,7 +160,8 @@ export async function collectTiles(
   ecef0: Ecef,
   radiusM: number,
   apiKey: string,
-  lod: LodPolicy = DEFAULT_LOD
+  lod: LodPolicy = DEFAULT_LOD,
+  maxTiles = MAX_INITIAL_TILES
 ): Promise<CollectedTile[]> {
   const tiles: CollectedTile[] = [];
   let frontier: CollectedTile[] = [{ node: root, session: sessionOf(root.content?.uri), distM: 0 }];
@@ -167,14 +172,13 @@ export async function collectTiles(
       const distM = nodeDistM(node, ecef0);
       if (distM > radiusM) return;
       const uri = node.content?.uri;
-      const path = uri ? uriPath(uri) : '';
-      if (uri && /\.json$/i.test(path)) {
+      if (isJson(uri)) {
         const sub = await fetchSubTileset(withSession(fullUrl(uri), session), apiKey);
         if (sub) next.push({ node: sub.root ?? sub, session: sessionOf(uri) ?? session, distM });
         return;
       }
       const fineEnough = (node.geometricError ?? 0) <= allowedErrorM(distM, lod) || !node.children?.length;
-      if (uri && /\.glb$/i.test(path) && fineEnough) {
+      if (isGlb(uri) && fineEnough) {
         tiles.push({ node, session, distM });
         return;
       }
@@ -182,7 +186,31 @@ export async function collectTiles(
     }));
     frontier = next;
   }
-  return tiles.sort((a, b) => a.distM - b.distM).slice(0, lod.maxTiles);
+  return tiles.sort((a, b) => a.distM - b.distM).slice(0, maxTiles);
+}
+
+/**
+ * The GLB nodes one level below `node`, resolving external sub-tilesets and
+ * content-less nodes on the way. Throws if a sub-tileset fetch fails.
+ */
+async function nextLevel(node: TileNode, session: string | null, apiKey: string): Promise<CollectedTile[]> {
+  const out: CollectedTile[] = [];
+  await Promise.all((node.children ?? []).map(async child => {
+    const uri = child.content?.uri;
+    if (isJson(uri)) {
+      const sub = await fetchSubTileset(withSession(fullUrl(uri), session), apiKey);
+      if (!sub) throw new Error('sub-tileset fetch failed');
+      const root = sub.root ?? sub;
+      const s = sessionOf(uri) ?? session;
+      if (isGlb(root.content?.uri)) out.push({ node: root, session: s, distM: 0 });
+      else out.push(...await nextLevel(root, s, apiKey));
+    } else if (isGlb(uri)) {
+      out.push({ node: child, session, distM: 0 });
+    } else {
+      out.push(...await nextLevel(child, session, apiKey));
+    }
+  }));
+  return out;
 }
 
 /**
@@ -194,7 +222,23 @@ export function glbPlacement(origin: GeoOrigin, ecef0: Ecef, reliefBoost: number
   return tileTransformChain(new Matrix4(), origin, ecef0, reliefBoost).multiply(GLTF_TO_ECEF);
 }
 
-async function loadTileGlb(tile: CollectedTile, placement: Matrix4, apiKey: string): Promise<Group | null> {
+function forEachMap(root: Object3D, fn: (map: Texture) => void): void {
+  root.traverse(obj => {
+    const mesh = obj as Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+      const map = (m as Material & { map?: Texture | null }).map;
+      if (map) fn(map);
+    }
+  });
+}
+
+async function loadTileGlb(
+  tile: CollectedTile,
+  placement: Matrix4,
+  apiKey: string,
+  anisotropy: number
+): Promise<Group | null> {
   const url = withSession(fullUrl(tile.node.content!.uri!), tile.session);
   // GLTFLoader's own fetch can't set headers, so fetch the bytes ourselves
   let buf: ArrayBuffer;
@@ -213,127 +257,10 @@ async function loadTileGlb(tile: CollectedTile, placement: Matrix4, apiKey: stri
   root.matrixAutoUpdate = false;
   root.matrix.copy(placement);
   root.matrixWorldNeedsUpdate = true;
+  // the ground is seen at grazing angles from the chase cam; without
+  // anisotropy the mip chain smears it into mush
+  forEachMap(root, map => { map.anisotropy = anisotropy; });
   return root;
-}
-
-/**
- * Building colliders from streamed tiles. A tile is one merged mesh, so
- * per-mesh bounds are useless; instead stamp each triangle's top onto a
- * coarse height grid and call any cell rising `minRise` above the terrain a
- * building. Runs of building cells along X merge into one AABB each.
- * ponytail: row runs only (a few thousand boxes); merge rows too if
- * VehicleBody.resolveBuildings ever shows up in a profile
- */
-export function buildingCollidersFrom(
-  tiles: Object3D,
-  ground: Heightfield,
-  cellSize = 3,
-  minRise = 4
-): BuildingCollider[] {
-  const half = ground.size / 2;
-  const n = Math.ceil(ground.size / cellSize);
-  const top = new Float32Array(n * n).fill(-Infinity);
-  const p = new Vector3();
-  tiles.updateMatrixWorld(true);
-  tiles.traverse(obj => {
-    const mesh = obj as Mesh;
-    if (!mesh.isMesh) return;
-    const pos = mesh.geometry.getAttribute('position');
-    const index = mesh.geometry.index;
-    const triCount = (index ? index.count : pos.count) / 3;
-    for (let t = 0; t < triCount; t++) {
-      let minX = Infinity, maxX = -Infinity, minZ = Infinity, maxZ = -Infinity, maxY = -Infinity;
-      for (let k = 0; k < 3; k++) {
-        const vi = index ? index.getX(t * 3 + k) : t * 3 + k;
-        p.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
-        if (p.x < minX) minX = p.x;
-        if (p.x > maxX) maxX = p.x;
-        if (p.z < minZ) minZ = p.z;
-        if (p.z > maxZ) maxZ = p.z;
-        if (p.y > maxY) maxY = p.y;
-      }
-      if (maxX < -half || minX >= half || maxZ < -half || minZ >= half) continue;
-      const i0 = Math.max(0, Math.floor((minX + half) / cellSize));
-      const i1 = Math.min(n - 1, Math.floor((maxX + half) / cellSize));
-      const j0 = Math.max(0, Math.floor((minZ + half) / cellSize));
-      const j1 = Math.min(n - 1, Math.floor((maxZ + half) / cellSize));
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          const c = j * n + i;
-          if (maxY > top[c]!) top[c] = maxY;
-        }
-      }
-    }
-  });
-
-  const out: BuildingCollider[] = [];
-  for (let j = 0; j < n; j++) {
-    const z0 = -half + j * cellSize;
-    const cz = z0 + cellSize / 2;
-    let run: { i0: number; top: number; floor: number } | null = null;
-    for (let i = 0; i <= n; i++) {
-      let building = false;
-      let cellTop = -Infinity;
-      let floor = 0;
-      if (i < n) {
-        floor = ground.sample(-half + (i + 0.5) * cellSize, cz);
-        cellTop = top[j * n + i]!;
-        building = cellTop - floor >= minRise;
-      }
-      if (building) {
-        if (run) {
-          run.top = Math.max(run.top, cellTop);
-          run.floor = Math.min(run.floor, floor);
-        } else {
-          run = { i0: i, top: cellTop, floor };
-        }
-      } else if (run) {
-        out.push({
-          min: new Vector3(-half + run.i0 * cellSize, run.floor - 1, z0),
-          max: new Vector3(-half + i * cellSize, run.top, z0 + cellSize)
-        });
-        run = null;
-      }
-    }
-  }
-  return out;
-}
-
-export interface LoadTilesOptions {
-  readonly lat: number;
-  readonly lon: number;
-  readonly apiKey: string;
-  readonly terrain: TerrainProvider;
-  readonly onProgress?: (loaded: number, total: number) => void;
-  readonly lod?: LodPolicy;
-}
-
-/** Load the tiles around the match center and extract building colliders. */
-export async function load3DTiles(opts: LoadTilesOptions): Promise<TilesResult> {
-  const { lat, lon, apiKey, terrain } = opts;
-  const root = await fetchTilesRoot(apiKey);
-  // datum altitude puts the tile ground at world y≈0 alongside the terrain mesh
-  const ecef0 = latLonToEcef(lat, lon, terrain.datumAltM);
-  const tiles = await collectTiles(root.root ?? root, ecef0, LOAD_RADIUS_M, apiKey, opts.lod);
-  const placement = glbPlacement({ lat, lon }, ecef0, terrain.reliefBoost);
-  const tilesGroup = new Group();
-  let next = 0;
-  let loaded = 0;
-  async function worker(): Promise<void> {
-    while (next < tiles.length) {
-      const tile = tiles[next++]!;
-      try {
-        const g = await loadTileGlb(tile, placement, apiKey);
-        if (g) tilesGroup.add(g);
-      } catch (e) {
-        console.warn('tile parse failed', e);
-      }
-      opts.onProgress?.(++loaded, tiles.length);
-    }
-  }
-  await Promise.all(Array.from({ length: CONCURRENCY }, worker));
-  const colliders = buildingCollidersFrom(tilesGroup, terrain.heightfield);
-  return { tileCount: tilesGroup.children.length, buildingCount: colliders.length, tilesGroup, colliders };
 }
 
 /** Free the GPU resources of a tiles group that has been removed from the scene. */
@@ -347,4 +274,445 @@ export function disposeTiles(group: Object3D): void {
       m.dispose();
     }
   });
+}
+
+// ---------------------------------------------------------------------------
+// Building colliders
+//
+// A tile is one merged mesh, so per-mesh bounds say nothing about buildings.
+// Each tile is rasterized once: every triangle's top is stamped into a 10 m
+// height grid over its footprint. Compositing the rasters gives the
+// photogrammetry "roof" surface; a cell is a building when that surface
+// rises well above the elevation-grid terrain (tall buildings, roof
+// interiors included) OR above the lowest cell nearby (ramps, low buildings,
+// poles — things the coarse elevation grid can't see). Building cells merge
+// into AABBs: runs along X, then identical runs stack across rows.
+// ---------------------------------------------------------------------------
+
+/** 1.5 units = 10 m cells. */
+const CELL = 1.5;
+/** Real meters above the elevation-grid terrain that make a cell a building. */
+const RISE_ABOVE_TERRAIN_M = 18;
+/**
+ * Real meters above the lowest neighbouring cell that make a cell a building.
+ * A 1-cell window keeps hillsides out: over 10 m a 60 % slope is still under 6 m.
+ */
+const LOCAL_RELIEF_M = 6;
+const LOCAL_K = 1;
+/** After calibration the tile ground sits this far (world units) under the satellite drape. */
+const TILE_GROUND_GAP = 0.6;
+
+interface Grid {
+  readonly cell: number;
+  readonly half: number;
+  readonly n: number;
+}
+
+export interface TileRaster {
+  readonly i0: number;
+  readonly j0: number;
+  readonly w: number;
+  readonly h: number;
+  readonly top: Float32Array;
+}
+
+function gridFor(ground: Heightfield): Grid {
+  return { cell: CELL, half: ground.size / 2, n: Math.ceil(ground.size / CELL) };
+}
+
+function sampleTerrain(grid: Grid, ground: Heightfield): Float32Array {
+  const { n, cell, half } = grid;
+  const out = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      out[j * n + i] = ground.sample(-half + (i + 0.5) * cell, -half + (j + 0.5) * cell);
+    }
+  }
+  return out;
+}
+
+const _tri = [new Vector3(), new Vector3(), new Vector3()] as const;
+
+/**
+ * Height grid over the object's footprint: every cell center inside a
+ * triangle takes the triangle plane's height there, and every vertex stamps
+ * its own cell so walls (no footprint) and slivers still register. Stamping
+ * a triangle's max over its whole footprint would smear the high end of any
+ * large sloped triangle downhill and turn hillsides into "buildings".
+ */
+export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
+  const { n, cell, half } = grid;
+  obj.updateMatrixWorld(true);
+  const bounds = new Box3().setFromObject(obj);
+  if (bounds.isEmpty() || bounds.max.x < -half || bounds.min.x >= half || bounds.max.z < -half || bounds.min.z >= half) {
+    return null;
+  }
+  const cellOf = (v: number): number => Math.min(n - 1, Math.max(0, Math.floor((v + half) / cell)));
+  const i0 = cellOf(bounds.min.x), i1 = cellOf(bounds.max.x);
+  const j0 = cellOf(bounds.min.z), j1 = cellOf(bounds.max.z);
+  const w = i1 - i0 + 1, h = j1 - j0 + 1;
+  const top = new Float32Array(w * h).fill(-Infinity);
+  const stamp = (i: number, j: number, y: number): void => {
+    if (i < i0 || i > i1 || j < j0 || j > j1) return;
+    const idx = (j - j0) * w + (i - i0);
+    if (y > top[idx]!) top[idx] = y;
+  };
+  const [a, b, c] = _tri;
+  obj.traverse(o => {
+    const mesh = o as Mesh;
+    if (!mesh.isMesh) return;
+    const pos = mesh.geometry.getAttribute('position');
+    const index = mesh.geometry.index;
+    const triCount = (index ? index.count : pos.count) / 3;
+    for (let t = 0; t < triCount; t++) {
+      for (let k = 0; k < 3; k++) {
+        const vi = index ? index.getX(t * 3 + k) : t * 3 + k;
+        _tri[k]!.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
+      }
+      for (const q of _tri) {
+        if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) stamp(cellOf(q.x), cellOf(q.z), q.y);
+      }
+      const det = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+      if (Math.abs(det) < 1e-9) continue; // vertical: vertices already stamped
+      const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
+      const minZ = Math.min(a.z, b.z, c.z), maxZ = Math.max(a.z, b.z, c.z);
+      if (maxX < -half || minX >= half || maxZ < -half || minZ >= half) continue;
+      const ia = Math.max(i0, cellOf(minX)), ib = Math.min(i1, cellOf(maxX));
+      const ja = Math.max(j0, cellOf(minZ)), jb = Math.min(j1, cellOf(maxZ));
+      for (let j = ja; j <= jb; j++) {
+        const cz = -half + (j + 0.5) * cell;
+        for (let i = ia; i <= ib; i++) {
+          const cx = -half + (i + 0.5) * cell;
+          const l1 = ((cx - a.x) * (c.z - a.z) - (c.x - a.x) * (cz - a.z)) / det;
+          const l2 = ((b.x - a.x) * (cz - a.z) - (cx - a.x) * (b.z - a.z)) / det;
+          const l0 = 1 - l1 - l2;
+          if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
+          stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
+        }
+      }
+    }
+  });
+  return { i0, j0, w, h, top };
+}
+
+/** Separable min filter with radius k; empty (-Infinity) cells are ignored. */
+function minFilter(src: Float32Array, n: number, k: number): Float32Array {
+  const tmp = new Float32Array(n * n);
+  const out = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      let m = Infinity;
+      for (let d = Math.max(0, i - k); d <= Math.min(n - 1, i + k); d++) {
+        const v = src[j * n + d]!;
+        if (v !== -Infinity && v < m) m = v;
+      }
+      tmp[j * n + i] = m;
+    }
+  }
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      let m = Infinity;
+      for (let d = Math.max(0, j - k); d <= Math.min(n - 1, j + k); d++) {
+        const v = tmp[d * n + i]!;
+        if (v < m) m = v;
+      }
+      out[j * n + i] = m;
+    }
+  }
+  return out;
+}
+
+/** Max over all tile rasters on the full grid; -Infinity where no tile has data. */
+function compositeTops(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
+  const top = new Float32Array(n * n).fill(-Infinity);
+  for (const r of rasters) {
+    if (!r) continue;
+    for (let j = 0; j < r.h; j++) {
+      const g = (r.j0 + j) * n + r.i0;
+      const l = j * r.w;
+      for (let i = 0; i < r.w; i++) {
+        const v = r.top[l + i]!;
+        if (v > top[g + i]!) top[g + i] = v;
+      }
+    }
+  }
+  return top;
+}
+
+/**
+ * How far the tile ground sits above the terrain over the field core, or
+ * null without enough data. Tiles are placed by height above the WGS84
+ * ellipsoid while the elevation grid is above mean sea level; the geoid runs
+ * ~20 m below the ellipsoid around Portland, which buried bridge decks and
+ * ground floors. Measuring beats shipping a geoid model: the 30th percentile
+ * of (local ground − terrain) lands inside the cluster of true ground cells,
+ * below roofs and canopy, above valleys the coarse grid interpolates over.
+ */
+export function tileGroundOffset(
+  rasters: readonly (TileRaster | null)[],
+  grid: Grid,
+  terrainTop: Float32Array,
+  coreHalfUnits = 200
+): number | null {
+  const { n, cell } = grid;
+  const local = minFilter(compositeTops(rasters, n), n, LOCAL_K);
+  const c0 = Math.max(0, Math.floor(n / 2 - coreHalfUnits / cell));
+  const c1 = Math.min(n - 1, Math.ceil(n / 2 + coreHalfUnits / cell));
+  const diffs: number[] = [];
+  for (let j = c0; j <= c1; j++) {
+    for (let i = c0; i <= c1; i++) {
+      const c = j * n + i;
+      if (local[c] !== Infinity) diffs.push(local[c]! - terrainTop[c]!);
+    }
+  }
+  if (diffs.length < 100) return null;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length * 0.3)]!;
+}
+
+export function collidersFromRasters(
+  rasters: readonly (TileRaster | null)[],
+  grid: Grid,
+  terrainTop: Float32Array,
+  reliefBoost = 1
+): BuildingCollider[] {
+  const { n, cell, half } = grid;
+  const top = compositeTops(rasters, n);
+  const local = minFilter(top, n, LOCAL_K);
+  const rise = RISE_ABOVE_TERRAIN_M * WORLD_M_PER_M * reliefBoost;
+  const relief = LOCAL_RELIEF_M * WORLD_M_PER_M * reliefBoost;
+  const isBuilding = (c: number): boolean => {
+    const t = top[c]!;
+    return t !== -Infinity && (t - terrainTop[c]! >= rise || t - local[c]! >= relief);
+  };
+
+  const out: BuildingCollider[] = [];
+  let above = new Map<number, BuildingCollider>();
+  for (let j = 0; j < n; j++) {
+    const z0 = -half + j * cell;
+    const row = new Map<number, BuildingCollider>();
+    let start = -1, hi = -Infinity, lo = Infinity;
+    for (let i = 0; i <= n; i++) {
+      const c = j * n + i;
+      if (i < n && isBuilding(c)) {
+        if (start < 0) {
+          start = i;
+          hi = -Infinity;
+          lo = Infinity;
+        }
+        hi = Math.max(hi, top[c]!);
+        lo = Math.min(lo, terrainTop[c]!);
+        continue;
+      }
+      if (start < 0) continue;
+      const key = start * (n + 1) + i;
+      const prev = above.get(key);
+      if (prev) {
+        prev.max.z = z0 + cell;
+        prev.max.y = Math.max(prev.max.y, hi);
+        prev.min.y = Math.min(prev.min.y, lo - 1);
+        row.set(key, prev);
+      } else {
+        const b: BuildingCollider = {
+          min: new Vector3(-half + start * cell, lo - 1, z0),
+          max: new Vector3(-half + i * cell, hi, z0 + cell)
+        };
+        out.push(b);
+        row.set(key, b);
+      }
+      start = -1;
+    }
+    above = row;
+  }
+  return out;
+}
+
+/** Colliders straight from a group of meshes (tests and one-shot use). */
+export function buildingCollidersFrom(tiles: Object3D, ground: Heightfield, reliefBoost = 1): BuildingCollider[] {
+  const grid = gridFor(ground);
+  tiles.updateMatrixWorld(true);
+  return collidersFromRasters(
+    tiles.children.map(c => rasterizeTile(c, grid)), grid, sampleTerrain(grid, ground), reliefBoost
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Streamer
+// ---------------------------------------------------------------------------
+
+interface LoadedTile extends CollectedTile {
+  readonly group: Group;
+  raster: TileRaster | null;
+  /** leaf, refined, or failed: never pick again */
+  done: boolean;
+}
+
+const _ecef = new Vector3();
+
+/**
+ * Owns the loaded tiles. `loadInitial` fills the field at DEFAULT_LOD; then
+ * `update` swaps the nearest tile that is too coarse for its distance to the
+ * player with its children, one swap at a time, until MAX_TILES. Colliders
+ * are rebuilt on demand from the per-tile rasters.
+ */
+export class TileStreamer {
+  readonly group = new Group();
+  private readonly tiles: LoadedTile[] = [];
+  private readonly grid: Grid;
+  private readonly terrainTop: Float32Array;
+  private readonly reliefBoost: number;
+  private readonly placement: Matrix4;
+  private readonly worldToEcef: Matrix4;
+  private inFlight = false;
+  private lastPickMs = 0;
+  private dirty = false;
+
+  constructor(
+    private readonly apiKey: string,
+    terrain: TerrainProvider,
+    origin: GeoOrigin,
+    private readonly ecef0: Ecef,
+    private readonly anisotropy = 1,
+    private readonly lod: LodPolicy = STREAM_LOD
+  ) {
+    this.grid = gridFor(terrain.heightfield);
+    this.terrainTop = sampleTerrain(this.grid, terrain.heightfield);
+    this.reliefBoost = terrain.reliefBoost;
+    this.placement = glbPlacement(origin, ecef0, terrain.reliefBoost);
+    this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
+  }
+
+  get tileCount(): number {
+    return this.tiles.length;
+  }
+
+  /** True once tiles changed since the last `colliders()` call. */
+  get collidersDirty(): boolean {
+    return this.dirty;
+  }
+
+  async loadInitial(root: TileNode, onProgress?: (loaded: number, total: number) => void): Promise<void> {
+    const wanted = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey);
+    let next = 0;
+    let loaded = 0;
+    const worker = async (): Promise<void> => {
+      while (next < wanted.length) {
+        await this.add(wanted[next++]!);
+        onProgress?.(++loaded, wanted.length);
+      }
+    };
+    await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    this.calibrateGround();
+  }
+
+  /** Shift every tile so the tile ground sits just under the satellite drape (see tileGroundOffset). */
+  private calibrateGround(): void {
+    const offset = tileGroundOffset(this.tiles.map(t => t.raster), this.grid, this.terrainTop);
+    if (offset === null) return;
+    this.group.position.y -= offset + TILE_GROUND_GAP;
+    this.group.updateMatrixWorld(true);
+    for (const t of this.tiles) t.raster = rasterizeTile(t.group, this.grid);
+    this.dirty = true;
+    console.info(`3D tiles: ground datum shifted ${(-(offset + TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1)} m`);
+  }
+
+  /**
+   * Call every frame with the player's world position. Picks at most one
+   * refinement every 250 ms and never runs two at once.
+   */
+  update(playerWorld: Vector3, nowMs: number): void {
+    if (this.inFlight || nowMs - this.lastPickMs < 250 || this.tiles.length >= MAX_TILES) return;
+    this.lastPickMs = nowMs;
+    const p = _ecef.copy(playerWorld).applyMatrix4(this.worldToEcef);
+    let best: LoadedTile | null = null;
+    let bestD = Infinity;
+    for (const t of this.tiles) {
+      if (t.done) continue;
+      const d = nodeDistM(t.node, p);
+      if (d < bestD && (t.node.geometricError ?? 0) > allowedErrorM(d, this.lod)) {
+        best = t;
+        bestD = d;
+      }
+    }
+    if (!best) return;
+    const tile = best;
+    this.inFlight = true;
+    this.refine(tile)
+      .catch(e => {
+        console.warn('tile refine failed', e);
+        tile.done = true;
+      })
+      .finally(() => {
+        this.inFlight = false;
+      });
+  }
+
+  /** Rebuild building colliders from the current tiles (~15 ms for a city). */
+  colliders(): BuildingCollider[] {
+    this.dirty = false;
+    return collidersFromRasters(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+  }
+
+  dispose(): void {
+    for (const t of this.tiles) disposeTiles(t.group);
+    this.tiles.length = 0;
+    this.group.clear();
+  }
+
+  private async add(tile: CollectedTile): Promise<LoadedTile | null> {
+    let g: Group | null = null;
+    try {
+      g = await loadTileGlb(tile, this.placement, this.apiKey, this.anisotropy);
+    } catch (e) {
+      console.warn('tile parse failed', e);
+    }
+    if (!g) return null;
+    this.group.add(g);
+    const loaded: LoadedTile = { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+    this.tiles.push(loaded);
+    this.dirty = true;
+    return loaded;
+  }
+
+  private remove(tile: LoadedTile): void {
+    this.group.remove(tile.group);
+    disposeTiles(tile.group);
+    const i = this.tiles.indexOf(tile);
+    if (i >= 0) this.tiles.splice(i, 1);
+    this.dirty = true;
+  }
+
+  /** Replace a tile with its children; on any failure keep the parent intact. */
+  private async refine(tile: LoadedTile): Promise<void> {
+    tile.done = true;
+    const kids = await nextLevel(tile.node, tile.session, this.apiKey);
+    if (kids.length === 0) return;
+    const loaded = await Promise.all(kids.map(k => this.add(k)));
+    if (loaded.some(l => l === null)) {
+      for (const l of loaded) if (l) this.remove(l);
+      return;
+    }
+    this.remove(tile);
+  }
+}
+
+export interface LoadTilesOptions {
+  readonly lat: number;
+  readonly lon: number;
+  readonly apiKey: string;
+  readonly terrain: TerrainProvider;
+  /** Renderer max anisotropy for tile textures. */
+  readonly anisotropy?: number;
+  readonly onProgress?: (loaded: number, total: number) => void;
+}
+
+/** Load the tiles around the match center; the returned streamer keeps refining. */
+export async function load3DTiles(opts: LoadTilesOptions): Promise<TileStreamer> {
+  const { lat, lon, apiKey, terrain } = opts;
+  const root = await fetchTilesRoot(apiKey);
+  // datum altitude puts the tile ground at world y≈0 alongside the terrain mesh
+  const ecef0 = latLonToEcef(lat, lon, terrain.datumAltM);
+  const streamer = new TileStreamer(apiKey, terrain, { lat, lon }, ecef0, opts.anisotropy ?? 1);
+  await streamer.loadInitial(root.root ?? root, opts.onProgress);
+  return streamer;
 }

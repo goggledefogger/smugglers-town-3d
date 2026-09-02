@@ -1,10 +1,13 @@
 /**
  * Vehicle mesh + binding to a physics body. One view per actor; the view
  * reads body state each frame and writes it to the mesh (never the reverse).
+ *
+ * `group` carries only the world position; the car body rotates inside it so
+ * the health bar and the blob shadow stay upright when the car rolls.
  */
 import {
-  Group, Mesh, BoxGeometry, CylinderGeometry, MeshLambertMaterial,
-  MeshStandardMaterial, Sprite, SpriteMaterial, CanvasTexture
+  Group, Mesh, BoxGeometry, CylinderGeometry, CircleGeometry, MeshLambertMaterial,
+  MeshStandardMaterial, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 
@@ -12,9 +15,11 @@ const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 
 export class VehicleView {
   readonly group = new Group();
+  private readonly carRoot = new Group();
   private readonly healthBar: Sprite;
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
+  private readonly shadow: Mesh<CircleGeometry, MeshBasicMaterial>;
   private readonly team: number;
 
   constructor(private readonly actor: VehicleActor) {
@@ -53,7 +58,20 @@ export class VehicleView {
     );
     bar.position.set(0, 1.4, 2);
     g.add(bar);
-    this.group.add(g);
+    this.carRoot.add(g);
+    this.group.add(this.carRoot);
+
+    // blob shadow on the ground under the car: invisible while planted, fades
+    // in with height so a gap between car and shadow reads as "airborne"
+    this.shadow = new Mesh(
+      new CircleGeometry(2.4, 20),
+      new MeshBasicMaterial({
+        color: 0x000000, transparent: true, opacity: 0, depthWrite: false,
+        polygonOffset: true, polygonOffsetFactor: -4
+      })
+    );
+    this.shadow.rotation.x = -Math.PI / 2;
+    this.group.add(this.shadow);
 
     // health bar sprite above the vehicle
     this.barCanvas = document.createElement('canvas');
@@ -85,7 +103,12 @@ export class VehicleView {
   sync(): void {
     const body = this.actor.body;
     this.group.position.copy(body.pos);
-    this.group.quaternion.copy(body.quat);
+    this.carRoot.quaternion.copy(body.quat);
+    const height = Math.max(0, body.pos.y - body.groundY - body.cfg.groundClearance);
+    this.shadow.position.y = body.groundY - body.pos.y + 0.15;
+    this.shadow.material.opacity = MathUtils.clamp(height * 0.15, 0, 0.45);
+    const s = MathUtils.clamp(1 - height * 0.02, 0.5, 1);
+    this.shadow.scale.set(s, s, 1);
     this.updateHealthBar();
   }
 

@@ -46,6 +46,17 @@ export const DEFAULT_PHYSICS: VehiclePhysicsConfig = {
 };
 
 const WORLD_UP = new Vector3(0, 1, 0);
+/** Reverse tops out at this fraction of forward top speed. */
+const REVERSE_FRACTION = 0.35;
+/**
+ * Within this many units above clearance, a car that is not climbing or
+ * falling hard is pulled back onto the ground. The ground step applies no
+ * gravity, so without it any downhill leaves the car riding a hair above the
+ * terrain in the air state, where steering barely works
+ */
+const GROUND_SNAP = 2.5;
+/** Ground steering keeps working this long after leaving the ground ("coyote time"). */
+const STEER_GRACE_S = 0.2;
 
 export class VehicleBody {
   private static nextId = 1;
@@ -61,6 +72,9 @@ export class VehicleBody {
   damage = 0;
   onGround = false;
   jumpHeld = false;
+  /** Terrain height under the car after the last step (for the drop shadow). */
+  groundY = 0;
+  private airTime = 0;
 
   private readonly _fwd = new Vector3();
   private readonly _right = new Vector3();
@@ -91,16 +105,20 @@ export class VehicleBody {
     const up = this._up.set(0, 1, 0).applyQuaternion(this.quat);
     const gh = ground.sample(this.pos.x, this.pos.z);
     this.onGround = this.pos.y - gh < 1.2;
+    this.airTime = this.onGround ? 0 : this.airTime + dt;
 
     if (this.onGround) {
       this.groundStep(dt, input, fwd, right, up);
     } else {
       this.airControlStep(dt, input, up);
+      // a bounce must not flicker the turn on and off: keep ground steering
+      // live for a moment after lift-off
+      if (this.airTime < STEER_GRACE_S) this.applySteer(dt, input, up, this.vel.dot(fwd));
     }
     this.jumpHeld = input.jump;
 
     this.integrateAngular(dt);
-    this.integratePosition(dt, gh);
+    this.integratePosition(dt, ground);
     this.resolveBuildings(buildings, carScale);
     this.damage = Math.max(0, this.damage - 0.02 * dt);
     this.speed = this.vel.length();
@@ -116,33 +134,49 @@ export class VehicleBody {
     const stats = this.stats;
     const driveF = this.cfg.driveForce * stats.accel * input.throttle;
     this.vel.addScaledVector(fwd, driveF * dt);
+    const topSpeed = this.cfg.maxSpeed * stats.maxSpeed;
+    const fwdSpeed = this.vel.dot(fwd);
     if (input.brake > 0) {
-      const sp = this.vel.length();
-      if (sp > 0.1) {
+      if (fwdSpeed > 1) {
+        const sp = this.vel.length();
         const dec = this.cfg.brakeForce * dt * input.brake;
         this.vel.setLength(Math.max(0, sp - dec));
+      } else if (fwdSpeed > -topSpeed * REVERSE_FRACTION) {
+        // stopped: brake becomes reverse, gentler than forward drive
+        this.vel.addScaledVector(fwd, -this.cfg.driveForce * stats.accel * 0.6 * input.brake * dt);
       }
     }
     // rolling resistance + lateral grip
     this.vel.multiplyScalar(1 - 0.9 * dt);
     const sideVel = this.vel.dot(right);
     this.vel.addScaledVector(right, -sideVel * (1 - Math.pow(0.001, dt * stats.grip)));
-    const speedFactor = Math.min(1, this.vel.length() / 8);
-    this._q.setFromAxisAngle(
-      up, input.steer * this.cfg.turnRate * stats.steer * dt * speedFactor
-    );
-    this.quat.multiply(this._q);
+    if (this.vel.length() > topSpeed) this.vel.setLength(topSpeed);
+    this.applySteer(dt, input, up, fwdSpeed);
     if (input.jump && !this.jumpHeld) {
       this.vel.y += this.cfg.jumpBoost * 14;
       this.onGround = false;
     }
   }
 
+  /** Direct yaw about the body's up axis, scaled down at crawling speeds. */
+  private applySteer(dt: number, input: VehicleInput, up: Vector3, fwdSpeed: number): void {
+    const speedFactor = Math.min(1, this.vel.length() / 8);
+    // backing up, the rear should swing the way you steer, so the nose goes the other way
+    const steerDir = fwdSpeed < -0.5 ? -1 : 1;
+    this._q.setFromAxisAngle(
+      up, steerDir * input.steer * this.cfg.turnRate * this.stats.steer * dt * speedFactor
+    );
+    this.quat.multiply(this._q);
+  }
+
   private airControlStep(dt: number, input: VehicleInput, up: Vector3): void {
     // Air control adds yaw from steer and pitch from input; angular velocity
     // is damped and capped so a spin settles instead of growing — unbounded
-    // steer-roll accumulation was a direct path to landing roof-down
-    this.angVel.y += -input.steer * this.cfg.airControl * 0.5 * dt;
+    // steer-roll accumulation was a direct path to landing roof-down.
+    // Yaw sign matches ground steering (+steer = left = +Y): the ground check
+    // flickers over bumps at speed, so an opposite-signed air yaw reads as the
+    // car jerking the wrong way mid-turn
+    this.angVel.y += input.steer * this.cfg.airControl * 0.5 * dt;
     this.angVel.x += (input.pitch ?? 0) * this.cfg.airControl * 0.4 * dt;
     this.angVel.multiplyScalar(1 - 1.6 * dt);
     const ANG_CAP = 3.2;
@@ -208,10 +242,19 @@ export class VehicleBody {
     this.quat.premultiply(this._q);
   }
 
-  private integratePosition(dt: number, gh: number): void {
+  private integratePosition(dt: number, ground: Heightfield): void {
     this.pos.addScaledVector(this.vel, dt);
-    if (this.pos.y < gh + this.cfg.groundClearance) {
-      this.pos.y = gh + this.cfg.groundClearance;
+    // resample under the new position: at speed the ground moves a lot in a step
+    const gh = ground.sample(this.pos.x, this.pos.z);
+    this.groundY = gh;
+    const height = this.pos.y - gh;
+    const clearance = this.cfg.groundClearance;
+    if (height > clearance && height < clearance + GROUND_SNAP && this.vel.y < 2 && this.vel.y >= -4) {
+      // bump or downhill: stay planted. Jumps (climbing) and hard falls skip this
+      this.pos.y = gh + clearance;
+      this.vel.y = 0;
+    } else if (height < clearance) {
+      this.pos.y = gh + clearance;
       if (this.vel.y < -4) {
         const impact = -this.vel.y;
         this.damage = Math.min(1, this.damage + impact * 0.004);

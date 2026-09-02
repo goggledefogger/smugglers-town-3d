@@ -46,18 +46,34 @@ export class Game {
     private readonly deps: GameDeps
   ) {
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.insideBuilding
+      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
     );
   }
 
-  private readonly insideBuilding = (x: number, z: number): boolean =>
-    this.buildingColliders.some(c => x >= c.min.x && x <= c.max.x && z >= c.min.z && z <= c.max.z);
+  /** True when any building collider comes within r of (x, z). */
+  readonly blockedWithin = (x: number, z: number, r: number): boolean =>
+    this.buildingColliders.some(c => x + r > c.min.x && x - r < c.max.x && z + r > c.min.z && z - r < c.max.z);
+
+  /**
+   * Most open spot near the field center: the first candidate (nearest the
+   * center first) clear at the largest radius that any candidate satisfies.
+   * Dropping the whole spawn ring there is what keeps a downtown start from
+   * wedging cars between towers.
+   */
+  private findOpenCenter(): { x: number; z: number } {
+    for (const r of [40, 28, 18, 12, 8]) {
+      for (const [x, z] of SPAWN_CANDIDATES) {
+        if (!this.blockedWithin(x, z, r)) return { x, z };
+      }
+    }
+    return { x: 0, z: 0 };
+  }
 
   /** Full reset for a new match (new terrain or rematch). Set colliders first so spawns avoid them. */
   reset(terrain: TerrainProvider): void {
     this.terrain = terrain;
     this.match = new MatchRules(
-      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.insideBuilding
+      config.scoring, [], this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
     );
     this.winner = null;
     this.timeS = 0;
@@ -74,19 +90,20 @@ export class Game {
   private spawnAllVehicles(): void {
     const total = config.match.teamSize * 2;
     const hf = this.terrain.heightfield;
+    const center = this.findOpenCenter();
     for (let i = 0; i < total; i++) {
       const team = i < config.match.teamSize ? 0 : 1;
       const isPlayer = i === 0;
       const typeIdx = isPlayer ? 2 : pickVehicleType();
       const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!);
       const ang = (i / total) * Math.PI * 2;
-      // walk outward along the spawn ray until clear of buildings
+      // ring around the open spot; walk outward along the ray if a slot is still blocked
       let x = 0, z = 0;
       for (let tries = 0; tries < 12; tries++) {
         const r = 20 + i * 2 + tries * 8;
-        x = Math.cos(ang) * r;
-        z = Math.sin(ang) * r;
-        if (!this.insideBuilding(x, z)) break;
+        x = center.x + Math.cos(ang) * r;
+        z = center.z + Math.sin(ang) * r;
+        if (!this.blockedWithin(x, z, 4)) break;
       }
       body.pos.set(x, hf.sample(x, z) + 3, z);
       body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -ang + Math.PI / 2);
@@ -249,3 +266,10 @@ function pickVehicleType(): number {
 }
 
 const NEUTRAL_INPUT: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
+
+/** 30-unit grid within ±210 of the field center, nearest first. */
+const SPAWN_CANDIDATES: readonly (readonly [number, number])[] = (() => {
+  const pts: [number, number][] = [];
+  for (let x = -210; x <= 210; x += 30) for (let z = -210; z <= 210; z += 30) pts.push([x, z]);
+  return pts.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
+})();

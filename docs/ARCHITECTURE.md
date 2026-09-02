@@ -77,6 +77,15 @@ unit-tested):
   toward a flip and degenerates to zero length when inverted.
 - Air-control angular velocity is damped and capped (3.2 rad/s); without the
   cap, held steer mid-jump accumulates roll that nothing bleeds off.
+- Air yaw has the same sign as ground steering. The ground check flickers
+  over bumps at speed, so an opposite-signed air yaw read as the car jerking
+  the wrong way mid-turn.
+
+Brake past a stop becomes reverse (35 % of top speed) with the steering
+flipped so the rear swings the way you steer. Spawns use the most open spot
+near the field center (`Game.findOpenCenter`) and contraband / drop-zone
+placement requires clear ground around the point, so a downtown start never
+wedges anyone between towers.
 
 ### `core/physics/vehicleCollisions.ts`
 Pairwise sphere collisions: mass-weighted separation, elastic impulse
@@ -141,13 +150,32 @@ the `X-Goog-Api-Key` header (GLTFLoader's own fetch can't set headers). They
 are glTF Y-up with the ECEF placement baked into the node matrix, so
 `glbPlacement` is `tileTransformChain` × a +90° X rotation.
 
+`TileStreamer` owns the loaded tiles. After the initial load it keeps
+refining around the player: every 250 ms it picks the nearest tile that is
+too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
+640 m) and swaps it for its children, one swap at a time, up to a tile cap.
+There is no coarsening — evict far tiles first if memory ever bites.
+
 A tile is one merged photogrammetry mesh, so per-mesh bounds say nothing
-about buildings. `buildingCollidersFrom` stamps every triangle's top into a
-3-unit height grid, calls any cell rising ≥4 units above the terrain a
-building, and merges runs along X into the AABBs `VehicleBody` already
-resolves against. The terrain mesh sits `GROUND_LIFT` above the tile datum
-so the satellite drape covers the photogrammetry ground instead of
-z-fighting with it.
+about buildings. Each tile is rasterized once (`rasterizeTile`): every
+triangle's top is stamped into a 10 m height grid over its footprint.
+`collidersFromRasters` composites those, then calls a cell a building when
+its top rises ≥18 real m above the elevation-grid terrain (tall buildings,
+roof interiors included) *or* ≥6 m above the lowest neighbouring cell
+(ramps, low buildings, poles — things the coarse elevation grid can't
+see; the 1-cell window keeps hillsides out). Building cells merge into
+AABBs: runs along X, then identical runs stack across rows. Colliders are
+rebuilt every 1.5 s while streaming changes tiles. Scattered props
+contribute their own AABBs.
+
+Two ground datums meet here and they disagree: tiles are placed by height
+above the WGS84 ellipsoid, the elevation grid is above mean sea level, and
+the geoid runs ~20 m below the ellipsoid around Portland — untreated, that
+buried bridge decks and ground floors. `tileGroundOffset` measures the tile
+ground against the terrain over the field core after the initial load and
+the streamer shifts the whole group so the tile ground sits
+`TILE_GROUND_GAP` under the satellite drape, which then covers the
+photogrammetry ground instead of z-fighting with it.
 
 ## Extension points
 

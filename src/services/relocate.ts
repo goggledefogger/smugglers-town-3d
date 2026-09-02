@@ -3,26 +3,27 @@
  * query, fetches elevation + satellite imagery, streams 3D building tiles,
  * and returns the new TerrainProvider.
  */
-import { Group } from 'three';
 import { buildRealTerrain, type ElevationGrid } from '../core/terrain/RealTerrain.ts';
 import { loadMapsApi, geocode, fetchElevationGrid, fetchSatellite } from './maps/MapsApi.ts';
-import { load3DTiles } from './tiles/Tileset.ts';
-import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
+import { load3DTiles, type TileStreamer } from './tiles/Tileset.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
+
+export interface RelocateOptions {
+  readonly query: string;
+  readonly apiKey: string;
+  /** Renderer max anisotropy for tile textures. */
+  readonly anisotropy?: number;
+  readonly onProgress: (message: string) => void;
+}
 
 export interface RelocateResult {
   readonly terrain: TerrainProvider;
-  readonly colliders: BuildingCollider[];
-  readonly tilesGroup: Group | null;
+  /** Null when 3D tiles failed; the terrain still loaded. */
+  readonly tiles: TileStreamer | null;
 }
 
-export type ProgressFn = (message: string) => void;
-
-export async function relocate(
-  query: string,
-  apiKey: string,
-  onProgress: ProgressFn
-): Promise<RelocateResult> {
+export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
+  const { query, apiKey, onProgress } = opts;
   onProgress('Loading Google Maps API');
   await loadMapsApi(apiKey);
   onProgress(`Geocoding "${query}"`);
@@ -36,19 +37,17 @@ export async function relocate(
   const sat = await fetchSatellite(lat, lon, apiKey);
   const terrain = buildRealTerrain(label, grid, 420, sat);
   // 3D tiles are best-effort: terrain still loads if they fail
-  let colliders: BuildingCollider[] = [];
-  let tilesGroup: Group | null = null;
+  let tiles: TileStreamer | null = null;
   try {
     onProgress('Streaming 3D building tiles');
-    const tiles = await load3DTiles({
+    tiles = await load3DTiles({
       lat, lon, apiKey, terrain,
+      ...(opts.anisotropy !== undefined ? { anisotropy: opts.anisotropy } : {}),
       onProgress: (n, total) => onProgress(`Streaming 3D building tiles ${n}/${total}`)
     });
-    console.info(`3D tiles: ${tiles.tileCount} tiles, ${tiles.buildingCount} building colliders`);
-    colliders = tiles.colliders;
-    tilesGroup = tiles.tilesGroup;
+    console.info(`3D tiles: ${tiles.tileCount} tiles loaded`);
   } catch (e) {
     console.warn('3D tiles failed (terrain still loaded):', e);
   }
-  return { terrain, colliders, tilesGroup };
+  return { terrain, tiles };
 }

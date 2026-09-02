@@ -53,8 +53,8 @@ export class MatchRules {
     private readonly teams: ReadonlyMap<number, TeamId>,
     private readonly ground: Heightfield,
     private readonly mapHalf: number,
-    /** True where a point sits inside a building — no spawning there. */
-    private readonly blocked: (x: number, z: number) => boolean = () => false
+    /** True when any building lies within r of (x, z) — no spawning there. */
+    private readonly blocked: (x: number, z: number, r: number) => boolean = () => false
   ) {}
 
   get state(): MatchState {
@@ -67,13 +67,16 @@ export class MatchRules {
     };
   }
 
-  /** Random point clear of vehicles and buildings, for contraband / drop zone placement. */
-  private randomClearPoint(minDist: number, spread = 1.6): Vector3 {
+  /**
+   * Random point at least minDist from every vehicle with clearR of open
+   * ground around it, for contraband / drop zone placement.
+   */
+  private randomClearPoint(minDist: number, clearR: number, spread = 1.6): Vector3 {
     let x = 0, z = 0;
     for (let tries = 0; tries < 40; tries++) {
       x = (Math.random() - 0.5) * this.mapHalf * spread;
       z = (Math.random() - 0.5) * this.mapHalf * spread;
-      const far = !this.blocked(x, z) && this.vehicles.every(
+      const far = !this.blocked(x, z, clearR) && this.vehicles.every(
         v => Math.hypot(x - v.pos.x, z - v.pos.z) > minDist
       );
       if (far) break;
@@ -82,13 +85,13 @@ export class MatchRules {
   }
 
   spawnContraband(): void {
-    const p = this.randomClearPoint(this.cfg.spawnClearance);
+    const p = this.randomClearPoint(this.cfg.spawnClearance, 5);
     this.contrabandPos.set(p.x, this.ground.sample(p.x, p.z) + 3, p.z);
     this.carrier = null;
   }
 
   relocateDropZone(): void {
-    const p = this.randomClearPoint(this.cfg.spawnClearance * 1.5, 1.7);
+    const p = this.randomClearPoint(this.cfg.spawnClearance * 1.5, this.cfg.deliveryRadius * 0.6, 1.7);
     this.dropZonePos.set(p.x, this.ground.sample(p.x, p.z), p.z);
   }
 

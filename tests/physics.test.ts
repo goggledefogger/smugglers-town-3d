@@ -26,12 +26,42 @@ describe('VehicleBody.step', () => {
     expect(v.vel.dot(fwd)).toBeGreaterThan(5);
   });
 
-  it('brings speed to near zero under full brake', () => {
+  it('brakes forward motion to a stop', () => {
     const v = makeBody();
     v.pos.set(0, 1, 0);
-    run(v, { ...NO_INPUT, throttle: 0.01 }, 0.5);
-    run(v, { ...NO_INPUT, brake: 1 }, 2);
-    expect(v.speed).toBeLessThan(1);
+    run(v, { ...NO_INPUT, throttle: 1 }, 1);
+    const fwd = v.forward();
+    expect(v.vel.dot(fwd)).toBeGreaterThan(20);
+    run(v, { ...NO_INPUT, brake: 1 }, 1);
+    expect(v.vel.dot(fwd)).toBeLessThan(1);
+  });
+
+  it('reverses when brake is held from a stop, capped below forward top speed', () => {
+    const v = makeBody();
+    v.pos.set(0, 1, 0);
+    run(v, { ...NO_INPUT, brake: 1 }, 3);
+    const back = -v.vel.dot(v.forward());
+    expect(back).toBeGreaterThan(5);
+    expect(back).toBeLessThan(DEFAULT_PHYSICS.maxSpeed * 0.5);
+  });
+
+  it('caps forward speed at the vehicle top speed', () => {
+    const v = makeBody(1); // rally car: fastest
+    v.pos.set(0, 1, 0);
+    run(v, { ...NO_INPUT, throttle: 1 }, 4);
+    expect(v.speed).toBeLessThanOrEqual(DEFAULT_PHYSICS.maxSpeed * VEHICLE_TYPES[1]!.maxSpeed + 1e-6);
+  });
+
+  it('steers left (+steer) on the ground and yaws the same way in the air', () => {
+    const g = makeBody();
+    g.pos.set(0, 1, 0);
+    g.vel.set(0, 0, -20);
+    run(g, { ...NO_INPUT, throttle: 1, steer: 1 }, 0.3);
+    expect(g.forward().x).toBeLessThan(-0.05);
+    const a = makeBody();
+    a.pos.set(0, 30, 0);
+    run(a, { ...NO_INPUT, steer: 1 }, 0.2);
+    expect(a.angVel.y).toBeGreaterThan(0);
   });
 
   it('auto-rights an inverted vehicle in under a second of sim time', () => {
@@ -49,6 +79,39 @@ describe('VehicleBody.step', () => {
     v.vel.y = -40;
     run(v, NO_INPUT, 0.5);
     expect(v.damage).toBeGreaterThan(0);
+  });
+
+  it('stays planted driving downhill instead of riding the air state', () => {
+    // ground rises toward +z; forward is -z, so this is a 7% descent
+    const slope = new Heightfield(840, 1, new Float32Array([0, 0, 60, 60]));
+    const v = makeBody();
+    v.pos.set(0, slope.sample(0, 0) + 1, 0);
+    let airborneSteps = 0;
+    for (let t = 0; t < 3; t += 1 / 60) {
+      v.step(1 / 60, { ...NO_INPUT, throttle: 1 }, slope, NO_BUILDINGS);
+      if (!v.onGround) airborneSteps++;
+    }
+    expect(v.speed).toBeGreaterThan(20);
+    expect(airborneSteps).toBeLessThan(3);
+    expect(v.onGround).toBe(true);
+  });
+
+  it('keeps steering for a moment after lift-off', () => {
+    // 4 units up: above the snap band, so genuinely airborne from the first step
+    const v = makeBody();
+    v.pos.set(0, 5, 0);
+    v.vel.set(0, 0, -20);
+    run(v, { ...NO_INPUT, steer: 1 }, 0.15);
+    expect(v.onGround).toBe(false);
+    expect(v.forward().x).toBeLessThan(-0.1);
+  });
+
+  it('still leaves the ground on a jump', () => {
+    const v = makeBody();
+    v.pos.set(0, 1, 0);
+    run(v, { ...NO_INPUT, jump: true }, 0.25);
+    expect(v.pos.y - v.groundY).toBeGreaterThan(2.5);
+    expect(v.onGround).toBe(false);
   });
 
   it('does not fall below ground clearance', () => {

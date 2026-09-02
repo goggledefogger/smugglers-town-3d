@@ -6,7 +6,6 @@
  *   input → Game.update (fixed-step sim) → views sync → renderer.render
  *         → store snapshot → Lit HUD re-render
  */
-import { Group } from 'three';
 import { config } from './app/config.ts';
 import { Game } from './app/Game.ts';
 import { type GameEventMap, EventBus } from './app/events.ts';
@@ -20,9 +19,10 @@ import { CameraRig } from './render/CameraRig.ts';
 import { Minimap } from './render/Minimap.ts';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
+import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
 import { KeyboardState } from './ui/controls.ts';
 import { relocate } from './services/relocate.ts';
-import { disposeTiles } from './services/tiles/Tileset.ts';
+import type { TileStreamer } from './services/tiles/Tileset.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
@@ -77,19 +77,23 @@ const desertHf = new Heightfield(config.world.mapHalf * 2, 256, desertData);
 const desertTerrain = createDesertTerrain(desertHf);
 
 const game = new Game(desertTerrain, { events, store });
-game.reset(desertTerrain);
 
 // ---- renderer + views ----
 const renderer = new GameRenderer({ canvas });
 const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
-propScatter.scatter(desertHf, config.world.mapHalf, false);
 const pickups = new Pickups(renderer.scene);
 const cameraRig = new CameraRig(renderer.camera, () => game.terrainProvider.heightfield);
 const minimap = new Minimap(minimapCanvas, config.world.mapHalf);
 const vehicleViews: VehicleView[] = [];
-let tilesGroup: Group | null = null;
+let tiles: TileStreamer | null = null;
+let colliderRefreshAt = 0;
+
+/** Buildings from the streamed tiles plus the scattered props. */
+function applyColliders(): void {
+  game.setBuildingColliders([...(tiles?.colliders() ?? []), ...propScatter.colliders]);
+}
 
 function rebuildViews(): void {
   for (const v of vehicleViews) {
@@ -103,7 +107,15 @@ function rebuildViews(): void {
     renderer.scene.add(view.group);
   }
 }
-rebuildViews();
+
+/** New terrain or rematch: re-seat props, refresh colliders, then spawn everything clear of them. */
+function startMatch(terrain: TerrainProvider): void {
+  propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal);
+  applyColliders();
+  game.reset(terrain);
+  rebuildViews();
+}
+startMatch(desertTerrain);
 
 // ---- keyboard + hotkeys ----
 const keyboard = new KeyboardState();
@@ -118,11 +130,16 @@ window.addEventListener('keydown', (e) => {
   }
 });
 
+/** Drop the player on a nearby spot clear of buildings. */
 function resetPlayer(): void {
   const p = game.player?.body;
   if (!p) return;
-  const x = (Math.random() - 0.5) * 60;
-  const z = (Math.random() - 0.5) * 60;
+  let x = p.pos.x, z = p.pos.z;
+  for (let tries = 0; tries < 10; tries++) {
+    x = p.pos.x + (Math.random() - 0.5) * 60;
+    z = p.pos.z + (Math.random() - 0.5) * 60;
+    if (!game.blockedWithin(x, z, 4)) break;
+  }
   p.pos.set(x, game.terrainProvider.heightfield.sample(x, z) + 3, z);
   p.vel.set(0, 0, 0);
   p.angVel.set(0, 0, 0);
@@ -164,11 +181,8 @@ introEl.onStart = () => {
 endEl.onRematch = () => {
   endEl.hidden = true;
   endEl.winner = null;
-  // rematch on whatever terrain is loaded; a relocation's tiles and
-  // colliders stay in place
-  game.reset(game.terrainProvider);
-  rebuildViews();
-  propScatter.scatter(game.terrainProvider.heightfield, config.world.mapHalf, game.terrainProvider.isReal);
+  // rematch on whatever terrain is loaded; a relocation's tiles stay in place
+  startMatch(game.terrainProvider);
 };
 
 // ---- relocate flow ----
@@ -181,22 +195,20 @@ relocateBarEl.onSearch = async (q, key) => {
   relocateBarEl.status = '';
   loaderEl.hidden = false;
   try {
-    const { terrain, colliders, tilesGroup: newTiles } = await relocate(q, key, (msg) => {
-      loaderEl.message = msg;
+    const { terrain, tiles: newTiles } = await relocate({
+      query: q, apiKey: key, anisotropy: renderer.maxAnisotropy,
+      onProgress: (msg) => { loaderEl.message = msg; }
     });
-    if (tilesGroup) {
-      renderer.scene.remove(tilesGroup);
-      disposeTiles(tilesGroup);
+    if (tiles) {
+      renderer.scene.remove(tiles.group);
+      tiles.dispose();
     }
-    tilesGroup = newTiles;
-    if (tilesGroup) renderer.scene.add(tilesGroup);
+    tiles = newTiles;
+    if (tiles) renderer.scene.add(tiles.group);
     const oldMesh = terrainMesh.mesh;
     if (oldMesh) renderer.scene.remove(oldMesh);
     renderer.scene.add(terrainMesh.build(terrain, renderer.maxAnisotropy));
-    propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal);
-    game.setBuildingColliders(colliders);
-    game.reset(terrain);
-    rebuildViews();
+    startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {
     relocateBarEl.status = err instanceof Error ? err.message : String(err);
@@ -224,9 +236,18 @@ function frame(now: number): void {
   if (playing) {
     game.update(dt, keyboard.toVehicleInput());
     simTime += dt;
+    const player = game.player?.body ?? null;
+    if (tiles && player) {
+      tiles.update(player.pos, now);
+      // refined tiles change the building footprints; rebuild at most every 1.5 s
+      if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
+        colliderRefreshAt = now;
+        applyColliders();
+      }
+    }
     for (const v of vehicleViews) v.sync();
     pickups.sync(game.state, simTime, dt);
-    cameraRig.update(dt, game.player?.body ?? null);
+    cameraRig.update(dt, player);
     minimap.draw(game.state, game.vehicles, game.state.carrier);
   }
   renderer.render();

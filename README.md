@@ -19,7 +19,7 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (47 tests, node env) |
+| `npm test` | Vitest suite (56 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |
@@ -94,10 +94,12 @@ still loads.
 
 The tile loader walks Google's ~22-level tree to a distance-based level of
 detail (`DEFAULT_LOD` in `services/tiles/Tileset.ts`: 16 m geometric error
-near the match center, 64 m toward the field edge — roughly 75 tiles / 20 MB
-for a downtown). Each tile is one merged photogrammetry mesh, so building
-colliders come from rasterizing those meshes into a height grid and boxing
-every cell that rises well above the terrain.
+near the match center, 64 m toward the field edge — roughly 85 tiles / 20 MB
+for a downtown), then keeps streaming finer tiles around the player as you
+drive (8 m within 360 m). Each tile is one merged photogrammetry mesh, so
+building colliders come from rasterizing those meshes into a 10 m height
+grid and boxing every cell that rises well above the terrain or above its
+surroundings.
 
 ## Origin
 
