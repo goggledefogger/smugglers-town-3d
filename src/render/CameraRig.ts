@@ -4,8 +4,8 @@
  * naturally.
  */
 import { Vector3, PerspectiveCamera } from 'three';
-import type { VehicleBody } from '../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../core/heightfield.ts';
+import type { Pose } from './VehicleView.ts';
 
 export type CameraMode = 0 | 1 | 2;
 
@@ -16,6 +16,7 @@ export class CameraRig {
   private readonly _back = new Vector3();
   private readonly _desired = new Vector3();
   private readonly _look = new Vector3();
+  private lookY: number | null = null;
 
   constructor(
     private readonly camera: PerspectiveCamera,
@@ -33,7 +34,8 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
-  update(dt: number, player: VehicleBody | null): void {
+  /** Follows the player's rendered (interpolated) pose, not the raw body. */
+  update(dt: number, player: Pose | null): void {
     if (!player) return;
     const z = this.zoom;
     if (this.mode === 0) {
@@ -53,6 +55,10 @@ export class CameraRig {
     const lerpK = 1 - Math.pow(0.001 / (1 + z * 0.15), dt);
     this.camera.position.lerp(this._desired, lerpK);
     this._look.copy(player.pos).add(new Vector3(0, 2, 0));
+    // track the car tightly in the plane but low-pass its height (~0.12 s):
+    // every terrain bump the car rides would otherwise shake the whole view
+    this.lookY = this.lookY === null ? this._look.y : this.lookY + (this._look.y - this.lookY) * (1 - Math.exp(-dt * 8));
+    this._look.y = this.lookY;
     this.camera.lookAt(this._look);
   }
 }

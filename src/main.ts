@@ -102,7 +102,7 @@ function rebuildViews(): void {
   }
   vehicleViews.length = 0;
   for (const actor of game.vehicles) {
-    const view = new VehicleView(actor);
+    const view = new VehicleView(actor, () => game.terrainProvider.heightfield);
     vehicleViews.push(view);
     renderer.scene.add(view.group);
   }
@@ -144,6 +144,7 @@ function resetPlayer(): void {
   p.vel.set(0, 0, 0);
   p.angVel.set(0, 0, 0);
   p.quat.identity();
+  p.snapPrev();
 }
 
 function switchVehicle(n: number): void {
@@ -245,9 +246,11 @@ function frame(now: number): void {
         applyColliders();
       }
     }
-    for (const v of vehicleViews) v.sync();
-    pickups.sync(game.state, simTime, dt);
-    cameraRig.update(dt, player);
+    for (const v of vehicleViews) v.sync(dt, game.alpha);
+    const carrier = game.state.carrier;
+    const carrierView = carrier ? vehicleViews.find(v => v.actor.body === carrier) : undefined;
+    pickups.sync(game.state, simTime, dt, carrierView?.pose ?? null);
+    cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
     minimap.draw(game.state, game.vehicles, game.state.carrier);
   }
   renderer.render();

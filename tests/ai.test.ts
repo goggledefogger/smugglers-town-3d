@@ -42,6 +42,16 @@ describe('DriverBrain', () => {
     expect(Math.abs(input.steer)).toBeLessThanOrEqual(1);
   });
 
+  it('keeps driving when the carrier vanishes before the next re-evaluation', () => {
+    const self = makeBody(0, 0);
+    const enemy = makeBody(50, 50);
+    const brain = new DriverBrain(DEFAULT_DRIVER, v => (v === self ? 0 : 1));
+    brain.think(1, self, makeMatchState(enemy)); // enters chase
+    // delivered a few ms later: still in chase, no carrier
+    expect(() => brain.think(0.01, self, makeMatchState(null))).not.toThrow();
+    expect(brain.input().throttle).toBeGreaterThan(0);
+  });
+
   it('delivers when self carries — drives toward the drop zone', () => {
     const self = makeBody(0, 0);
     const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);

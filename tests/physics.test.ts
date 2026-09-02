@@ -96,6 +96,22 @@ describe('VehicleBody.step', () => {
     expect(v.onGround).toBe(true);
   });
 
+  it('eases over a bump instead of snapping to it', () => {
+    // a 0.5-unit step in the ground: the body should take several steps to climb it
+    const step = new Heightfield(8, 4, new Float32Array([
+      0, 0, 0.5, 0.5, 0.5, 0, 0, 0.5, 0.5, 0.5, 0, 0, 0.5, 0.5, 0.5, 0, 0, 0.5, 0.5, 0.5, 0, 0, 0.5, 0.5, 0.5
+    ]));
+    const v = makeBody();
+    v.pos.set(-3, 1, 0);
+    v.step(1 / 60, NO_INPUT, step, NO_BUILDINGS);
+    v.pos.x = 3; // teleport onto the high side
+    v.step(1 / 60, NO_INPUT, step, NO_BUILDINGS);
+    expect(v.pos.y).toBeGreaterThan(1.05);
+    expect(v.pos.y).toBeLessThan(1.4);
+    for (let t = 0; t < 0.5; t += 1 / 60) v.step(1 / 60, NO_INPUT, step, NO_BUILDINGS);
+    expect(v.pos.y).toBeCloseTo(1.5, 2);
+  });
+
   it('keeps steering for a moment after lift-off', () => {
     // 4 units up: above the snap band, so genuinely airborne from the first step
     const v = makeBody();
@@ -104,6 +120,18 @@ describe('VehicleBody.step', () => {
     run(v, { ...NO_INPUT, steer: 1 }, 0.15);
     expect(v.onGround).toBe(false);
     expect(v.forward().x).toBeLessThan(-0.1);
+  });
+
+  it('rides on the average of the four wheel contact heights', () => {
+    // 2-unit checkerboard bumps: the center node is 0 but every wheel point sits partway up a bump
+    const data = new Float32Array(25);
+    for (let j = 0; j < 5; j++) for (let i = 0; i < 5; i++) data[j * 5 + i] = ((i + j) % 2) * 2;
+    const bumpy = new Heightfield(8, 4, data);
+    const v = makeBody();
+    v.pos.set(0, 5, 0);
+    for (let t = 0; t < 1.5; t += 1 / 60) v.step(1 / 60, NO_INPUT, bumpy, NO_BUILDINGS);
+    expect(v.groundY).toBeCloseTo(1.125, 3);
+    expect(v.pos.y).toBeCloseTo(2.125, 1);
   });
 
   it('still leaves the ground on a jump', () => {

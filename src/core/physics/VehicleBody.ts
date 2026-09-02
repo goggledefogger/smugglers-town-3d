@@ -49,12 +49,16 @@ const WORLD_UP = new Vector3(0, 1, 0);
 /** Reverse tops out at this fraction of forward top speed. */
 const REVERSE_FRACTION = 0.35;
 /**
- * Within this many units above clearance, a car that is not climbing or
- * falling hard is pulled back onto the ground. The ground step applies no
+ * Within this many units above the ride height, a car that is not climbing
+ * counts as grounded and is eased back down. The ground step applies no
  * gravity, so without it any downhill leaves the car riding a hair above the
  * terrain in the air state, where steering barely works
  */
 const GROUND_SNAP = 2.5;
+/** Suspension: the ride height eases toward the ground at this rate (1/s)... */
+const RIDE_RATE = 15;
+/** ...within this much travel either side of it; beyond that it is clamped. */
+const RIDE_TRAVEL = 0.6;
 /** Ground steering keeps working this long after leaving the ground ("coyote time"). */
 const STEER_GRACE_S = 0.2;
 
@@ -74,6 +78,9 @@ export class VehicleBody {
   jumpHeld = false;
   /** Terrain height under the car after the last step (for the drop shadow). */
   groundY = 0;
+  /** Pose before the last step; views interpolate between it and the current pose. */
+  readonly prevPos = new Vector3();
+  readonly prevQuat = new Quaternion();
   private airTime = 0;
 
   private readonly _fwd = new Vector3();
@@ -93,6 +100,12 @@ export class VehicleBody {
     return out.set(0, 0, -1).applyQuaternion(this.quat);
   }
 
+  /** Call after teleporting so the next frame doesn't interpolate from the old spot. */
+  snapPrev(): void {
+    this.prevPos.copy(this.pos);
+    this.prevQuat.copy(this.quat);
+  }
+
   step(
     dt: number,
     input: VehicleInput,
@@ -100,11 +113,13 @@ export class VehicleBody {
     buildings: readonly BuildingCollider[],
     carScale = 1
   ): void {
+    this.snapPrev();
     const fwd = this.forward(this._fwd);
     const right = this._right.set(1, 0, 0).applyQuaternion(this.quat);
     const up = this._up.set(0, 1, 0).applyQuaternion(this.quat);
-    const gh = ground.sample(this.pos.x, this.pos.z);
-    this.onGround = this.pos.y - gh < 1.2;
+    const gh = this.groundUnder(ground);
+    // grounded = inside the suspension band, not launching, not falling hard
+    this.onGround = this.pos.y < gh + this.cfg.groundClearance + GROUND_SNAP && this.vel.y < 2 && this.vel.y >= -4;
     this.airTime = this.onGround ? 0 : this.airTime + dt;
 
     if (this.onGround) {
@@ -156,6 +171,21 @@ export class VehicleBody {
       this.vel.y += this.cfg.jumpBoost * 14;
       this.onGround = false;
     }
+  }
+
+  /**
+   * Ground height under the car: the mean of the four wheel contact points.
+   * Bumps shorter than the wheelbase average out the way suspension would;
+   * sampling the center alone had the car (and the camera on it) bobbing at
+   * ~6 Hz over the terrain's finest noise.
+   */
+  private groundUnder(ground: Heightfield): number {
+    const { x, z } = this.pos;
+    const f = this._fwd, r = this._right;
+    return 0.25 * (
+      ground.sample(x + f.x * 1.3, z + f.z * 1.3) + ground.sample(x - f.x * 1.3, z - f.z * 1.3) +
+      ground.sample(x + r.x * 0.95, z + r.z * 0.95) + ground.sample(x - r.x * 0.95, z - r.z * 0.95)
+    );
   }
 
   /** Direct yaw about the body's up axis, scaled down at crawling speeds. */
@@ -245,29 +275,29 @@ export class VehicleBody {
   private integratePosition(dt: number, ground: Heightfield): void {
     this.pos.addScaledVector(this.vel, dt);
     // resample under the new position: at speed the ground moves a lot in a step
-    const gh = ground.sample(this.pos.x, this.pos.z);
+    const gh = this.groundUnder(ground);
     this.groundY = gh;
-    const height = this.pos.y - gh;
-    const clearance = this.cfg.groundClearance;
-    if (height > clearance && height < clearance + GROUND_SNAP && this.vel.y < 2 && this.vel.y >= -4) {
-      // bump or downhill: stay planted. Jumps (climbing) and hard falls skip this
-      this.pos.y = gh + clearance;
-      this.vel.y = 0;
-    } else if (height < clearance) {
-      this.pos.y = gh + clearance;
-      if (this.vel.y < -4) {
-        const impact = -this.vel.y;
-        this.damage = Math.min(1, this.damage + impact * 0.004);
-        this.vel.y = impact * 0.18;
-        // tumble on very hard landings — biased to pitch (forward flip)
-        if (impact > 18) {
-          const dir = Math.random() < 0.5 ? 1 : -1;
-          this.angVel.x += dir * Math.min(impact, 30) * 0.04;
-          this.angVel.z += (Math.random() - 0.5) * Math.min(impact, 30) * 0.015;
-        }
-      } else if (this.vel.y < 0) {
-        this.vel.y = 0;
+    const target = gh + this.cfg.groundClearance;
+    if (this.vel.y < -4 && this.pos.y < target) {
+      // hard landing
+      this.pos.y = target;
+      const impact = -this.vel.y;
+      this.damage = Math.min(1, this.damage + impact * 0.004);
+      this.vel.y = impact * 0.18;
+      // tumble on very hard landings — biased to pitch (forward flip)
+      if (impact > 18) {
+        const dir = Math.random() < 0.5 ? 1 : -1;
+        this.angVel.x += dir * Math.min(impact, 30) * 0.04;
+        this.angVel.z += (Math.random() - 0.5) * Math.min(impact, 30) * 0.015;
       }
+    } else if (this.vel.y < 2 && this.vel.y >= -4 && this.pos.y < target + GROUND_SNAP) {
+      // grounded: suspension eases the body toward the ride height so bumps
+      // and grid kinks don't jolt it; the travel clamp keeps climbs and
+      // descents honest. Jumps (climbing) and hard falls (which must reach
+      // the landing branch above) skip this
+      this.pos.y += (target - this.pos.y) * (1 - Math.exp(-dt * RIDE_RATE));
+      this.pos.y = MathUtils.clamp(this.pos.y, target - RIDE_TRAVEL, target + RIDE_TRAVEL);
+      this.vel.y = 0;
     }
     // world bounds — bounce back
     const B = this.cfg.worldHalf - 8;

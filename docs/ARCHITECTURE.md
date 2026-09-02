@@ -48,9 +48,14 @@ Minimap.draw()     ◄───────────────────�
 ```
 
 The simulation steps at a fixed 60 Hz inside an accumulator
-(`config.loop.step`), so physics is deterministic across refresh rates; views
-sync once per animation frame. The HUD snapshot is pushed at 10 Hz —
-high-frequency values (speed) interpolate visually, no one misses them.
+(`config.loop.step`), so physics is deterministic across refresh rates. Views
+sync once per animation frame and interpolate each body between its previous
+and current pose by `Game.alpha` (the fraction of a step left in the
+accumulator); the camera and the carried crate follow those rendered poses.
+Without that, a 120 Hz display shows the sim advancing every other frame,
+which reads as the car stuttering against a smoothly gliding camera. The HUD
+snapshot is pushed at 10 Hz — high-frequency values (speed) interpolate
+visually, no one misses them.
 
 ## Core modules
 
@@ -80,6 +85,16 @@ unit-tested):
 - Air yaw has the same sign as ground steering. The ground check flickers
   over bumps at speed, so an opposite-signed air yaw read as the car jerking
   the wrong way mid-turn.
+
+Ride height is suspension-like: the ground under the car is the mean of the
+four wheel contact points, and the body eases toward it (`RIDE_RATE`) within
+±`RIDE_TRAVEL`, so bumps shorter than the wheelbase and terrain-grid kinks
+don't jolt it. Anything inside that band that isn't launching or falling hard
+counts as grounded, which is what keeps steering alive over bumps and down
+hills; ground steering also persists 0.2 s after lift-off. Real terrain is
+upsampled from the 87 m elevation grid with Catmull-Rom (bicubic) rather than
+bilinear interpolation, because bilinear's slope kinks at every grid edge hit
+the car as a jolt several times a second at speed.
 
 Brake past a stop becomes reverse (35 % of top speed) with the steering
 flipped so the rear swings the way you steer. Spawns use the most open spot

@@ -7,6 +7,7 @@ import {
   MeshBasicMaterial, PointLight, Vector3, DoubleSide
 } from 'three';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
+import type { Pose } from './VehicleView.ts';
 import { config } from '../app/config.ts';
 
 export class Pickups {
@@ -36,8 +37,8 @@ export class Pickups {
     scene.add(this.dropMarker);
   }
 
-  sync(state: MatchState, timeS: number, dt: number): void {
-    const carrier = state.carrier;
+  /** carrier: the carrier's rendered pose, so the crate rides the interpolated car. */
+  sync(state: MatchState, timeS: number, dt: number, carrier: Pose | null): void {
     if (carrier) {
       // attach behind the carrier
       this._back.set(0, 2, 2.2).applyQuaternion(carrier.quat);

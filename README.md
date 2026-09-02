@@ -19,7 +19,7 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (58 tests, node env) |
+| `npm test` | Vitest suite (64 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |

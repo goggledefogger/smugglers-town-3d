@@ -3,26 +3,50 @@
  * reads body state each frame and writes it to the mesh (never the reverse).
  *
  * `group` carries only the world position; the car body rotates inside it so
- * the health bar and the blob shadow stay upright when the car rolls.
+ * the health bar and the blob shadow stay upright when the car rolls. The
+ * physics body stays level on slopes, so the view adds a cosmetic pitch/roll
+ * from the terrain under the wheels to make hills read as hills.
  */
 import {
   Group, Mesh, BoxGeometry, CylinderGeometry, CircleGeometry, MeshLambertMaterial,
-  MeshStandardMaterial, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils
+  MeshStandardMaterial, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
+  Quaternion, Euler, Vector3
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
+import type { Heightfield } from '../core/heightfield.ts';
 
 const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
+const WHEELBASE = 2.6;
+const TRACK = 1.9;
+const MAX_TILT = 0.6;
+
+/** A rendered (interpolated) pose; what the camera and pickups follow. */
+export interface Pose {
+  readonly pos: Vector3;
+  readonly quat: Quaternion;
+}
 
 export class VehicleView {
   readonly group = new Group();
+  /** Interpolated pose this frame. */
+  readonly pose: Pose = { pos: this.group.position, quat: new Quaternion() };
   private readonly carRoot = new Group();
   private readonly healthBar: Sprite;
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
   private readonly shadow: Mesh<CircleGeometry, MeshBasicMaterial>;
   private readonly team: number;
+  private pitch = 0;
+  private roll = 0;
+  private readonly _tilt = new Quaternion();
+  private readonly _euler = new Euler();
+  private readonly _fwd = new Vector3();
+  private readonly _right = new Vector3();
 
-  constructor(private readonly actor: VehicleActor) {
+  constructor(
+    readonly actor: VehicleActor,
+    private readonly ground: () => Heightfield
+  ) {
     const teamColor = actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1];
     const g = new Group();
     // body
@@ -86,7 +110,7 @@ export class VehicleView {
     this.group.add(this.healthBar);
     this.team = actor.team;
     this.updateHealthBar();
-    this.sync();
+    this.sync(1 / 60, 1);
   }
 
   private updateHealthBar(): void {
@@ -100,12 +124,32 @@ export class VehicleView {
     this.barTexture.needsUpdate = true;
   }
 
-  sync(): void {
+  /** alpha: fraction of a sim step since the last one (see Game.alpha). */
+  sync(dt: number, alpha: number): void {
     const body = this.actor.body;
-    this.group.position.copy(body.pos);
-    this.carRoot.quaternion.copy(body.quat);
-    const height = Math.max(0, body.pos.y - body.groundY - body.cfg.groundClearance);
-    this.shadow.position.y = body.groundY - body.pos.y + 0.15;
+    const quat = this.pose.quat;
+    this.group.position.copy(body.prevPos).lerp(body.pos, alpha);
+    quat.copy(body.prevQuat).slerp(body.quat, alpha);
+    const height = Math.max(0, this.group.position.y - body.groundY - body.cfg.groundClearance);
+
+    // terrain tilt from the wheel contact points, faded out as the car lifts
+    // off and smoothed over ~0.1 s so bumps don't rattle the body
+    const hf = this.ground();
+    const { x, z } = this.group.position;
+    const f = this._fwd.set(0, 0, -1).applyQuaternion(quat);
+    const r = this._right.set(1, 0, 0).applyQuaternion(quat);
+    const hF = hf.sample(x + f.x * WHEELBASE / 2, z + f.z * WHEELBASE / 2);
+    const hB = hf.sample(x - f.x * WHEELBASE / 2, z - f.z * WHEELBASE / 2);
+    const hR = hf.sample(x + r.x * TRACK / 2, z + r.z * TRACK / 2);
+    const hL = hf.sample(x - r.x * TRACK / 2, z - r.z * TRACK / 2);
+    const grounded = MathUtils.clamp(1 - height / 2, 0, 1);
+    const k = 1 - Math.exp(-dt * 10);
+    this.pitch += (MathUtils.clamp(Math.atan2(hF - hB, WHEELBASE), -MAX_TILT, MAX_TILT) * grounded - this.pitch) * k;
+    this.roll += (MathUtils.clamp(Math.atan2(hR - hL, TRACK), -MAX_TILT, MAX_TILT) * grounded - this.roll) * k;
+    this._tilt.setFromEuler(this._euler.set(this.pitch, 0, this.roll));
+    this.carRoot.quaternion.copy(quat).multiply(this._tilt);
+
+    this.shadow.position.y = body.groundY - this.group.position.y + 0.15;
     this.shadow.material.opacity = MathUtils.clamp(height * 0.15, 0, 0.45);
     const s = MathUtils.clamp(1 - height * 0.02, 0.5, 1);
     this.shadow.scale.set(s, s, 1);

@@ -18,6 +18,14 @@ function makeGame(): Game {
 }
 
 describe('Game', () => {
+  it('exposes the fraction of a step since the last one for pose interpolation', () => {
+    const game = makeGame();
+    game.update(0.025, NEUTRAL); // one 1/60 step, 0.00833 left over
+    expect(game.alpha).toBeCloseTo(0.5, 5);
+    const body = game.player!.body;
+    expect(body.prevPos.distanceTo(body.pos)).toBeGreaterThanOrEqual(0);
+  });
+
   it('lets a vehicle pick up contraband by driving onto it', () => {
     const game = makeGame();
     const player = game.player!.body;

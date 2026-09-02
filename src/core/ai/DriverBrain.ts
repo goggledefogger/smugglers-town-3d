@@ -59,13 +59,16 @@ export class DriverBrain {
   }
 
   private steerToward(self: VehicleBody, match: MatchState): void {
-    if (this.state === 'seek') {
-      _target.copy(match.contrabandPos);
-    } else if (this.state === 'chase') {
-      _target.copy(match.carrier!.pos).addScaledVector(match.carrier!.vel, 0.3);
+    // the state is re-evaluated on a timer, so the carrier may have delivered
+    // (or been stolen from) since: fall back to seeking rather than crash
+    const carrier = match.carrier;
+    if (this.state === 'chase' && carrier) {
+      _target.copy(carrier.pos).addScaledVector(carrier.vel, 0.3);
       _target.y = self.pos.y;
-    } else {
+    } else if (this.state === 'deliver' && carrier) {
       _target.copy(match.dropZonePos);
+    } else {
+      _target.copy(match.contrabandPos);
     }
     _toTarget.copy(_target).sub(self.pos);
     _toTarget.y = 0;

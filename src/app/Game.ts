@@ -38,6 +38,8 @@ export class Game {
   private match: MatchRules;
   private teams = new Map<number, 0 | 1>();
   private accumulator = 0;
+  /** Fraction of a step elapsed since the last one; views interpolate poses by it. */
+  alpha = 1;
   private timeS = 0;
   private winner: 0 | 1 | null = null;
   private buildingColliders: BuildingCollider[] = [];
@@ -110,6 +112,7 @@ export class Game {
       }
       body.pos.set(x, hf.sample(x, z) + 3, z);
       body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -ang + Math.PI / 2);
+      body.snapPrev();
       this.teams.set(body.id, team);
       this.bodies.push(body);
       this.vehicles.push({
@@ -150,6 +153,7 @@ export class Game {
     replacement.pos.copy(pos);
     replacement.quat.copy(quat);
     replacement.vel.copy(vel);
+    replacement.snapPrev();
     this.teams.set(replacement.id, player.team);
     this.bodies[this.bodies.indexOf(player.body)] = replacement;
     this.match.swapVehicle(player.body, replacement);
@@ -172,6 +176,9 @@ export class Game {
       this.stepSim(config.loop.step, playerInput);
       this.accumulator -= config.loop.step;
     }
+    // views draw prev→current poses at this fraction: without it a 120 Hz
+    // display shows the sim advancing every other frame, which reads as stutter
+    this.alpha = this.accumulator / config.loop.step;
     this.hudTimer += dt;
     if (this.hudTimer > 0.1) {
       this.hudTimer = 0;
