@@ -1,8 +1,9 @@
 # Smugglers Town 3D: Turf Wars
 
 A 4v4 arcade vehicle combat game — a single piece of contraband spawns on the
-map. Grab it, rush it to the green smoke drop-off. Get rammed and it transfers
-to the attacker. First team to **5 deliveries** wins.
+map. Grab it, rush it back to your crew's base (each team has one, fixed for
+the match). Get rammed and it transfers to the attacker. First team to
+**5 deliveries** wins.
 
 Plays instantly on a procedural desert. With a Google Maps API key (Maps
 JavaScript + Elevation + Static Maps + Photorealistic 3D Tiles), relocate the
@@ -19,7 +20,7 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (64 tests, node env) |
+| `npm test` | Vitest suite (71 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |
@@ -48,8 +49,12 @@ Keys typed into a text field (search box, API key) never reach the game.
 | Trophy Truck | 1.3 | 1.1× | 1.05× | 0.90 | 0.95 |
 | Monster Truck | 2.0 | 0.75× | 0.85× | 1.50 | 1.20 |
 
-Heavier vehicles dominate rams; lighter ones out-handle them. Ram-to-steal
-only fires on cross-team contact, with a 0.6 s cooldown.
+Heavier vehicles dominate rams; lighter ones out-handle them. Any ram steals
+the contraband, teammates included, with a 0.6 s cooldown between transfers.
+Landings, walls and rams cost integrity (divided by durability); at zero you
+wreck, the crate drops where you died, and you respawn just inside your base.
+
+Where this is headed: [`docs/ROADMAP.md`](docs/ROADMAP.md).
 
 ## Project layout
 

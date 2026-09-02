@@ -26,12 +26,42 @@ describe('Game', () => {
     expect(body.prevPos.distanceTo(body.pos)).toBeGreaterThanOrEqual(0);
   });
 
+  it('reports the bearing to the contraband clockwise from straight ahead', () => {
+    const game = makeGame();
+    const player = game.player!.body;
+    player.quat.identity(); // facing -z
+    const c = game.state.contrabandPos;
+    player.pos.set(c.x, c.y, c.z + 100);            // contraband straight ahead
+    expect(game.targetBearing()).toBeCloseTo(0, 6);
+    player.pos.set(c.x - 100, c.y, c.z);            // to the right (+x)
+    expect(game.targetBearing()).toBeCloseTo(Math.PI / 2, 6);
+    player.pos.set(c.x + 100, c.y, c.z);            // to the left
+    expect(game.targetBearing()).toBeCloseTo(-Math.PI / 2, 6);
+    player.pos.set(c.x + 100, c.y, c.z - 100);      // behind-left
+    expect(game.targetBearing()).toBeCloseTo(-3 * Math.PI / 4, 6);
+  });
+
   it('lets a vehicle pick up contraband by driving onto it', () => {
     const game = makeGame();
     const player = game.player!.body;
     player.pos.copy(game.state.contrabandPos);
     game.update(0.02, NEUTRAL);
     expect(game.state.carrier).toBe(player);
+  });
+
+  it('wrecks a car at zero integrity: crate drops there, car respawns near its base', () => {
+    const game = makeGame();
+    const player = game.player!.body;
+    player.pos.copy(game.state.contrabandPos);
+    game.update(0.02, NEUTRAL);
+    expect(game.state.carrier).toBe(player);
+    const where = player.pos.clone();
+    player.damage = 1;
+    game.update(0.02, NEUTRAL);
+    expect(game.state.carrier).toBeNull();
+    expect(game.state.contrabandPos.distanceTo(where)).toBeLessThan(10);
+    expect(player.damage).toBe(0);
+    expect(player.pos.distanceTo(game.state.bases[0])).toBeLessThan(80);
   });
 
   it('keeps the contraband with the player across a vehicle switch', () => {
@@ -44,7 +74,7 @@ describe('Game', () => {
     expect(after).not.toBe(before);
     expect(game.state.carrier).toBe(after);
     // and the new body is the one the rules see from now on
-    after.pos.copy(game.state.dropZonePos);
+    after.pos.copy(game.state.bases[0]);
     game.update(0.02, NEUTRAL);
     expect(game.state.scores[0]).toBe(1);
   });

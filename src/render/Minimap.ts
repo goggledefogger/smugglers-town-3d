@@ -1,5 +1,5 @@
 /**
- * Canvas 2D minimap: drop zone, contraband, and vehicles on the play field.
+ * Canvas 2D minimap: team bases, contraband, and vehicles on the play field.
  */
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
 import type { VehicleActor } from '../app/Game.ts';
@@ -23,12 +23,14 @@ export class Minimap {
     ctx.clearRect(0, 0, S, S);
     ctx.fillStyle = '#3a2a1a';
     ctx.fillRect(0, 0, S, S);
-    // drop zone
-    const dz = this.worldToMM(state.dropZonePos.x, state.dropZonePos.z, hS, scale);
-    ctx.fillStyle = 'rgba(0,255,80,0.4)';
-    ctx.beginPath();
-    ctx.arc(dz.x, dz.y, 8, 0, 7);
-    ctx.fill();
+    // team bases
+    for (const team of [0, 1] as const) {
+      const b = this.worldToMM(state.bases[team].x, state.bases[team].z, hS, scale);
+      ctx.fillStyle = team === 0 ? 'rgba(0,255,80,0.4)' : 'rgba(255,60,40,0.4)';
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 8, 0, 7);
+      ctx.fill();
+    }
     // contraband
     if (!carrier) {
       const c = this.worldToMM(state.contrabandPos.x, state.contrabandPos.z, hS, scale);

@@ -23,6 +23,11 @@ export const DEFAULT_DRIVER: DriverConfig = {
   slowTurnSpeed: 20
 };
 
+/** Full throttle but crawling for this long means we are wedged against something. */
+const STUCK_S = 0.8;
+/** How long to back out before trying again. */
+const UNSTICK_S = 0.9;
+
 const _target = new Vector3();
 const _toTarget = new Vector3();
 const _fwd = new Vector3();
@@ -34,6 +39,9 @@ export class DriverBrain {
   private throttle = 0;
   private brake = 0;
   private jump = false;
+  private stuckS = 0;
+  private unstickS = 0;
+  private unstickSteer = 1;
 
   constructor(
     private readonly cfg: DriverConfig,
@@ -41,6 +49,15 @@ export class DriverBrain {
   ) {}
 
   think(dt: number, self: VehicleBody, match: MatchState): void {
+    if (this.unstickS > 0) {
+      // reversing out of whatever we hit; bots have no pathfinding, so this
+      // is what gets them off building walls
+      this.unstickS -= dt;
+      this.throttle = 0;
+      this.brake = 1;
+      this.steer = this.unstickSteer;
+      return;
+    }
     this.timer -= dt;
     if (this.timer <= 0) {
       this.timer = this.cfg.reevaluateS * (1 + Math.random());
@@ -51,11 +68,18 @@ export class DriverBrain {
       } else if (match.carrier === self) {
         this.state = 'deliver';
       } else {
-        // ally carries — support: head to the drop zone or re-seek
+        // ally carries — support: head to our base or re-seek
         this.state = Math.random() < 0.6 ? 'deliver' : 'seek';
       }
     }
     this.steerToward(self, match);
+    if (this.throttle > 0.5 && self.speed < 3 && self.onGround) this.stuckS += dt;
+    else this.stuckS = 0;
+    if (this.stuckS > STUCK_S) {
+      this.stuckS = 0;
+      this.unstickS = UNSTICK_S;
+      this.unstickSteer = Math.random() < 0.5 ? -1 : 1;
+    }
   }
 
   private steerToward(self: VehicleBody, match: MatchState): void {
@@ -66,7 +90,7 @@ export class DriverBrain {
       _target.copy(carrier.pos).addScaledVector(carrier.vel, 0.3);
       _target.y = self.pos.y;
     } else if (this.state === 'deliver' && carrier) {
-      _target.copy(match.dropZonePos);
+      _target.copy(match.bases[this.teamOf(self) === 1 ? 1 : 0]);
     } else {
       _target.copy(match.contrabandPos);
     }

@@ -60,14 +60,15 @@ const introEl = document.querySelector('sr-intro') as IntroScreen;
 const endEl = document.querySelector('sr-end') as EndScreen;
 const bannerEl = document.querySelector('sr-banner') as Banner;
 const relocateBarEl = document.querySelector('sr-relocate') as RelocateBar;
+const dirArrowEl = document.querySelector('sr-dirarrow') as DirArrow;
 
 // ---- stores, events, game ----
 const events = new EventBus<GameEventMap>();
 const initialHud: HudSnapshot = {
   phase: 'intro', speed: 0, damage: 0, vehicleName: '', scores: { 0: 0, 1: 0 },
   carrierName: null, carrierIsPlayer: false, carrierIsAlly: false,
-  objective: 'FIND CONTRABAND', distanceToTarget: 0, targetIsDelivery: false,
-  targetBearingRad: 0, locationLabel: 'Procedural Desert', winner: null, teamPips: []
+  objective: 'FIND CONTRABAND', distanceToTargetM: 0, targetIsDelivery: false,
+  locationLabel: 'Procedural Desert', winner: null, teamPips: []
 };
 const store = createStore<HudSnapshot>(initialHud);
 
@@ -153,11 +154,26 @@ function switchVehicle(n: number): void {
 }
 
 // ---- events → UI ----
-events.on('contraband:pickup', () => bannerEl.show('CONTRABAND ACQUIRED', 1200));
+const actorOf = (id: number) => game.vehicles.find(a => a.body.id === id);
+events.on('contraband:pickup', ({ vehicleId }) => {
+  const a = actorOf(vehicleId);
+  if (!a) return;
+  bannerEl.show(a.isPlayer ? 'CONTRABAND ACQUIRED' : a.team === 0 ? 'YOUR CREW HAS IT' : 'RIVALS HAVE IT', 1200);
+});
 events.on('contraband:stolen', ({ attackerId, victimId }) => {
-  const isPlayerVictim = game.player && victimId === game.player.body.id;
-  const isPlayerAttacker = game.player && attackerId === game.player.body.id;
-  if (isPlayerVictim || isPlayerAttacker) bannerEl.show('CONTRABAND STOLEN!', 800);
+  const attacker = actorOf(attackerId);
+  const victim = actorOf(victimId);
+  if (!attacker || !victim) return;
+  const text = attacker.isPlayer ? 'YOU STOLE IT!'
+    : victim.isPlayer ? 'STOLEN FROM YOU!'
+      : attacker.team === 0 ? 'YOUR CREW STOLE IT' : 'RIVALS STOLE IT';
+  bannerEl.show(text, attacker.isPlayer || victim.isPlayer ? 1000 : 700);
+});
+events.on('vehicle:wrecked', ({ vehicleId }) => {
+  if (actorOf(vehicleId)?.isPlayer) bannerEl.show('WRECKED!', 1500);
+});
+events.on('contraband:dropped', ({ vehicleId }) => {
+  bannerEl.show(actorOf(vehicleId)?.isPlayer ? 'WRECKED! CONTRABAND DROPPED' : 'CONTRABAND IS LOOSE!', 1500);
 });
 events.on('contraband:delivered', ({ team }) => {
   bannerEl.show(`DELIVERED! ${team === 0 ? 'YOUR CREW' : 'RIVALS'}`, 1500);
@@ -224,7 +240,7 @@ relocateBarEl.onSearch = async (q, key) => {
 (document.querySelector('sr-score') as ScorePanel).bind(store);
 (document.querySelector('sr-objective') as ObjectiveBar).bind(store);
 (document.querySelector('sr-speed') as SpeedGauge).bind(store);
-(document.querySelector('sr-dirarrow') as DirArrow).bind(store);
+dirArrowEl.bind(store);
 
 // ---- frame loop ----
 let last = performance.now();
@@ -251,6 +267,7 @@ function frame(now: number): void {
     const carrierView = carrier ? vehicleViews.find(v => v.actor.body === carrier) : undefined;
     pickups.sync(game.state, simTime, dt, carrierView?.pose ?? null);
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
+    dirArrowEl.setBearing(game.targetBearing());
     minimap.draw(game.state, game.vehicles, game.state.carrier);
   }
   renderer.render();

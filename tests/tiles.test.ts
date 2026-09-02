@@ -1,9 +1,9 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4 } from 'three';
 import {
-  boxDistanceM, collectTiles, glbPlacement, buildingCollidersFrom, allowedErrorM, DEFAULT_LOD,
-  rasterizeTile, tileGroundOffset, type TileNode
+  boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
+import { buildingCollidersFrom, rasterizeTile, tileGroundOffset } from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
 import { Heightfield } from '../src/core/heightfield.ts';

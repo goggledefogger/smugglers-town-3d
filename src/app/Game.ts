@@ -6,7 +6,8 @@
  */
 import { Vector3 } from 'three';
 import { config } from './config.ts';
-import { VehicleBody, type BuildingCollider } from '../core/physics/VehicleBody.ts';
+import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
+import { VehicleBody, type BuildingCollider, type VehiclePhysicsConfig } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../core/physics/vehicleCollisions.ts';
 import { MatchRules } from '../core/gameplay/MatchRules.ts';
@@ -30,6 +31,10 @@ export interface GameDeps {
 }
 
 const _tmpV = new Vector3();
+const _tmpFwd = new Vector3();
+const UP = new Vector3(0, 1, 0);
+/** The one place physics tuning enters the sim: app/config, with the field size folded in. */
+const PHYSICS: VehiclePhysicsConfig = { ...config.physics, worldHalf: config.world.mapHalf };
 
 export class Game {
   readonly vehicles: VehicleActor[] = [];
@@ -88,8 +93,8 @@ export class Game {
     this.bodies.length = 0;
     this.teams.clear();
     this.spawnAllVehicles();
+    this.match.placeBases();
     this.match.spawnContraband();
-    this.match.relocateDropZone();
   }
 
   private spawnAllVehicles(): void {
@@ -100,7 +105,7 @@ export class Game {
       const team = i < config.match.teamSize ? 0 : 1;
       const isPlayer = i === 0;
       const typeIdx = isPlayer ? 2 : pickVehicleType();
-      const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!);
+      const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS);
       const ang = (i / total) * Math.PI * 2;
       // ring around the open spot; walk outward along the ray if a slot is still blocked
       let x = 0, z = 0;
@@ -149,7 +154,7 @@ export class Game {
     const pos = player.body.pos.clone();
     const quat = player.body.quat.clone();
     const vel = player.body.vel.clone();
-    const replacement = new VehicleBody(VEHICLE_TYPES[typeIdx]!);
+    const replacement = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS);
     replacement.pos.copy(pos);
     replacement.quat.copy(quat);
     replacement.vel.copy(vel);
@@ -204,9 +209,26 @@ export class Game {
       1,
       (a, b) => this.match.onRam(a, b, this.timeS)
     );
+    for (const actor of this.vehicles) {
+      if (actor.body.damage >= 1) this.wreck(actor);
+    }
     this.match.checkPickup(1);
     this.match.checkDelivery(1);
     this.processMatchEvents();
+  }
+
+  /** Integrity hit zero: the crate drops where the car died and the car respawns near its base. */
+  private wreck(actor: VehicleActor): void {
+    const body = actor.body;
+    this.match.dropFrom(body);
+    const p = this.match.respawnPoint(actor.team);
+    body.pos.set(p.x, this.terrain.heightfield.sample(p.x, p.z) + 3, p.z);
+    body.vel.set(0, 0, 0);
+    body.angVel.set(0, 0, 0);
+    body.quat.setFromAxisAngle(UP, Math.atan2(p.x, p.z)); // face the field center
+    body.damage = 0;
+    body.snapPrev();
+    this.deps.events.emit('vehicle:wrecked', { vehicleId: body.id });
   }
 
   private processMatchEvents(): void {
@@ -214,6 +236,9 @@ export class Game {
       switch (e.type) {
         case 'pickup':
           this.deps.events.emit('contraband:pickup', { vehicleId: e.vehicle.id });
+          break;
+        case 'drop':
+          this.deps.events.emit('contraband:dropped', { vehicleId: e.vehicle.id });
           break;
         case 'steal':
           this.deps.events.emit('contraband:stolen', { attackerId: e.attacker.id, victimId: e.victim.id });
@@ -230,25 +255,39 @@ export class Game {
     }
   }
 
+  /** Where the player should be heading: their base when carrying, else the contraband. */
+  private playerTarget(player: VehicleActor): Vector3 {
+    const st = this.match.state;
+    return st.carrier ? st.bases[player.team] : st.contrabandPos;
+  }
+
+  /**
+   * Bearing from the player's heading to the target, radians clockwise from
+   * straight ahead. Sampled every frame by the direction arrow, so it is
+   * not part of the 10 Hz HUD snapshot.
+   */
+  targetBearing(): number {
+    const player = this.player;
+    if (!player) return 0;
+    _tmpV.copy(this.playerTarget(player)).sub(player.body.pos);
+    _tmpV.y = 0;
+    if (_tmpV.lengthSq() < 1) return 0;
+    _tmpV.normalize();
+    const fwd = player.body.forward(_tmpFwd);
+    fwd.y = 0;
+    fwd.normalize();
+    // ahead first: cross() below overwrites _tmpV with the cross product
+    const ahead = _tmpV.dot(fwd);
+    const right = _tmpV.cross(fwd).y;
+    return Math.atan2(right, ahead);
+  }
+
   private pushHud(): void {
     const player = this.player;
     if (!player) return;
     const st = this.match.state;
     const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
-    const target = st.carrier ? st.dropZonePos : st.contrabandPos;
-    // screen-space bearing to the target, relative to the player's heading
-    _tmpV.copy(target).sub(player.body.pos);
-    _tmpV.y = 0;
-    let bearing = 0;
-    if (_tmpV.lengthSq() > 1) {
-      _tmpV.normalize();
-      const fwd = player.body.forward();
-      fwd.y = 0;
-      fwd.normalize();
-      const right = _tmpV.cross(fwd).y;
-      const dot = _tmpV.dot(fwd);
-      bearing = Math.atan2(right, dot);
-    }
+    const target = this.playerTarget(player);
     this.deps.store.set({
       phase: this.winner !== null ? 'gameover' : 'playing',
       speed: player.body.speed,
@@ -259,9 +298,8 @@ export class Game {
       carrierIsPlayer: carrierActor?.isPlayer ?? false,
       carrierIsAlly: carrierActor ? carrierActor.team === player.team : false,
       objective: st.carrier ? 'DELIVER CONTRABAND' : 'FIND CONTRABAND',
-      distanceToTarget: player.body.pos.distanceTo(target),
+      distanceToTargetM: player.body.pos.distanceTo(target) / WORLD_M_PER_M,
       targetIsDelivery: st.carrier !== null,
-      targetBearingRad: bearing,
       locationLabel: this.terrain.label,
       winner: this.winner,
       teamPips: this.vehicles.map(a => ({ team: a.team, isPlayer: a.isPlayer }))

@@ -14,10 +14,9 @@ export interface HudSnapshot {
   readonly carrierIsPlayer: boolean;
   readonly carrierIsAlly: boolean;
   readonly objective: 'FIND CONTRABAND' | 'DELIVER CONTRABAND';
-  readonly distanceToTarget: number;
+  /** Real meters to the current target. */
+  readonly distanceToTargetM: number;
   readonly targetIsDelivery: boolean;
-  /** Screen-space bearing to the current target, radians clockwise from up. */
-  readonly targetBearingRad: number;
   readonly locationLabel: string;
   readonly winner: 0 | 1 | null;
   readonly teamPips: readonly { team: 0 | 1; isPlayer: boolean }[];

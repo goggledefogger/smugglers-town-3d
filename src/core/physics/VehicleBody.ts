@@ -76,6 +76,8 @@ export class VehicleBody {
   damage = 0;
   onGround = false;
   jumpHeld = false;
+  /** Last steer input, for the wheel visuals. */
+  steer = 0;
   /** Terrain height under the car after the last step (for the drop shadow). */
   groundY = 0;
   /** Pose before the last step; views interpolate between it and the current pose. */
@@ -131,11 +133,13 @@ export class VehicleBody {
       if (this.airTime < STEER_GRACE_S) this.applySteer(dt, input, up, this.vel.dot(fwd));
     }
     this.jumpHeld = input.jump;
+    this.steer = input.steer;
 
     this.integrateAngular(dt);
     this.integratePosition(dt, ground);
     this.resolveBuildings(buildings, carScale);
-    this.damage = Math.max(0, this.damage - 0.02 * dt);
+    // integrity heals slowly; a wreck (damage 1) stays a wreck until the game handles it
+    if (this.damage < 1) this.damage = Math.max(0, this.damage - 0.02 * dt);
     this.speed = this.vel.length();
   }
 
@@ -282,7 +286,7 @@ export class VehicleBody {
       // hard landing
       this.pos.y = target;
       const impact = -this.vel.y;
-      this.damage = Math.min(1, this.damage + impact * 0.004);
+      this.damage = Math.min(1, this.damage + impact * 0.004 / this.stats.durability);
       this.vel.y = impact * 0.18;
       // tumble on very hard landings — biased to pitch (forward flip)
       if (impact > 18) {
@@ -360,7 +364,7 @@ export class VehicleBody {
         this.vel.z -= 1.3 * vn * nz;
         const impact = Math.abs(vn);
         if (impact > 6) {
-          this.damage = Math.min(1, this.damage + impact * 0.01);
+          this.damage = Math.min(1, this.damage + impact * 0.01 / this.stats.durability);
           this.angVel.y += (Math.random() - 0.5) * impact * 0.04;
         }
       }

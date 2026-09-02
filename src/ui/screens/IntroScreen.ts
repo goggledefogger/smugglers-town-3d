@@ -28,8 +28,8 @@ export class IntroScreen extends LitElement {
   override render() {
     return html`
       <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
-      <p class="sub">Turf Wars — a single piece of contraband spawns on the map. Grab it, rush it to the green
-      smoke drop-off. Get rammed and it transfers to the attacker. First team to 5 deliveries wins.</p>
+      <p class="sub">Turf Wars — a single piece of contraband spawns on the map. Grab it, rush it back to
+      your crew's base. Get rammed and it transfers to the attacker. First team to 5 deliveries wins.</p>
       <div class="controls">
         <kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake/reverse ·
         <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump-boost<br>

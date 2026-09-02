@@ -8,20 +8,65 @@ const FLAT = new Heightfield(840, 1, new Float32Array([0, 0, 0, 0]));
 
 function makeMatch(bodies: VehicleBody[], teams: ReadonlyMap<number, 0 | 1>): MatchRules {
   const m = new MatchRules(DEFAULT_SCORING, bodies, teams, FLAT, 420);
+  m.placeBases();
   m.spawnContraband();
-  m.relocateDropZone();
   return m;
 }
 
 describe('MatchRules', () => {
-  it('never spawns contraband or the drop zone inside a building', () => {
+  it('never spawns contraband or a base inside a building', () => {
     const m = new MatchRules(DEFAULT_SCORING, [], new Map(), FLAT, 420, (x) => x > 0);
     for (let i = 0; i < 25; i++) {
+      m.placeBases();
       m.spawnContraband();
-      m.relocateDropZone();
       expect(m.state.contrabandPos.x).toBeLessThanOrEqual(0);
-      expect(m.state.dropZonePos.x).toBeLessThanOrEqual(0);
+      expect(m.state.bases[0].x).toBeLessThanOrEqual(0);
+      expect(m.state.bases[1].x).toBeLessThanOrEqual(0);
     }
+  });
+
+  it('places the bases far apart and keeps them put across deliveries', () => {
+    const a = new VehicleBody(VEHICLE_TYPES[2]!);
+    const m = makeMatch([a], new Map([[a.id, 0 as const]]));
+    const b0 = m.state.bases[0].clone();
+    const b1 = m.state.bases[1].clone();
+    expect(b0.distanceTo(b1)).toBeGreaterThan(420);
+    a.pos.copy(m.state.contrabandPos);
+    m.checkPickup(1);
+    a.pos.copy(m.state.bases[0]);
+    m.checkDelivery(1);
+    expect(m.state.scores[0]).toBe(1);
+    expect(m.state.bases[0].equals(b0)).toBe(true);
+    expect(m.state.bases[1].equals(b1)).toBe(true);
+    // the fresh contraband is nowhere near either base
+    expect(m.state.contrabandPos.distanceTo(b0)).toBeGreaterThan(DEFAULT_SCORING.spawnClearance);
+    expect(m.state.contrabandPos.distanceTo(b1)).toBeGreaterThan(DEFAULT_SCORING.spawnClearance);
+  });
+
+  it('drops the crate where a wrecked carrier died and respawns near its base', () => {
+    const a = new VehicleBody(VEHICLE_TYPES[2]!);
+    const m = makeMatch([a], new Map([[a.id, 0 as const]]));
+    a.pos.copy(m.state.contrabandPos);
+    m.checkPickup(1);
+    a.pos.set(50, 1, 50);
+    m.dropFrom(a);
+    expect(m.state.carrier).toBeNull();
+    expect(m.state.contrabandPos.x).toBeCloseTo(50, 6);
+    expect(m.state.contrabandPos.z).toBeCloseTo(50, 6);
+    expect(m.drainEvents().some(e => e.type === 'drop')).toBe(true);
+    const p = m.respawnPoint(0);
+    expect(Math.hypot(p.x - m.state.bases[0].x, p.z - m.state.bases[0].z)).toBeLessThan(80);
+  });
+
+  it('does not score at the enemy base', () => {
+    const a = new VehicleBody(VEHICLE_TYPES[2]!);
+    const m = makeMatch([a], new Map([[a.id, 0 as const]]));
+    a.pos.copy(m.state.contrabandPos);
+    m.checkPickup(1);
+    a.pos.copy(m.state.bases[1]);
+    m.checkDelivery(1);
+    expect(m.state.scores[0]).toBe(0);
+    expect(m.state.carrier).toBe(a);
   });
 
   it('picks up contraband when a vehicle is inside the radius', () => {
@@ -67,7 +112,7 @@ describe('MatchRules', () => {
     expect(m.state.carrier).toBe(a);
   });
 
-  it('same-team ram does not transfer', () => {
+  it('same-team ram transfers too', () => {
     const a = new VehicleBody(VEHICLE_TYPES[2]!);
     const b = new VehicleBody(VEHICLE_TYPES[2]!);
     const teams = new Map([[a.id, 0 as const], [b.id, 0 as const]]);
@@ -75,7 +120,8 @@ describe('MatchRules', () => {
     a.pos.copy(m.state.contrabandPos);
     m.checkPickup(1);
     m.onRam(a, b, 10);
-    expect(m.state.carrier).toBe(a);
+    expect(m.state.carrier).toBe(b);
+    expect(m.drainEvents().some(e => e.type === 'steal')).toBe(true);
   });
 
   it('delivers and scores for the carrying team', () => {
@@ -84,7 +130,7 @@ describe('MatchRules', () => {
     const m = makeMatch([a], teams);
     a.pos.copy(m.state.contrabandPos);
     m.checkPickup(1);
-    a.pos.copy(m.state.dropZonePos);
+    a.pos.copy(m.state.bases[0]);
     m.checkDelivery(1);
     expect(m.state.scores[0]).toBe(1);
     const evts = m.drainEvents();
@@ -99,7 +145,7 @@ describe('MatchRules', () => {
     for (let i = 0; i < DEFAULT_SCORING.scoreGoal; i++) {
       a.pos.copy(m.state.contrabandPos);
       m.checkPickup(1);
-      a.pos.copy(m.state.dropZonePos);
+      a.pos.copy(m.state.bases[0]);
       m.checkDelivery(1);
     }
     expect(m.state.winner).toBe(0);

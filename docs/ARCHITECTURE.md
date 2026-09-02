@@ -97,7 +97,16 @@ bilinear interpolation, because bilinear's slope kinks at every grid edge hit
 the car as a jolt several times a second at speed.
 
 Brake past a stop becomes reverse (35 % of top speed) with the steering
-flipped so the rear swings the way you steer. Spawns use the most open spot
+flipped so the rear swings the way you steer. Damage from landings, walls
+and rams is divided by the vehicle's `durability`; at integrity 0 the body
+stays wrecked until `Game.wreck` drops its crate and respawns it. Physics
+tuning enters through `app/config.physics` (plus the field size); the
+`DEFAULT_PHYSICS` in the module exists for tests.
+
+### `core/ai/DriverBrain.ts`
+Bots have no pathfinding. A stuck detector (full throttle but crawling for
+0.8 s while grounded) triggers a 0.9 s reverse with a random steer, which is
+what gets them off building walls. Spawns use the most open spot
 near the field center (`Game.findOpenCenter`) and contraband / drop-zone
 placement requires clear ground around the point, so a downtown start never
 wedges anyone between towers.
@@ -109,8 +118,11 @@ ram-to-steal rule itself lives in `MatchRules.onRam` via callback — physics
 just reports contacts.
 
 ### `core/gameplay/MatchRules.ts`
-Contraband pickup, transfer-on-ram (cross-team, 0.6 s cooldown), delivery
-scoring, win-at-5, respawn of contraband + drop zone. Emits typed
+Contraband pickup, transfer-on-ram (any contact, teammates included, 0.6 s
+cooldown), drop-on-wreck (the crate falls where the carrier died and the car
+respawns just inside its own base), delivery
+scoring at the carrier's own team base (two bases, placed on opposite sides
+of the field once per match), win-at-5, respawn of contraband. Emits typed
 `MatchEvent`s drained once per step by `Game`.
 
 ### `core/ai/DriverBrain.ts`
@@ -171,6 +183,7 @@ too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
 640 m) and swaps it for its children, one swap at a time, up to a tile cap.
 There is no coarsening — evict far tiles first if memory ever bites.
 
+### `services/tiles/tileColliders.ts`
 A tile is one merged photogrammetry mesh, so per-mesh bounds say nothing
 about buildings. Each tile is rasterized once (`rasterizeTile`): every
 triangle's top is stamped into a 10 m height grid over its footprint.
@@ -191,6 +204,17 @@ ground against the terrain over the field core after the initial load and
 the streamer shifts the whole group so the tile ground sits
 `TILE_GROUND_GAP` under the satellite drape, which then covers the
 photogrammetry ground instead of z-fighting with it.
+
+## Render notes
+
+`VehicleView` keeps the world position on its group and rotates the car body
+inside it, so the health bar and blob shadow stay upright. The body's pose is
+interpolated between sim steps; a cosmetic pitch/roll from the terrain under
+the wheels is added on top. Wheels sit in pivots (the front pair steer with
+the input) and spin on their axle with forward speed; wheel radius scales
+with the type's mass and the roll bar carries the type's accent color.
+
+Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
 
 ## Extension points
 

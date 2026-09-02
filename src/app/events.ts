@@ -5,6 +5,10 @@ export interface GameEventMap {
   'contraband:pickup': { vehicleId: number };
   'contraband:stolen': { attackerId: number; victimId: number };
   'contraband:delivered': { team: 0 | 1 };
+  /** The carrier wrecked; the crate is loose where it died. */
+  'contraband:dropped': { vehicleId: number };
+  /** Integrity hit zero; the car respawned near its base. */
+  'vehicle:wrecked': { vehicleId: number };
   'match:win': { team: 0 | 1 };
   'location:changed': { label: string; isReal: boolean };
 }

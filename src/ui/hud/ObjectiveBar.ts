@@ -22,7 +22,7 @@ export class ObjectiveBar extends HudComponent {
       <div class="panel">
         <div class="obj ${delivering ? 'deliver' : 'find'}">${s?.objective ?? ''}</div>
         <div class="carrier">${carrierText}</div>
-        <div class="carrier">Distance: ${Math.round(s?.distanceToTarget ?? 0)}m</div>
+        <div class="carrier">Distance: ${Math.round(s?.distanceToTargetM ?? 0)} m</div>
       </div>
     `;
   }

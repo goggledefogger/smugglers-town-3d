@@ -57,7 +57,7 @@ export function resolveVehicleCollisions(
               (Math.random() - 0.5) * 4
             )
           );
-          light.damage = Math.min(1, light.damage + rel * 0.01);
+          light.damage = Math.min(1, light.damage + rel * 0.01 / light.stats.durability);
         }
       }
       onRam(a, b);

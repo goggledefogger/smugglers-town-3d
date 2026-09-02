@@ -15,7 +15,7 @@ import {
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
 
-const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
+export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
@@ -36,6 +36,9 @@ export class VehicleView {
   private readonly barTexture: CanvasTexture;
   private readonly shadow: Mesh<CircleGeometry, MeshBasicMaterial>;
   private readonly team: number;
+  private readonly wheels: Mesh[] = [];
+  private readonly frontPivots: Group[] = [];
+  private readonly wheelR: number;
   private pitch = 0;
   private roll = 0;
   private readonly _tilt = new Quaternion();
@@ -48,39 +51,44 @@ export class VehicleView {
     private readonly ground: () => Heightfield
   ) {
     const teamColor = actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1];
+    const stats = actor.body.stats;
+    // heavier types ride on bigger wheels; the roll bar carries the type's accent color
+    this.wheelR = MathUtils.clamp(0.45 + 0.28 * (stats.mass - 0.9), 0.4, 0.8);
+    const wheelR = this.wheelR;
     const g = new Group();
     // body
     const bodyMesh = new Mesh(
       new BoxGeometry(2.2, 1, 4),
       new MeshStandardMaterial({ color: teamColor, roughness: 0.6, metalness: 0.3 })
     );
-    bodyMesh.position.y = 1.1;
+    bodyMesh.position.y = wheelR + 0.4;
     g.add(bodyMesh);
     // cabin
     const cab = new Mesh(
       new BoxGeometry(1.8, 0.7, 2),
       new MeshLambertMaterial({ color: 0x222831 })
     );
-    cab.position.set(0, 1.7, -0.2);
+    cab.position.set(0, wheelR + 1.0, -0.2);
     g.add(cab);
-    // wheels
-    const wheelGeo = new CylinderGeometry(0.7, 0.7, 0.5, 12);
+    // wheels: each in a pivot so the front pair can steer; the mesh spins on its axle
+    const wheelGeo = new CylinderGeometry(wheelR, wheelR, 0.5, 12);
     const wheelMat = new MeshLambertMaterial({ color: 0x111111 });
-    const wp = [
-      [0.95, 0.7, 1.3], [-0.95, 0.7, 1.3], [0.95, 0.7, -1.3], [-0.95, 0.7, -1.3]
-    ] as const;
-    for (const [x, y, z] of wp) {
+    for (const [x, z] of [[0.95, 1.3], [-0.95, 1.3], [0.95, -1.3], [-0.95, -1.3]] as const) {
+      const pivot = new Group();
+      pivot.position.set(x, wheelR, z);
       const w = new Mesh(wheelGeo, wheelMat);
       w.rotation.z = Math.PI / 2;
-      w.position.set(x, y, z);
-      g.add(w);
+      pivot.add(w);
+      g.add(pivot);
+      this.wheels.push(w);
+      if (z < 0) this.frontPivots.push(pivot); // forward is -z
     }
     // roll bar
     const bar = new Mesh(
       new BoxGeometry(2.4, 0.2, 0.2),
-      new MeshLambertMaterial({ color: 0x444444 })
+      new MeshLambertMaterial({ color: stats.color })
     );
-    bar.position.set(0, 1.4, 2);
+    bar.position.set(0, wheelR + 0.7, 2);
     g.add(bar);
     this.carRoot.add(g);
     this.group.add(this.carRoot);
@@ -148,6 +156,12 @@ export class VehicleView {
     this.roll += (MathUtils.clamp(Math.atan2(hR - hL, TRACK), -MAX_TILT, MAX_TILT) * grounded - this.roll) * k;
     this._tilt.setFromEuler(this._euler.set(this.pitch, 0, this.roll));
     this.carRoot.quaternion.copy(quat).multiply(this._tilt);
+
+    // wheels roll with forward speed (the mesh's local Y is the axle after
+    // its 90° tilt) and the front pair steer with the input
+    const spin = (body.vel.dot(f) * dt) / this.wheelR;
+    for (const w of this.wheels) w.rotateY(spin);
+    for (const p of this.frontPivots) p.rotation.y = body.steer * 0.45;
 
     this.shadow.position.y = body.groundY - this.group.position.y + 0.15;
     this.shadow.material.opacity = MathUtils.clamp(height * 0.15, 0, 0.45);

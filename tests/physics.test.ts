@@ -73,6 +73,18 @@ describe('VehicleBody.step', () => {
     expect(up.y).toBeGreaterThan(0.7);
   });
 
+  it('scales landing damage by durability', () => {
+    const buggy = makeBody(0);   // durability 0.55
+    const monster = makeBody(4); // durability 1.5
+    for (const v of [buggy, monster]) {
+      v.pos.set(0, 20, 0);
+      v.vel.y = -40;
+      run(v, NO_INPUT, 0.5);
+    }
+    expect(monster.damage).toBeGreaterThan(0);
+    expect(buggy.damage).toBeGreaterThan(monster.damage * 2);
+  });
+
   it('applies landing damage on hard impacts', () => {
     const v = makeBody();
     v.pos.set(0, 20, 0);

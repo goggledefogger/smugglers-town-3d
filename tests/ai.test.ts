@@ -17,7 +17,7 @@ function makeMatchState(carrier: VehicleBody | null): MatchState {
     scores: { 0: 0, 1: 0 },
     carrier,
     contrabandPos: new Vector3(100, 3, 0),
-    dropZonePos: new Vector3(-100, 0, 0),
+    bases: { 0: new Vector3(-100, 0, 0), 1: new Vector3(100, 0, 0) },
     winner: null
   };
 }
@@ -52,13 +52,25 @@ describe('DriverBrain', () => {
     expect(brain.input().throttle).toBeGreaterThan(0);
   });
 
-  it('delivers when self carries — drives toward the drop zone', () => {
+  it('delivers when self carries — drives toward its own base', () => {
+    // facing -z; own base (team 1) is at +x, so the turn is to the right (negative steer)
     const self = makeBody(0, 0);
-    const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
+    const brain = new DriverBrain(DEFAULT_DRIVER, () => 1);
     brain.think(1, self, makeMatchState(self));
     const input = brain.input();
     expect(input.throttle).toBeGreaterThan(0);
-    expect(Math.abs(input.steer)).toBeLessThanOrEqual(1);
+    expect(input.steer).toBeLessThan(0);
+  });
+
+  it('reverses out after being wedged at full throttle', () => {
+    const self = makeBody(0, 0);
+    self.onGround = true; // speed stays 0: wedged against something
+    const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
+    const state = makeMatchState(null);
+    for (let i = 0; i < 12; i++) brain.think(0.1, self, state);
+    const input = brain.input();
+    expect(input.brake).toBe(1);
+    expect(input.throttle).toBe(0);
   });
 
   it('clamps steering to [-1, 1] however sharp the turn', () => {
