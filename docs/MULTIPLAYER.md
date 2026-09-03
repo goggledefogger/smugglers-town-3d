@@ -52,8 +52,10 @@ steer, jump, pitch, plus a sequence number so the host ignores stale packets.
 
 **Snapshot** (host to all, 20 Hz, unreliable). Per body: position, orientation,
 velocity, damage, on-ground. Per match: phase, clock, scores, carrier, crate
-position. Eight bodies is about 400 bytes as JSON, 8 KB/s per client.
-JSON first, measure, then binary if it matters.
+position. Measured: eight bodies is ~790 bytes as JSON, so ~16 KB/s per
+client at 20 Hz and ~110 KB/s upstream from a host with seven guests.
+Fine for a friends match on broadband; binary packets are the version 2
+item if a host's uplink turns out to be the bottleneck.
 
 **Event** (host to all, reliable). Pickup, delivery, steal, wreck, respawn,
 countdown tick, round over. These drive the HUD and audio once each, and must
