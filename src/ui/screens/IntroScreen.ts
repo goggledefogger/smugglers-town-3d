@@ -1,5 +1,6 @@
 import { html, css, LitElement } from 'lit';
 import { VEHICLE_TYPES, type VehicleStats } from '../../core/physics/vehicleStats.ts';
+import { isTypingInField } from '../controls.ts';
 
 /**
  * The garage: title, the roster to pick from, stats for the pick, and the
@@ -83,7 +84,7 @@ export class IntroScreen extends LitElement {
   onSelect?: (typeIdx: number) => void;
 
   private readonly onKey = (e: KeyboardEvent): void => {
-    if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) return;
+    if (isTypingInField()) return;
     if (e.code === 'ArrowDown' || e.code === 'ArrowRight') this.select(this.selected + 1);
     else if (e.code === 'ArrowUp' || e.code === 'ArrowLeft') this.select(this.selected - 1);
     else if (e.code.startsWith('Digit')) {

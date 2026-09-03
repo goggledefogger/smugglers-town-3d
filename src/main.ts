@@ -27,8 +27,10 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
-import { KeyboardState } from './ui/controls.ts';
-import { relocate } from './services/relocate.ts';
+import { KeyboardState, isTypingInField } from './ui/controls.ts';
+import { logger } from './app/log.ts';
+import { PROTOCOL_VERSION } from './net/protocol.ts';
+import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
@@ -170,7 +172,7 @@ pickups.setVisible(false);
 const keyboard = new KeyboardState();
 
 window.addEventListener('keydown', (e) => {
-  if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) return;
+  if (isTypingInField()) return;
   if (introEl.isConnected) return; // the garage owns the keys until the match starts
   if (e.code === 'KeyR') resetPlayer();
   if (e.code === 'KeyC') cameraRig.cycleMode();
