@@ -9,6 +9,11 @@ import type { Pose } from './VehicleView.ts';
 
 export type CameraMode = 0 | 1 | 2;
 
+/** The chase camera never comes closer than this fraction of its full distance... */
+const MIN_CHASE_FRAC = 0.3;
+/** ...and looks down from this high when even that is inside a building. */
+const CLIMB_ABOVE = 12;
+
 export class CameraRig {
   mode: CameraMode = 0;
   zoom = 1;
@@ -20,7 +25,9 @@ export class CameraRig {
 
   constructor(
     private readonly camera: PerspectiveCamera,
-    private readonly ground: () => Heightfield
+    private readonly ground: () => Heightfield,
+    /** Clear fraction of a segment through the buildings; see Game.lineOfSight. */
+    private readonly lineOfSight: (from: Vector3, to: Vector3) => number = () => 1
   ) {}
 
   cycleMode(): void {
@@ -59,10 +66,19 @@ export class CameraRig {
       this.lookY = null;
       return;
     }
+    this._look.copy(player.pos).add(new Vector3(0, 2, 0));
+    // a chase camera 14 units back is inside the block behind the car in
+    // any downtown: pull it in along the line to the car until the view is
+    // clear, and if even close in is blocked, climb instead
+    const clear = this.lineOfSight(this._look, this._desired);
+    if (clear < 1) {
+      const frac = Math.max(clear, MIN_CHASE_FRAC);
+      this._desired.sub(this._look).multiplyScalar(frac).add(this._look);
+      if (clear < MIN_CHASE_FRAC) this._desired.y = this._look.y + CLIMB_ABOVE;
+    }
     // tighter lerp at high zoom so the wider view stays settled
     const lerpK = 1 - Math.pow(0.001 / (1 + z * 0.15), dt);
     this.camera.position.lerp(this._desired, lerpK);
-    this._look.copy(player.pos).add(new Vector3(0, 2, 0));
     // track the car tightly in the plane but low-pass its height (~0.12 s):
     // every terrain bump the car rides would otherwise shake the whole view
     this.lookY = this.lookY === null ? this._look.y : this.lookY + (this._look.y - this.lookY) * (1 - Math.exp(-dt * 8));

@@ -106,9 +106,12 @@ export class VehicleBody {
   constructor(
     stats: VehicleStats,
     cfg: VehiclePhysicsConfig = DEFAULT_PHYSICS,
-    private readonly rng: Rng = Math.random
+    private readonly rng: Rng = Math.random,
+    id?: number
   ) {
-    this.id = VehicleBody.nextId++;
+    // a mirrored body keeps the host's id so events name the same car everywhere
+    this.id = id ?? VehicleBody.nextId++;
+    if (id !== undefined) VehicleBody.nextId = Math.max(VehicleBody.nextId, id + 1);
     this.stats = stats;
     this.cfg = cfg;
   }

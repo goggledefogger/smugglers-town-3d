@@ -3,7 +3,7 @@ import { Vector3, Quaternion } from 'three';
 import { VehicleBody, type BuildingCollider } from '../src/core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../src/core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../src/core/physics/vehicleCollisions.ts';
-import { sphereVsAabb, compoundVsCompound, capsuleCollider, sphereCollider, type Contact } from '../src/core/physics/collision.ts';
+import { sphereVsAabb, compoundVsCompound, capsuleCollider, sphereCollider, segmentVsAabb, type Contact } from '../src/core/physics/collision.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 import type { VehicleInput } from '../src/core/physics/vehicleStats.ts';
 
@@ -119,5 +119,22 @@ describe('building AABB resolution', () => {
     v.pos.set(0, 1, -10 + SUV_R + half - 0.3); // centre clear, nose overlapping
     v.step(1 / 60, NO_INPUT, FLAT, [wall]);
     expect(v.pos.z).toBeGreaterThan(-10 + SUV_R + half - 0.05);
+  });
+});
+
+describe('segmentVsAabb', () => {
+  const min = new Vector3(10, 0, -5), max = new Vector3(20, 30, 5);
+  it('finds where a segment enters a box, padded', () => {
+    const t = segmentVsAabb(new Vector3(0, 1, 0), new Vector3(40, 1, 0), min, max);
+    expect(t).toBeCloseTo(0.25, 6);
+    expect(segmentVsAabb(new Vector3(0, 1, 0), new Vector3(40, 1, 0), min, max, 2)).toBeCloseTo(0.2, 6);
+  });
+  it('misses a segment that passes beside or above it', () => {
+    expect(segmentVsAabb(new Vector3(0, 1, 10), new Vector3(40, 1, 10), min, max)).toBe(Infinity);
+    expect(segmentVsAabb(new Vector3(0, 40, 0), new Vector3(40, 40, 0), min, max)).toBe(Infinity);
+    expect(segmentVsAabb(new Vector3(0, 1, 0), new Vector3(5, 1, 0), min, max)).toBe(Infinity);
+  });
+  it('reports 0 for a segment that starts inside', () => {
+    expect(segmentVsAabb(new Vector3(15, 1, 0), new Vector3(40, 1, 0), min, max)).toBe(0);
   });
 });

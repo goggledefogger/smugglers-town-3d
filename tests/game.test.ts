@@ -153,3 +153,58 @@ describe('spawn drop', () => {
     }
   });
 });
+
+describe('Game seats', () => {
+  it('drives a remote seat from its latest input and gives it no brain', () => {
+    const terrain = createDesertTerrain(new Heightfield(840, 1, new Float32Array([0, 0, 0, 0])));
+    const events = new EventBus<GameEventMap>();
+    const game = new Game(terrain, { events, store: createStore<HudSnapshot>({} as HudSnapshot), round: NO_COUNTDOWN, seed: 5 });
+    game.reset(terrain, [
+      { name: '', team: 0, vehicle: 2, control: 'local' },
+      { name: 'Ada', team: 1, vehicle: 0, control: 'uid-ada' },
+      { name: '', team: 1, vehicle: null, control: 'bot' }
+    ]);
+    const ada = game.vehicles.find(a => a.control === 'uid-ada')!;
+    expect(ada.brain).toBeNull();
+    expect(ada.label).toBe('Ada');
+    expect(ada.isPlayer).toBe(false);
+    expect(game.vehicles.find(a => a.control === 'bot')!.brain).not.toBeNull();
+    // judge by ground travel: the car is still dropping in
+    const before = ada.body.pos.clone();
+    const travelled = (): number => Math.hypot(ada.body.pos.x - before.x, ada.body.pos.z - before.z);
+    for (let t = 0; t < 0.5; t += 0.02) game.update(0.02, NEUTRAL);
+    expect(travelled()).toBeLessThan(1);
+    game.setRemoteInput('uid-ada', { ...NEUTRAL, throttle: 1 });
+    for (let t = 0; t < 1; t += 0.02) game.update(0.02, NEUTRAL);
+    expect(travelled()).toBeGreaterThan(5);
+    expect(game.tick).toBeGreaterThan(80);
+  });
+
+  it('seeds the same seats into the same layout', () => {
+    const terrain = createDesertTerrain(new Heightfield(840, 1, new Float32Array([0, 0, 0, 0])));
+    const mk = (): Game => {
+      const g = new Game(terrain, { events: new EventBus<GameEventMap>(), store: createStore<HudSnapshot>({} as HudSnapshot), round: NO_COUNTDOWN, seed: 42 });
+      g.reset(terrain);
+      return g;
+    };
+    const a = mk(), b = mk();
+    expect(a.vehicles.map(v => [v.body.pos.x, v.body.pos.z, v.body.stats.name]))
+      .toEqual(b.vehicles.map(v => [v.body.pos.x, v.body.pos.z, v.body.stats.name]));
+    expect(a.state.bases[0].x).toBe(b.state.bases[0].x);
+  });
+});
+
+describe('Game line of sight', () => {
+  it('measures how much of a camera segment is clear of buildings, ignoring props', () => {
+    const { game } = makeGame();
+    game.setBuildingColliders([
+      { min: new Vector3(-20, 0, 10), max: new Vector3(20, 20, 30) },
+      { min: new Vector3(-1, 0, 4), max: new Vector3(1, 3, 6), kind: 'prop' }
+    ]);
+    const car = new Vector3(0, 2, 0);
+    expect(game.lineOfSight(car, new Vector3(0, 6, -14))).toBe(1);
+    const t = game.lineOfSight(car, new Vector3(0, 6, 14));
+    expect(t).toBeGreaterThan(0.5);
+    expect(t).toBeLessThan(0.72);
+  });
+});

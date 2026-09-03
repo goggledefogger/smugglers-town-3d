@@ -137,3 +137,27 @@ export function compoundVsCompound(
   }
   return deepest;
 }
+
+/**
+ * Where a segment from `a` to `b` first enters a box grown by `pad` on every
+ * side: the fraction along the segment in [0, 1], or Infinity when it never
+ * does. Slab test; a segment starting inside the box hits at 0.
+ */
+export function segmentVsAabb(a: Vector3, b: Vector3, min: Vector3, max: Vector3, pad = 0): number {
+  let t0 = 0, t1 = 1;
+  const axes = ['x', 'y', 'z'] as const;
+  for (const k of axes) {
+    const lo = min[k] - pad, hi = max[k] + pad;
+    const d = b[k] - a[k];
+    if (Math.abs(d) < 1e-9) {
+      if (a[k] < lo || a[k] > hi) return Infinity;
+      continue;
+    }
+    let tn = (lo - a[k]) / d, tf = (hi - a[k]) / d;
+    if (tn > tf) [tn, tf] = [tf, tn];
+    if (tn > t0) t0 = tn;
+    if (tf < t1) t1 = tf;
+    if (t0 > t1) return Infinity;
+  }
+  return t0;
+}

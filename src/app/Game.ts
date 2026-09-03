@@ -14,6 +14,7 @@ import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
 import { VehicleBody, type BuildingCollider, type VehiclePhysicsConfig } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../core/physics/vehicleCollisions.ts';
+import { segmentVsAabb } from '../core/physics/collision.ts';
 import { MatchRules } from '../core/gameplay/MatchRules.ts';
 import { DriverBrain, type RouteFn } from '../core/ai/DriverBrain.ts';
 import { NavGrid, type FlowField } from '../core/world/NavGrid.ts';
@@ -24,12 +25,26 @@ import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { GameEvents } from './events.ts';
 import type { HudSnapshot, Store } from './store.ts';
 
+/** Who drives an actor: the keyboard here, a bot, or a remote player's uid. */
+export type Control = 'local' | 'bot' | string;
+
 export interface VehicleActor {
   readonly body: VehicleBody;
   readonly team: 0 | 1;
+  /** The local human's car; the camera, HUD and keyboard follow it. */
   readonly isPlayer: boolean;
   readonly label: string;
+  readonly control: Control;
   brain: DriverBrain | null;
+}
+
+/** One seat in a match; the host builds the list from the lobby, single player from config. */
+export interface Seat {
+  readonly name: string;
+  readonly team: 0 | 1;
+  /** Roster index into VEHICLE_TYPES; bots draw one from the seed when null. */
+  readonly vehicle: number | null;
+  readonly control: Control;
 }
 
 export interface RoundConfig {
@@ -57,6 +72,8 @@ const BROAD_CELL = 40;
 const cellKey = (i: number, j: number): number => (i + 2048) * 4096 + (j + 2048);
 /** Landing damage and tumbles are off for this long after a spawn or respawn. */
 const SPAWN_GRACE_S = 2;
+/** The camera keeps this much clearance from building faces. */
+const CAMERA_PAD = 1.2;
 /** The one place physics tuning enters the sim: app/config, with the field size folded in. */
 const PHYSICS: VehiclePhysicsConfig = { ...config.physics, worldHalf: config.world.mapHalf };
 
@@ -96,6 +113,10 @@ export class Game {
   private readonly _wp = new Vector3();
   /** Roster index the player drives at the next spawn (garage choice); persists across rematches. */
   playerType = 2;
+  /** Latest input from each remote driver, by uid; applied every step until replaced. */
+  private readonly remoteInputs = new Map<string, VehicleInput>();
+  /** Sim steps since the match started; the host stamps snapshots with it. */
+  private tickCount = 0;
 
   constructor(
     private terrain: TerrainProvider,
@@ -132,8 +153,10 @@ export class Game {
   };
 
   /** Full reset for a new match (new terrain or rematch). Set colliders first so spawns avoid them. */
-  reset(terrain: TerrainProvider): void {
+  reset(terrain: TerrainProvider, seats: readonly Seat[] = this.defaultSeats()): void {
     this.terrain = terrain;
+    this.tickCount = 0;
+    this.remoteInputs.clear();
     this.match = new MatchRules(config.scoring, this.bodies, this.teams, terrain.heightfield, this.spawn);
     this.winner = null;
     this.timeS = 0;
@@ -149,21 +172,29 @@ export class Game {
     this.vehicles.length = 0;
     this.bodies.length = 0;
     this.teams.clear();
-    this.spawnAllVehicles();
+    this.spawnAllVehicles(seats);
     this.match.placeBases();
     this.match.spawnContraband();
   }
 
-  private spawnAllVehicles(): void {
+  /** Single player: the garage pick in seat 0, bots in the rest, teams split down the middle. */
+  private defaultSeats(): Seat[] {
     const total = config.match.teamSize * 2;
+    return Array.from({ length: total }, (_, i) => ({
+      name: '',
+      team: i < config.match.teamSize ? 0 : 1,
+      vehicle: i === 0 ? this.playerType : null,
+      control: i === 0 ? 'local' : 'bot'
+    }));
+  }
+
+  private spawnAllVehicles(seats: readonly Seat[]): void {
     const hf = this.terrain.heightfield;
-    const teamOf = (i: number): 0 | 1 => (i < config.match.teamSize ? 0 : 1);
     // one planner call for every driver, human and AI alike
-    const points = this.spawn.matchSpawns(total, teamOf);
-    for (let i = 0; i < total; i++) {
-      const team = teamOf(i);
-      const isPlayer = i === 0;
-      const typeIdx = isPlayer ? this.playerType : this.pickVehicleType();
+    const points = this.spawn.matchSpawns(seats.length, i => seats[i]!.team);
+    seats.forEach((seat, i) => {
+      const isPlayer = seat.control === 'local';
+      const typeIdx = seat.vehicle ?? this.pickVehicleType();
       const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS, this.rng);
       const at = points[i]!;
       // released above the ground: the drop settles during the countdown
@@ -171,16 +202,44 @@ export class Game {
       body.quat.setFromAxisAngle(UP, at.yaw);
       body.graceS = SPAWN_GRACE_S;
       body.snapPrev();
-      this.teams.set(body.id, team);
+      this.teams.set(body.id, seat.team);
       this.bodies.push(body);
       this.vehicles.push({
         body,
-        team,
+        team: seat.team,
         isPlayer,
-        label: isPlayer ? 'YOU' : VEHICLE_TYPES[typeIdx]!.name,
-        brain: isPlayer ? null : new DriverBrain(config.ai, v => this.teams.get(v.id) ?? 0, this.rng)
+        label: isPlayer ? 'YOU' : seat.name || VEHICLE_TYPES[typeIdx]!.name,
+        control: seat.control,
+        brain: seat.control === 'bot'
+          ? new DriverBrain(config.ai, v => this.teams.get(v.id) ?? 0, this.rng)
+          : null
       });
-    }
+    });
+  }
+
+  /** A remote driver's latest input; the host applies it every step until the next arrives. */
+  setRemoteInput(uid: string, input: VehicleInput): void {
+    this.remoteInputs.set(uid, input);
+  }
+
+  bodyById(id: number): VehicleBody | undefined {
+    return this.vehicles.find(a => a.body.id === id)?.body;
+  }
+
+  get tick(): number {
+    return this.tickCount;
+  }
+
+  get time(): number {
+    return this.timeS;
+  }
+
+  get timeLeft(): number {
+    return this.timeLeftS;
+  }
+
+  get matchWinner(): 0 | 1 | null {
+    return this.winner;
   }
 
   /** Bot vehicle mix, drawn from the match seed. */
@@ -228,6 +287,24 @@ export class Game {
     }
   }
 
+  /**
+   * Fraction of the segment from `from` to `to` that is clear of buildings
+   * (1 = all of it). The chase camera uses it to pull in rather than sit
+   * inside the block behind the car; props are ignored so a cactus between
+   * camera and car does not snap the view
+   */
+  lineOfSight(from: Vector3, to: Vector3): number {
+    let best = 1;
+    for (const p of [from, to]) {
+      for (const box of this.collidersNear(p)) {
+        if (box.kind === 'prop') continue;
+        const t = segmentVsAabb(from, to, box.min, box.max, CAMERA_PAD);
+        if (t < best) best = t;
+      }
+    }
+    return best;
+  }
+
   /** Colliders that could touch a car at p: its cell and the eight around it. Reuses one scratch array. */
   private collidersNear(p: Vector3): readonly BuildingCollider[] {
     const out = this._near;
@@ -273,6 +350,7 @@ export class Game {
       team: player.team,
       isPlayer: true,
       label: 'YOU',
+      control: 'local',
       brain: null
     };
   }
@@ -297,6 +375,7 @@ export class Game {
   }
 
   private stepSim(dt: number, playerInput: VehicleInput | null): void {
+    this.tickCount++;
     if (this.phase === 'countdown') {
       this.stepCountdown(dt);
       return;
@@ -306,11 +385,13 @@ export class Game {
     if (this.phase === 'gameover') return;
     for (const actor of this.vehicles) {
       let input: VehicleInput;
-      if (actor.isPlayer) {
+      if (actor.brain) {
+        actor.brain.think(dt, actor.body, this.match.state, this.route);
+        input = actor.brain.input();
+      } else if (actor.control === 'local') {
         input = playerInput ?? NEUTRAL_INPUT;
       } else {
-        actor.brain!.think(dt, actor.body, this.match.state, this.route);
-        input = actor.brain!.input();
+        input = this.remoteInputs.get(actor.control) ?? NEUTRAL_INPUT;
       }
       actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos));
     }

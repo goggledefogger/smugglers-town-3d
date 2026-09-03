@@ -33,7 +33,7 @@ export class Showroom {
     body.groundY = gh;
     body.snapPrev();
     this.body = body;
-    this.view = new VehicleView({ body, team: 0, isPlayer: true, label: 'YOU', brain: null }, this.ground);
+    this.view = new VehicleView({ body, team: 0, isPlayer: true, label: 'YOU', control: 'local', brain: null }, this.ground);
     this.view.setHealthBarVisible(false);
     this.scene.add(this.view.group);
   }

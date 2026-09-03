@@ -96,7 +96,9 @@ const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
 const pickups = new Pickups(renderer.scene);
-const cameraRig = new CameraRig(renderer.camera, () => game.terrainProvider.heightfield);
+const cameraRig = new CameraRig(
+  renderer.camera, () => game.terrainProvider.heightfield, (a, b) => game.lineOfSight(a, b)
+);
 const minimap = new Minimap(minimapCanvas, config.world.mapHalf);
 const showroom = new Showroom(renderer.scene, renderer.camera, () => game.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
