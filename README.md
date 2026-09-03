@@ -1,52 +1,35 @@
 # Smugglers Town 3D: Turf Wars
 
-A 4v4 arcade vehicle combat game — a single piece of contraband spawns on the
-map. Grab it, rush it back to your crew's base (each team has one, fixed for
-the match). Get rammed and it transfers to the attacker. First team to
-**5 deliveries** wins, or whoever leads when the **5-minute** clock runs
-out; a tie goes to sudden death.
+Eight cars, one crate, two bases. Grab the contraband and get it back to your
+crew's base. Ram the carrier and it's yours. First team to five deliveries
+wins, or whoever leads when the five-minute clock runs out.
 
-Plays instantly on a procedural desert. With a Google Maps API key (Maps
-JavaScript + Elevation + Static Maps + Photorealistic 3D Tiles), relocate the
-match to any place on Earth — real terrain, satellite imagery, and collidable
-photorealistic buildings streamed from Google's 3D Tiles.
+It starts on a procedural desert, no setup needed. Add a Google Maps API key
+and you can move the match to anywhere on Earth: real elevation, satellite
+imagery, and photorealistic buildings you crash into.
 
-## Quickstart
+## Play
 
 ```bash
 npm install
 npm run dev        # → http://localhost:5173
 ```
 
-| Script | What it does |
-|---|---|
-| `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (82 tests, node env) |
-| `npm run test:watch` | Tests in watch mode |
-| `npm run typecheck` | `tsc --noEmit` (strict) |
-| `npm run build` | Typecheck + production build to `dist/` |
-| `npm run deploy` | Build + deploy to Firebase Hosting |
-| `npm run serve` | Build + serve the bundle on the hosting emulator (:5000) |
-
-## Controls
+Pick a ride in the garage, then drive.
 
 | Key | Action |
 |---|---|
-| `W` / `↑` | Accelerate |
-| `S` / `↓` | Brake / reverse |
-| `A` `D` / `←` `→` | Steer |
-| `Space` | Jump-boost (dune launch) |
-| `R` | Reset car to a nearby spot |
-| `C` | Cycle camera (chase / far / hood) |
-| `1`–`5` | Switch vehicle (Buggy, Rally, SUV, Trophy, Monster) |
+| `W` `S` or `↑` `↓` | Accelerate, brake, reverse |
+| `A` `D` or `←` `→` | Steer |
+| `Space` | Jump |
+| `R` | Reset your car nearby |
+| `C` | Camera: chase, wide, hood |
+| `1`–`5` | Change vehicle mid-match |
 
-Keys typed into a text field (search box, API key) never reach the game.
+In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` starts.
+Typing in the search box never leaks into the game.
 
-The game opens in the garage: pick a ride from the roster (`↑`/`↓` or `1`–`5`,
-`Enter` or **START ENGINE** to go). The selected vehicle turns on a 3D
-showroom stand with its stats alongside, and the choice sticks for rematches.
-
-## Vehicle roster
+## The roster
 
 | Vehicle | Mass | Accel | Top speed | Durability | Grip |
 |---|---|---|---|---|---|
@@ -56,73 +39,56 @@ showroom stand with its stats alongside, and the choice sticks for rematches.
 | Trophy Truck | 1.3 | 1.1× | 1.05× | 0.90 | 0.95 |
 | Monster Truck | 2.0 | 0.75× | 0.85× | 1.50 | 1.20 |
 
-Heavier vehicles dominate rams; lighter ones out-handle them. Any ram steals
-the contraband, teammates included, with a 0.6 s cooldown between transfers.
-Landings, walls and rams cost integrity (divided by durability); at zero you
-wreck, the crate drops where you died, and you respawn just inside your base.
+Every number does something. Heavy cars win rams and shrug off damage. Light
+ones accelerate and turn better. The Rally Car is the fastest thing on the
+map and will slide off a corner if you ask too much of it.
 
-Where this is headed: [`docs/ROADMAP.md`](docs/ROADMAP.md).
+Landings, walls, and rams all cost integrity. At zero you wreck: the crate
+drops where you died and you respawn at your base.
 
-## Project layout
+## Going somewhere real
+
+Paste a Google Maps API key in the top bar and search for a place. The key
+stays in your browser's `localStorage` and never reaches the build.
+
+The key needs four APIs enabled: **Maps JavaScript**, **Elevation**,
+**Static Maps**, and **Photorealistic 3D Tiles**. Tiles are best-effort — if
+they fail, you still get real terrain and imagery.
+
+Downtowns work best. The tile loader streams finer geometry as you drive
+toward it, and buildings become real collision, so you can wedge a Monster
+Truck between two towers if you try.
+
+## Working on it
+
+| Script | What it does |
+|---|---|
+| `npm run dev` | Dev server with hot reload |
+| `npm test` | Test suite (82 tests, plain node) |
+| `npm run typecheck` | Strict TypeScript, no emit |
+| `npm run build` | Typecheck and build to `dist/` |
+| `npm run deploy` | Build and ship to Firebase Hosting |
 
 ```
 src/
-├── main.ts          composition root — wiring, frame loop
-├── app/             Game loop, state, events, config
-├── core/            Simulation: physics, AI, gameplay, terrain, geo math
-├── render/          three.js views (renderer, terrain, vehicles, camera)
-├── services/        Google Maps + 3D Tiles behind interfaces
-└── ui/              Lit HUD components + screens, keyboard controls
-tests/               Vitest — core is fully DOM-free and unit-tested
+├── main.ts          wiring and the frame loop
+├── app/             game loop, state, events, tuning
+├── core/            simulation: physics, AI, rules, terrain, geo math
+├── render/          three.js views
+├── services/        Google Maps and 3D Tiles
+└── ui/              Lit HUD and screens
 ```
 
-Layer rules and data flow are documented in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+TypeScript, three.js, Lit, Vite, Vitest. The only runtime dependencies are
+`three` and `lit`. Everything in `core/` is DOM-free and runs in node, which
+is why the tests need no browser.
 
-## Tech
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the layers fit together
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — what's next and why
+- [`docs/DEPLOY.md`](docs/DEPLOY.md) — hosting, and adding a backend later
+- [`CONTRIBUTING.md`](CONTRIBUTING.md) — conventions, if you're touching the code
 
-- **TypeScript** (strict, `noUncheckedIndexedAccess`)
-- **three.js** — rendering, vector/quaternion math
-- **Lit** — HUD and screen components
-- **Vite** — dev server and builds
-- **Vitest** — unit tests
+## Where it came from
 
-Runtime dependencies are exactly `three` and `lit`. The simulation core has
-zero DOM dependencies and runs in node for tests.
-
-## Google Maps relocation (optional)
-
-Paste a Maps API key in the top bar, then search any place. The key is stored
-in `localStorage` only. Required APIs on the key:
-
-- **Maps JavaScript** (geocoding + elevation; handles its own CORS)
-- **Static Maps** (satellite tiles — `crossOrigin='anonymous'` works because
-  the endpoint sends `access-control-allow-origin: *`)
-- **Photorealistic 3D Tiles** (real building geometry, auth via
-  `X-Goog-Api-Key` header)
-
-Elevation sampling respects the ElevationService 512-locations-per-call limit
-(64×64 grid in 9 chunks). 3D tiles are best-effort — if they fail, real terrain
-still loads.
-
-The tile loader walks Google's ~22-level tree to a distance-based level of
-detail (`DEFAULT_LOD` in `services/tiles/Tileset.ts`: 16 m geometric error
-near the match center, 64 m toward the field edge — roughly 85 tiles / 20 MB
-for a downtown), then keeps streaming finer tiles around the player as you
-drive (8 m within 360 m). Each tile is one merged photogrammetry mesh, so
-building colliders come from rasterizing those meshes into a 10 m height
-grid and boxing every cell that rises well above the terrain or above its
-surroundings.
-
-## Hosting
-
-Deployed to Firebase Hosting as a static bundle — no server, and no secrets
-in the build (the Maps key is pasted at runtime and stays in `localStorage`).
-`firebase.json` configures hosting only; deny-all rules files for Realtime
-Database and Firestore are in the repo ready to wire up. Backend, auth, and
-emulator setup: [`docs/DEPLOY.md`](docs/DEPLOY.md).
-
-## Origin
-
-Ground-up rebuild of the single-file `version_glm_53/smugglers_run.html`
-prototype (~1.6 k lines) into a modular, tested, documented codebase. The
-prototype remains untouched as reference.
+A ground-up rebuild of a 1,600-line single-file prototype into something
+modular and tested. The prototype is still around as a reference.
