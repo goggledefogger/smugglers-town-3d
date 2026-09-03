@@ -1,0 +1,7 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "_comment": "Deny-all default. Realtime Database is the likely home for live match state (positions at 10-20 Hz, scores, lobbies); open paths deliberately, scoped to an authenticated user. Not wired into firebase.json yet — see docs/DEPLOY.md."
+  }
+}

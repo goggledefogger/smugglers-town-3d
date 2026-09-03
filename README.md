@@ -21,10 +21,12 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (81 tests, node env) |
+| `npm test` | Vitest suite (82 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |
+| `npm run deploy` | Build + deploy to Firebase Hosting |
+| `npm run serve` | Build + serve the bundle on the hosting emulator (:5000) |
 
 ## Controls
 
@@ -110,6 +112,14 @@ drive (8 m within 360 m). Each tile is one merged photogrammetry mesh, so
 building colliders come from rasterizing those meshes into a 10 m height
 grid and boxing every cell that rises well above the terrain or above its
 surroundings.
+
+## Hosting
+
+Deployed to Firebase Hosting as a static bundle — no server, and no secrets
+in the build (the Maps key is pasted at runtime and stays in `localStorage`).
+`firebase.json` configures hosting only; deny-all rules files for Realtime
+Database and Firestore are in the repo ready to wire up. Backend, auth, and
+emulator setup: [`docs/DEPLOY.md`](docs/DEPLOY.md).
 
 ## Origin
 

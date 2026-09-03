@@ -18,6 +18,9 @@ import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
 import { Minimap } from './render/Minimap.ts';
 import { Showroom } from './render/Showroom.ts';
+import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
+import { PMREMGenerator } from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
@@ -83,6 +86,12 @@ const game = new Game(desertTerrain, { events, store });
 
 // ---- renderer + views ----
 const renderer = new GameRenderer({ canvas });
+// studio reflections for car paint, glass and chrome only (scene lighting is untouched)
+{
+  const pmrem = new PMREMGenerator(renderer.renderer);
+  setVehicleEnvMap(pmrem.fromScene(new RoomEnvironment(), 0.04).texture);
+  pmrem.dispose();
+}
 const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
@@ -271,8 +280,10 @@ let last = performance.now();
 let simTime = 0;
 
 function frame(now: number): void {
-  const dt = Math.min((now - last) / 1000, config.loop.maxFrameDt);
+  const rawDt = (now - last) / 1000;
+  const dt = Math.min(rawDt, config.loop.maxFrameDt);
   last = now;
+  renderer.adapt(rawDt, now);
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
     game.update(dt, keyboard.toVehicleInput());

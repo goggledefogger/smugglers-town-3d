@@ -48,6 +48,9 @@ export type MatchPhase = 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
 const _tmpV = new Vector3();
 const _tmpFwd = new Vector3();
 const UP = new Vector3(0, 1, 0);
+/** Broadphase cell for building colliders; a car only tests the 3×3 cells around it. */
+const BROAD_CELL = 40;
+const cellKey = (i: number, j: number): number => (i + 2048) * 4096 + (j + 2048);
 /** The one place physics tuning enters the sim: app/config, with the field size folded in. */
 const PHYSICS: VehiclePhysicsConfig = { ...config.physics, worldHalf: config.world.mapHalf };
 
@@ -70,6 +73,9 @@ export class Game {
   private timeS = 0;
   private winner: 0 | 1 | null = null;
   private buildingColliders: BuildingCollider[] = [];
+  private readonly colliderCells = new Map<number, BuildingCollider[]>();
+  private readonly _near: BuildingCollider[] = [];
+  private readonly _seen = new Set<BuildingCollider>();
   private hudTimer = 0;
   private readonly round: RoundConfig;
   private phase: MatchPhase = 'countdown';
@@ -206,6 +212,41 @@ export class Game {
     this.buildingColliders = c;
     this.nav.rebuild(c);
     this.fields.clear();
+    // spatial hash: a downtown has thousands of boxes and 8 cars × 60 Hz
+    // can't afford to test them all
+    this.colliderCells.clear();
+    for (const box of c) {
+      for (let j = Math.floor(box.min.z / BROAD_CELL); j <= Math.floor(box.max.z / BROAD_CELL); j++) {
+        for (let i = Math.floor(box.min.x / BROAD_CELL); i <= Math.floor(box.max.x / BROAD_CELL); i++) {
+          const k = cellKey(i, j);
+          let list = this.colliderCells.get(k);
+          if (!list) this.colliderCells.set(k, list = []);
+          list.push(box);
+        }
+      }
+    }
+  }
+
+  /** Colliders that could touch a car at p: its cell and the eight around it. Reuses one scratch array. */
+  private collidersNear(p: Vector3): readonly BuildingCollider[] {
+    const out = this._near;
+    out.length = 0;
+    if (this.colliderCells.size === 0) return out;
+    this._seen.clear();
+    const ci = Math.floor(p.x / BROAD_CELL), cj = Math.floor(p.z / BROAD_CELL);
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        const list = this.colliderCells.get(cellKey(ci + di, cj + dj));
+        if (!list) continue;
+        for (const box of list) {
+          if (!this._seen.has(box)) {
+            this._seen.add(box);
+            out.push(box);
+          }
+        }
+      }
+    }
+    return out;
   }
 
   /** Swap the player's vehicle type in place, keeping position and velocity. */
@@ -270,7 +311,7 @@ export class Game {
         actor.brain!.think(dt, actor.body, this.match.state, this.route);
         input = actor.brain!.input();
       }
-      actor.body.step(dt, input, this.terrain.heightfield, this.buildingColliders);
+      actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos));
     }
     resolveVehicleCollisions(
       this.bodies,
@@ -294,7 +335,7 @@ export class Game {
       this.deps.events.emit('match:countdown', { n });
     }
     for (const actor of this.vehicles) {
-      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.buildingColliders);
+      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.collidersNear(actor.body.pos));
     }
     this.countdownLeft -= dt;
     if (this.countdownLeft <= 0) {

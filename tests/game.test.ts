@@ -49,6 +49,21 @@ describe('Game round structure', () => {
     expect(seen).toEqual(['final', 'sudden', 'win0']);
   });
 
+  it('stops a car at a building box found through the broadphase', () => {
+    const { game } = makeGame();
+    const player = game.player!.body;
+    player.pos.set(0, 1, 0);
+    player.quat.identity(); // facing -z
+    player.vel.set(0, 0, 0);
+    game.setBuildingColliders([
+      { min: new Vector3(-20, 0, -30), max: new Vector3(20, 20, -27) },  // wall ahead
+      { min: new Vector3(300, 0, 300), max: new Vector3(320, 20, 320) }  // irrelevant, far away
+    ]);
+    for (let t = 0; t < 2; t += 0.02) game.update(0.02, { ...NEUTRAL, throttle: 1 });
+    expect(player.pos.z).toBeGreaterThan(-30);
+    expect(player.pos.z).toBeLessThan(-15);
+  });
+
   it('routes bots around building colliders', () => {
     const { game } = makeGame();
     expect(game.route('contraband', new Vector3(-10, 0, 0), new Vector3(10, 0, 0))).toBeNull();

@@ -48,8 +48,16 @@ export class CameraRig {
       this._back.set(0, 0, 24 * z).applyQuaternion(player.quat);
       this._desired.copy(player.pos).add(new Vector3(0, 10 * z, 0)).add(this._back);
     } else {
-      const fwd = new Vector3(0, 0, -6).applyQuaternion(player.quat);
-      this._desired.copy(player.pos).add(new Vector3(0, 2.5, 0)).add(fwd);
+      // hood: rigidly on the bonnet, looking down the road (the prototype's
+      // version sat ahead of the car looking back at its own grille)
+      const fwd = this._back.set(0, 0, -1).applyQuaternion(player.quat);
+      this.camera.position.copy(player.pos).addScaledVector(fwd, 1.2);
+      this.camera.position.y += 1.9;
+      this._look.copy(player.pos).addScaledVector(fwd, 30);
+      this._look.y += 1.5;
+      this.camera.lookAt(this._look);
+      this.lookY = null;
+      return;
     }
     // tighter lerp at high zoom so the wider view stays settled
     const lerpK = 1 - Math.pow(0.001 / (1 + z * 0.15), dt);

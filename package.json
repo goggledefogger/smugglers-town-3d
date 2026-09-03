@@ -10,7 +10,9 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "deploy": "npm run build && firebase deploy --only hosting",
+    "serve": "npm run build && firebase emulators:start --only hosting"
   },
   "dependencies": {
     "lit": "3.2.1",

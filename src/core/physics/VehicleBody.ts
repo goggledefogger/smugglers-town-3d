@@ -76,8 +76,9 @@ export class VehicleBody {
   damage = 0;
   onGround = false;
   jumpHeld = false;
-  /** Last steer input, for the wheel visuals. */
+  /** Last steer / brake inputs, for the wheel and tail-light visuals. */
   steer = 0;
+  brake = 0;
   /** Terrain height under the car after the last step (for the drop shadow). */
   groundY = 0;
   /** Pose before the last step; views interpolate between it and the current pose. */
@@ -134,6 +135,7 @@ export class VehicleBody {
     }
     this.jumpHeld = input.jump;
     this.steer = input.steer;
+    this.brake = input.brake;
 
     this.integrateAngular(dt);
     this.integratePosition(dt, ground);

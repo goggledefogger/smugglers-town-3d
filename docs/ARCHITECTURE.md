@@ -228,15 +228,49 @@ photogrammetry ground instead of z-fighting with it.
 `VehicleView` keeps the world position on its group and rotates the car body
 inside it, so the health bar and blob shadow stay upright. The body's pose is
 interpolated between sim steps; a cosmetic pitch/roll from the terrain under
-the wheels is added on top. Wheels sit in pivots (the front pair steer with
-the input) and spin on their axle with forward speed; wheel radius scales
-with the type's mass and the roll bar carries the type's accent color.
+the wheels is added on top. `render/vehicleMeshes.ts` builds one silhouette
+per roster type from primitives (buggy cage, rally spoiler, SUV rack, lifted
+pickups) with clearcoat paint in the team color, the type's accent on trim,
+headlights, and tail lights that flare while braking. Wheels sit in pivots
+(the front pair steer with the input) and spin on their axle with forward
+speed; wheel radius scales with the type's mass. `render/Pickups.ts` draws
+the crate with a fading light beacon (hidden while carried) and each base as
+a landing pad: glow disc, edge ring, rotating dashes, lit pylons and a beam,
+all in team color.
 
 The app boots into the garage (`ui/screens/IntroScreen.ts`) with no match
 spawned: the HUD, relocate bar and pickups are hidden, and `render/Showroom`
 turns the selected vehicle at the field center with the camera orbiting it
 and the frustum shifted right of the garage panel (`setViewOffset`).
 `Game.playerType` records the pick; START spawns the match.
+
+The sky is an equirectangular canvas painted once (`render/skyTexture.ts`):
+gradient, sun disc at the light's direction, a cloud band above the horizon,
+haze below; the fog takes the horizon color.
+
+## Performance
+
+The game has to run on modest machines, so cost scales rather than being
+fixed:
+
+- **Adaptive resolution** (`GameRenderer.adapt`): the pixel ratio steps down
+  when frames average under 45 fps and back up when they run under 17 ms,
+  between half and the display's native ratio. Resolution is the knob that
+  scales GPU cost on every machine without changing what the game looks like
+  up close.
+- **Draw calls**: props are two `InstancedMesh`es for the whole field;
+  vehicles are ~25 meshes each; tiles are one mesh each and capped
+  (`MAX_TILES`).
+- **Physics broadphase**: building colliders live in a 40-unit spatial hash;
+  each car tests only the 3×3 cells around it instead of every box in the
+  city.
+- **Nav**: BFS fields are cached per target and only recomputed when the
+  target moves; the grid is 20 m so a field is ~78k cells (a few ms).
+- **HUD**: the store pushes at 10 Hz; health-bar textures re-upload only when
+  integrity changes; the direction arrow bypasses the store.
+- Known hitches: collider rebuilds during tile streaming (~15–30 ms every
+  1.5 s while tiles change) and the initial tile rasterization — candidates
+  for a worker (see ROADMAP).
 
 Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
 

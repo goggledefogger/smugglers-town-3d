@@ -72,10 +72,12 @@ bots follow waypoints around buildings and props. Left:
   keep refining; coarsen behind the player.
 - Impact feedback: camera shake on rams and landings, sparks/smoke as
   integrity drops, skid marks.
-- Sky dome with a sun and time of day; fog color tied to it.
-- Vehicle silhouettes: the roster differs only by wheel size and accent
-  color; a few boxes per type (buggy cage, truck bed, monster lift) would
-  make types readable at a glance.
+- Time of day: the painted sky (`skyTexture.ts`) takes a sun direction, so
+  a dusk/night palette and a moving sun are a repaint plus light tweaks.
+- Performance headroom: move tile rasterization and collider rebuilds to a
+  Web Worker (they hitch 15–30 ms during streaming); add a quality preset
+  (tile caps, streaming LOD, MSAA off) on top of the adaptive resolution for
+  very weak GPUs.
 
 ## 5. Input and platforms
 
