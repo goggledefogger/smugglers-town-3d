@@ -64,7 +64,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (100 tests, plain node) |
+| `npm test` | Test suite (103 tests, plain node) |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |
 | `npm run deploy` | Build and ship to Firebase Hosting |

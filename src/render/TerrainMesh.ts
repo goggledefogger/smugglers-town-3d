@@ -9,6 +9,7 @@ import {
   type BufferAttribute as BufferAttributeT
 } from 'three';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
+import type { Heightfield } from '../core/heightfield.ts';
 
 export class TerrainMesh {
   private _mesh: Mesh | null = null;
@@ -70,6 +71,16 @@ export class TerrainMesh {
     }
     geo.computeVertexNormals();
     return this._mesh;
+  }
+
+  /** Re-drape on a changed heightfield of the same size; the streamed ground sharpens after play starts. */
+  refresh(hf: Heightfield): void {
+    const m = this._mesh;
+    if (!m) return;
+    const pos = m.geometry.attributes.position as BufferAttributeT;
+    for (let i = 0; i < pos.count; i++) pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
+    pos.needsUpdate = true;
+    m.geometry.computeVertexNormals();
   }
 
   dispose(): void {

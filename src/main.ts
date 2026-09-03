@@ -102,6 +102,8 @@ const showroom = new Showroom(renderer.scene, renderer.camera, () => game.terrai
 const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let colliderRefreshAt = 0;
+let groundRefreshAt = 0;
+let groundDirty = false;
 
 /** Buildings from the streamed tiles plus the scattered props. */
 function applyColliders(): void {
@@ -245,10 +247,15 @@ relocateBarEl.onSearch = async (q, key) => {
   relocateBarEl.status = '';
   loaderEl.hidden = false;
   try {
-    const { terrain, tiles: newTiles } = await relocate({
+    const { terrain: loaded, tiles: newTiles } = await relocate({
       query: q, apiKey: key, anisotropy: renderer.maxAnisotropy,
       onProgress: (msg) => { loaderEl.message = msg; }
     });
+    // one ground for everything: physics, spawn, drape and props all sample
+    // the heightfield cut from the tiles, not the coarse elevation grid
+    const terrain: TerrainProvider = newTiles
+      ? { ...loaded, heightfield: newTiles.groundHeightfield() }
+      : loaded;
     if (tiles) {
       renderer.scene.remove(tiles.group);
       tiles.dispose();
@@ -295,6 +302,14 @@ function frame(now: number): void {
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
         applyColliders();
+        groundDirty = true;
+      }
+      // ...and sharpen the shared ground, less often: this one costs ~50 ms
+      if (groundDirty && now - groundRefreshAt > 6000) {
+        groundRefreshAt = now;
+        groundDirty = false;
+        game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
+        terrainMesh.refresh(game.terrainProvider.heightfield);
       }
     }
     for (const v of vehicleViews) v.sync(dt, game.alpha);

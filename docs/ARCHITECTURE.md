@@ -230,27 +230,49 @@ too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
 640 m) and swaps it for its children, one swap at a time, up to a tile cap.
 There is no coarsening — evict far tiles first if memory ever bites.
 
-### `services/tiles/tileColliders.ts`
+### `services/tiles/tileColliders.ts` — one ground
 A tile is one merged photogrammetry mesh, so per-mesh bounds say nothing
-about buildings. Each tile is rasterized once (`rasterizeTile`): every
-triangle's top is stamped into a 10 m height grid over its footprint.
-`collidersFromRasters` composites those, then calls a cell a building when
-its top rises ≥18 real m above the elevation-grid terrain (tall buildings,
-roof interiors included) *or* ≥6 m above the lowest neighbouring cell
-(ramps, low buildings, poles — things the coarse elevation grid can't
-see; the 1-cell window keeps hillsides out). Building cells merge into
-AABBs: runs along X, then identical runs stack across rows. Colliders are
-rebuilt every 1.5 s while streaming changes tiles. Scattered props
-contribute their own AABBs.
+about buildings. Each tile is rasterized once (`rasterizeTile`) into a 10 m
+grid with two values per cell: the highest surface (`top`: roofs, canopy,
+wall tops) and the lowest (`low`: the street under a tree or a bridge deck).
+Ground level is estimated from `top` alone by a morphological opening — a
+min filter then a max filter at a 60 m radius, wider than a block — which
+returns a slope unchanged and erases anything narrower than the window. A
+cell is a building when `top` stands ≥ 8 real m above that base. Building
+cells merge into AABBs whose floors are cut from the base.
 
-Two ground datums meet here and they disagree: tiles are placed by height
-above the WGS84 ellipsoid, the elevation grid is above mean sea level, and
-the geoid runs ~20 m below the ellipsoid around Portland — untreated, that
-buried bridge decks and ground floors. `tileGroundOffset` measures the tile
-ground against the terrain over the field core after the initial load and
-the streamer shifts the whole group so the tile ground sits
-`TILE_GROUND_GAP` under the satellite drape, which then covers the
-photogrammetry ground instead of z-fighting with it.
+`groundField` then produces **the one ground everything plays on**: the
+tile surface where tiles exist (`low` on streets, the base under buildings,
+plus `TILE_GROUND_GAP` so the satellite drape covers the photogrammetry
+street), the elevation-grid terrain where they do not, box-filtered once.
+`TileStreamer.groundHeightfield()` turns it into the `Heightfield` that
+physics, spawning, props, shadows, the camera and the drape all sample;
+`main.ts` swaps it in before the match starts and refreshes it in place
+(`Heightfield.copyFrom`, `TerrainMesh.refresh`) every few seconds while
+streaming sharpens the tiles. Before play, `refineCore` brings every tile
+within 600 m of the start to the streaming LOD, because a ground and a set
+of colliders taken from the coarse first load put cars where buildings turn
+out to be.
+
+Why one ground: the elevation grid is 64×64 samples over 5.5 km — one every
+87 m — smoothed with a bicubic. Over flat Portland its error stays inside
+the drape gap. In San Francisco a hill is four samples wide and the grid is
+off by whole storeys either way, so cars sat inside the tile mesh (the
+camera in geometry) and passed under building boxes whose floors were cut
+from the other ground. No spawn heuristic can fix standing on the wrong
+ground.
+
+The two datums still meet here: tiles are placed by height above the WGS84
+ellipsoid, the elevation grid is above mean sea level, and the geoid runs
+~20 m below the ellipsoid around Portland. `tileGroundOffset` measures the
+tile base against the terrain over the field core (30th percentile) and
+shifts the whole group so the fallback seams stay small. The elevation grid
+remains the ground for the terrain mesh before tiles load and for
+relocations where tiles fail.
+
+Known limit: a single heightfield has no second layer, so a bridge deck is
+not drivable — the ground under it is. Colliders are rebuilt every 1.5 s
+while streaming changes tiles; scattered props contribute their own AABBs.
 
 ## Render notes
 

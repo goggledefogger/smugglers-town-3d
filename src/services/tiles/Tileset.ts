@@ -25,8 +25,9 @@ import { tileTransformChain } from '../../core/geo/projection.ts';
 import { latLonToEcef, WORLD_M_PER_M, type Ecef, type GeoOrigin } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
+import { Heightfield } from '../../core/heightfield.ts';
 import {
-  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset,
+  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP,
   type Grid, type TileRaster
 } from './tileColliders.ts';
 
@@ -71,8 +72,10 @@ const MAX_INITIAL_TILES = 150;
  */
 const MAX_TILES = 250;
 const CONCURRENCY = 6;
-/** After calibration the tile ground sits this far (world units) under the satellite drape. */
-const TILE_GROUND_GAP = 0.6;
+/** Before play, tiles this close (real m) to the start are refined to the streaming LOD... */
+const CORE_RADIUS_M = 600;
+/** ...in rounds of this many refinements. */
+const CORE_REFINE_BATCH = 8;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
@@ -344,7 +347,39 @@ export class TileStreamer {
       }
     };
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
+    await this.refineCore(onProgress);
     this.calibrateGround();
+  }
+
+  /**
+   * Refine everything near the start to the streaming LOD before the match
+   * begins. The first load is coarse (20–70 m error: blocks are blobs,
+   * streets are gone), and a ground and a set of colliders taken from it
+   * put cars where buildings turn out to be once the fine tiles arrive.
+   */
+  private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+    for (let round = 0; round < 12 && this.tiles.length < MAX_TILES; round++) {
+      const coarse = this.tiles
+        .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
+          && (t.node.geometricError ?? 0) > this.lod.minErrorM)
+        .sort((a, b) => nodeDistM(a.node, this.ecef0) - nodeDistM(b.node, this.ecef0))
+        .slice(0, CORE_REFINE_BATCH);
+      if (coarse.length === 0) return;
+      await Promise.all(coarse.map(t => this.refine(t).catch(e => {
+        console.warn('tile refine failed', e);
+        t.done = true;
+      })));
+      onProgress?.(this.tiles.length, this.tiles.length);
+    }
+  }
+
+  /**
+   * The ground everything plays on: the tile surface with buildings erased,
+   * the elevation grid where tiles have no data (see groundField).
+   */
+  groundHeightfield(): Heightfield {
+    const cells = groundField(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+    return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
   }
 
   /** Shift every tile so the tile ground sits just under the satellite drape (see tileGroundOffset). */

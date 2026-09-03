@@ -54,7 +54,7 @@ export const DEFAULT_SPAWN: SpawnConfig = {
   baseOffset: 0.65,
   itemClearance: 5,
   itemMinDist: 40,
-  dropHeight: 8
+  dropHeight: 14
 };
 
 /** Heading that points from `at` toward `target`; engine forward is -Z. */

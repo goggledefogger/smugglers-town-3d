@@ -1,10 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4 } from 'three';
+import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4, Float32BufferAttribute } from 'three';
 import {
   boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
 import {
-  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate
+  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP
 } from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
@@ -204,5 +204,71 @@ describe('tileGroundOffset', () => {
     g.updateMatrixWorld(true);
     const offset = tileGroundOffset(g.children.map(c => rasterizeTile(c, grid)), grid, terrain, 30);
     expect(offset).toBeCloseTo(-4, 5);
+  });
+});
+
+describe('one shared ground', () => {
+  // groundEstimate masks a 6-cell border, so the interior is cells 6..33
+  const N = 40;
+  const grid = { cell: 1.5, half: (N * 1.5) / 2, n: N };
+  const flat = (v: number): Float32Array => new Float32Array(N * N).fill(v);
+  const raster = (top: Float32Array, low: Float32Array) => ({ i0: 0, j0: 0, w: N, h: N, top, low });
+
+  it('rasterizes the lowest surface per cell as well as the highest', () => {
+    // a ground quad at y=0 with a canopy quad at y=5 over the same cells
+    const g = new Group();
+    const quad = (y: number): Mesh => {
+      const geo = new BufferGeometry();
+      geo.setAttribute('position', new Float32BufferAttribute([
+        -6, y, -6,  6, y, -6,  6, y, 6,
+        -6, y, -6,  6, y, 6,  -6, y, 6
+      ], 3));
+      return new Mesh(geo);
+    };
+    g.add(quad(0), quad(5));
+    const r = rasterizeTile(g, grid)!;
+    const c = Math.floor(r.w / 2) + Math.floor(r.h / 2) * r.w;
+    expect(r.top[c]).toBeCloseTo(5, 6);
+    expect(r.low[c]).toBeCloseTo(0, 6);
+  });
+
+  it('keeps the street under canopy, the base under a building, and the terrain where no tiles are', () => {
+    const top = flat(0), low = flat(0);
+    // a tree: 0.9 units (6 m) over the street, below the building rise
+    top[15 * N + 15] = 0.9;
+    // a tower over one cell with its roof well past the building rise
+    top[25 * N + 25] = 40;
+    low[25 * N + 25] = 40;
+    // one interior cell with no tile data at all
+    top[20 * N + 20] = -Infinity;
+    low[20 * N + 20] = Infinity;
+    const terrain = flat(9);
+    const ground = groundField([raster(top, low)], grid, terrain);
+    const at = (i: number, j: number): number => ground[j * N + i]!;
+    // interior street cells sit the gap above the tile surface
+    expect(at(10, 10)).toBeCloseTo(TILE_GROUND_GAP, 5);
+    // the canopy did not lift the street (lowest surface wins)...
+    expect(at(15, 15)).toBeCloseTo(TILE_GROUND_GAP, 5);
+    // ...and neither did the tower (its opened base is the street)
+    expect(at(25, 25)).toBeCloseTo(TILE_GROUND_GAP, 5);
+    // no data: the terrain, feathered into the tile ground by the box filter
+    expect(at(20, 20)).toBeGreaterThan(TILE_GROUND_GAP);
+    expect(at(20, 20)).toBeLessThan(9);
+    // the masked border is terrain outright
+    expect(at(2, 2)).toBeCloseTo(9, 5);
+  });
+
+  it('builds a heightfield from cells and copies heights into an existing one', () => {
+    const cells = new Float32Array([0, 4, 0, 4]); // 2×2 row-major, east column raised
+    const hf = Heightfield.fromCells(cells, 2, 10);
+    expect(hf.size).toBe(20);
+    expect(hf.segs).toBe(2);
+    expect(hf.sample(-10, 0)).toBeCloseTo(0, 6);
+    expect(hf.sample(10, 0)).toBeCloseTo(4, 6);
+    expect(hf.sample(0, 0)).toBeCloseTo(2, 6);
+    const other = Heightfield.fromCells(new Float32Array([1, 1, 1, 1]), 2, 10);
+    hf.copyFrom(other);
+    expect(hf.sample(10, 0)).toBeCloseTo(1, 6);
+    expect(() => hf.copyFrom(new Heightfield(20, 1, new Float32Array(4)))).toThrow();
   });
 });

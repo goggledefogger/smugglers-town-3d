@@ -21,6 +21,37 @@ export class Heightfield {
     this.data = data;
   }
 
+  /**
+   * A heightfield over an n×n grid of cell-centre values (row-major, cells
+   * `cellSize` wide): each node takes the mean of the cells that meet at it.
+   */
+  static fromCells(cells: Float32Array, n: number, cellSize: number): Heightfield {
+    const data = new Float32Array((n + 1) * (n + 1));
+    for (let j = 0; j <= n; j++) {
+      for (let i = 0; i <= n; i++) {
+        let sum = 0, count = 0;
+        for (let dj = -1; dj <= 0; dj++) {
+          for (let di = -1; di <= 0; di++) {
+            const ii = i + di, jj = j + dj;
+            if (ii < 0 || jj < 0 || ii >= n || jj >= n) continue;
+            sum += cells[jj * n + ii]!;
+            count++;
+          }
+        }
+        data[j * (n + 1) + i] = sum / count;
+      }
+    }
+    return new Heightfield(n * cellSize, n, data);
+  }
+
+  /** Take another field's heights in place, so every holder of this one sees them. */
+  copyFrom(other: Heightfield): void {
+    if (other.segs !== this.segs || other.size !== this.size) {
+      throw new Error(`heightfield shape mismatch: ${other.segs}/${other.size} vs ${this.segs}/${this.size}`);
+    }
+    this.data.set(other.data);
+  }
+
   /** Bilinear height at world (x, z), clamped to the field edges. */
   sample(x: number, z: number): number {
     const seg = this.segs;

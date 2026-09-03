@@ -129,9 +129,10 @@ src/services/firebase.ts  app init and anonymous sign-in
       packet are interchangeable
 - [ ] `serialize()` / `apply()` on `VehicleBody` and match state, which is the
       snapshot
-- [ ] Clients load the same tiles for the same location, but only the host's
-      colliders drive physics. Decide whether clients skip collider
-      extraction entirely
+- [ ] The ground is cut from the tiles, and each client streams tiles at
+      its own LOD, so the host's heightfield is the physics ground and a
+      client's own is only for its shadows and camera. Decide whether
+      clients skip collider extraction entirely
 
 ## Phases
 

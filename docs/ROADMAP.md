@@ -110,6 +110,15 @@ the phase plan.
 
 ## 9. Relocation polish
 
+- Bridge decks and overpasses: the shared ground is one layer, so a deck is
+  scenery and the car drives under it. Needs a second drivable layer or
+  deck colliders that act as platforms.
+- The ground refresh while streaming costs ~50 ms every 6 s (opening filter
+  plus a 313k-vertex drape update). Move it to a worker or refresh only the
+  cells that changed.
+- Bicubic sampling for the 10 m tile ground if it feels like gravel at
+  speed; the four-wheel mean and suspension hide most of it.
+
 - Remember the last place and offer a few presets (Portland, SF, Tokyo).
 - Progress with tile counts and byte totals; a clear message when the key is
   missing one of the four APIs.

@@ -139,3 +139,17 @@ describe('Game', () => {
     expect(game.state.scores[0]).toBe(1);
   });
 });
+
+describe('spawn drop', () => {
+  it('lands every car during the countdown without damage or a tumble', () => {
+    const { game } = makeGame({ roundS: 300, countdownS: 3, finalMinuteS: 60 });
+    const hf = game.terrainProvider.heightfield;
+    for (let t = 0; t < 2.5; t += 1 / 60) game.update(1 / 60, NEUTRAL);
+    for (const a of game.vehicles) {
+      const b = a.body;
+      expect(b.damage).toBe(0);
+      expect(b.pos.y - hf.sample(b.pos.x, b.pos.z)).toBeLessThan(3);
+      expect(b.angVel.length()).toBeLessThan(0.5);
+    }
+  });
+});

@@ -37,6 +37,12 @@ const CELL = 1.5;
 const GROUND_K = 6;
 /** Real meters above the estimated ground that make a cell a building. */
 const BUILDING_RISE_M = 8;
+/**
+ * The shared ground sits this far (world units) above the tile surface, so
+ * the satellite drape covers the photogrammetry street instead of fighting
+ * it, and kerbs, parked cars and bushes vanish under it.
+ */
+export const TILE_GROUND_GAP = 0.6;
 
 export interface Grid {
   readonly cell: number;
@@ -49,7 +55,10 @@ export interface TileRaster {
   readonly j0: number;
   readonly w: number;
   readonly h: number;
+  /** Highest surface per cell: roofs, canopy, wall tops. */
   readonly top: Float32Array;
+  /** Lowest surface per cell: the street under canopy or a bridge deck; a roof inside a building. */
+  readonly low: Float32Array;
 }
 
 export function gridFor(ground: Heightfield): Grid {
@@ -88,10 +97,12 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
   const j0 = cellOf(bounds.min.z), j1 = cellOf(bounds.max.z);
   const w = i1 - i0 + 1, h = j1 - j0 + 1;
   const top = new Float32Array(w * h).fill(-Infinity);
+  const low = new Float32Array(w * h).fill(Infinity);
   const stamp = (i: number, j: number, y: number): void => {
     if (i < i0 || i > i1 || j < j0 || j > j1) return;
     const idx = (j - j0) * w + (i - i0);
     if (y > top[idx]!) top[idx] = y;
+    if (y < low[idx]!) low[idx] = y;
   };
   const [a, b, c] = _tri;
   obj.traverse(o => {
@@ -128,7 +139,7 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
       }
     }
   });
-  return { i0, j0, w, h, top };
+  return { i0, j0, w, h, top, low };
 }
 
 /**
@@ -189,19 +200,81 @@ export function groundEstimate(top: Float32Array, n: number, k = GROUND_K): Floa
 
 /** Max over all tile rasters on the full grid; -Infinity where no tile has data. */
 function compositeTops(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
-  const top = new Float32Array(n * n).fill(-Infinity);
+  return composite(rasters, n, true);
+}
+
+/** Min over all tile rasters; +Infinity where no tile has data. */
+function compositeLows(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
+  return composite(rasters, n, false);
+}
+
+function composite(rasters: readonly (TileRaster | null)[], n: number, max: boolean): Float32Array {
+  const out = new Float32Array(n * n).fill(max ? -Infinity : Infinity);
   for (const r of rasters) {
     if (!r) continue;
+    const src = max ? r.top : r.low;
     for (let j = 0; j < r.h; j++) {
       const g = (r.j0 + j) * n + r.i0;
       const l = j * r.w;
       for (let i = 0; i < r.w; i++) {
-        const v = r.top[l + i]!;
-        if (v > top[g + i]!) top[g + i] = v;
+        const v = src[l + i]!;
+        if (max ? v > out[g + i]! : v < out[g + i]!) out[g + i] = v;
       }
     }
   }
-  return top;
+  return out;
+}
+
+/**
+ * The one ground the whole game plays on, per cell. Where tiles cover a cell
+ * it is the tile surface: the lowest one, so streets survive tree canopy and
+ * bridge decks, and the opened base under anything tall enough to be a
+ * building. Cells without coverage fall back to the elevation-grid terrain,
+ * which the tiles were calibrated against, so the seam is small. A 3×3 box
+ * takes the 10 m quantisation off the result before it becomes a heightfield.
+ *
+ * Physics, spawning, props, shadows, the camera and the satellite drape all
+ * sample the heightfield built from this; the building colliders' floors are
+ * cut from the same base. Before this the elevation grid (87 m samples) was
+ * the ground for physics while the tiles were the ground for collision, and
+ * in San Francisco the two disagreed by whole storeys: cars sat inside the
+ * tile mesh and slid under building boxes.
+ */
+export function groundField(
+  rasters: readonly (TileRaster | null)[],
+  grid: Grid,
+  terrainTop: Float32Array,
+  reliefBoost = 1
+): Float32Array {
+  const { n } = grid;
+  const top = compositeTops(rasters, n);
+  const low = compositeLows(rasters, n);
+  const base = groundEstimate(top, n);
+  const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+  const raw = new Float32Array(n * n);
+  for (let c = 0; c < n * n; c++) {
+    const t = top[c]!, b = base[c]!;
+    if (t === NO_DATA || b === NO_DATA) raw[c] = terrainTop[c]!;
+    else raw[c] = (t - b >= rise ? b : low[c]!) + TILE_GROUND_GAP;
+  }
+  const out = new Float32Array(n * n);
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      let sum = 0, count = 0;
+      for (let dj = -1; dj <= 1; dj++) {
+        const jj = j + dj;
+        if (jj < 0 || jj >= n) continue;
+        for (let di = -1; di <= 1; di++) {
+          const ii = i + di;
+          if (ii < 0 || ii >= n) continue;
+          sum += raw[jj * n + ii]!;
+          count++;
+        }
+      }
+      out[j * n + i] = sum / count;
+    }
+  }
+  return out;
 }
 
 /**
