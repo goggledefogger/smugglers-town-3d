@@ -20,6 +20,7 @@ import { DriverBrain, type RouteFn } from '../core/ai/DriverBrain.ts';
 import { NavGrid, type FlowField } from '../core/world/NavGrid.ts';
 import { SpawnPlanner, DEFAULT_SPAWN } from '../core/spawn/SpawnPlanner.ts';
 import { mulberry32, type Rng } from '../core/rng.ts';
+import { navTarget, OBJECTIVE_TEXT } from './navTarget.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { GameEvents } from './events.ts';
@@ -482,10 +483,9 @@ export class Game {
     }
   }
 
-  /** Where the player should be heading: their base when carrying, else the contraband. */
+  /** Where the player should be heading, and why. See navTarget.ts. */
   private playerTarget(player: VehicleActor): Vector3 {
-    const st = this.match.state;
-    return st.carrier ? st.bases[player.team] : st.contrabandPos;
+    return navTarget(this.match.state, player, this.vehicles).pos;
   }
 
   /**
@@ -497,12 +497,11 @@ export class Game {
     return this.navMarker()?.yaw ?? 0;
   }
 
-  navMarker(): { yaw: number; pitch: number; distance: number } | null {
+  navMarker(): { yaw: number; distance: number } | null {
     const player = this.player;
     if (!player) return null;
     const target = this.playerTarget(player);
     _tmpV.copy(target).sub(player.body.pos);
-    const dy = _tmpV.y;
     _tmpV.y = 0;
     const planar = _tmpV.length();
     if (planar < 1) return null;
@@ -513,11 +512,7 @@ export class Game {
     // ahead first: cross() below overwrites _tmpV with the cross product
     const ahead = _tmpV.dot(fwd);
     const right = _tmpV.cross(fwd).y;
-    return {
-      yaw: Math.atan2(right, ahead),
-      pitch: Math.atan2(dy, planar),
-      distance: planar
-    };
+    return { yaw: Math.atan2(right, ahead), distance: planar };
   }
 
   private pushHud(): void {
@@ -525,7 +520,7 @@ export class Game {
     if (!player) return;
     const st = this.match.state;
     const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
-    const target = this.playerTarget(player);
+    const nav = navTarget(st, player, this.vehicles);
     this.deps.store.set({
       phase: this.phase,
       timeLeftS: this.timeLeftS,
@@ -536,9 +531,9 @@ export class Game {
       carrierName: carrierActor ? (carrierActor.isPlayer ? 'YOU' : carrierActor.label) : null,
       carrierIsPlayer: carrierActor?.isPlayer ?? false,
       carrierIsAlly: carrierActor ? carrierActor.team === player.team : false,
-      objective: st.carrier ? 'DELIVER CONTRABAND' : 'FIND CONTRABAND',
-      distanceToTargetM: player.body.pos.distanceTo(target) / WORLD_M_PER_M,
-      targetIsDelivery: st.carrier !== null,
+      objective: OBJECTIVE_TEXT[nav.goal],
+      distanceToTargetM: player.body.pos.distanceTo(nav.pos) / WORLD_M_PER_M,
+      navGoal: nav.goal,
       locationLabel: this.terrain.label,
       winner: this.winner,
       teamPips: this.vehicles.map(a => ({ team: a.team, isPlayer: a.isPlayer }))

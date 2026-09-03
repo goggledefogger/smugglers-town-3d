@@ -2,6 +2,7 @@
  * Reactive store the UI subscribes to. Game pushes updates; Lit components
  * re-render on change. Kept intentionally small — snapshot-in snapshot-out.
  */
+import { type NavGoal, type ObjectiveText } from './navTarget.ts';
 export type GamePhase = 'intro' | 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
 
 export interface HudSnapshot {
@@ -15,10 +16,11 @@ export interface HudSnapshot {
   readonly carrierName: string | null;
   readonly carrierIsPlayer: boolean;
   readonly carrierIsAlly: boolean;
-  readonly objective: 'FIND CONTRABAND' | 'DELIVER CONTRABAND';
+  readonly objective: ObjectiveText;
   /** Real meters to the current target. */
   readonly distanceToTargetM: number;
-  readonly targetIsDelivery: boolean;
+  /** What the player is being sent to do; drives the nav marker's colour and label. */
+  readonly navGoal: NavGoal;
   readonly locationLabel: string;
   readonly winner: 0 | 1 | null;
   readonly teamPips: readonly { team: 0 | 1; isPlayer: boolean }[];

@@ -101,21 +101,15 @@ describe('Game', () => {
     expect(game.targetBearing()).toBeCloseTo(-3 * Math.PI / 4, 6);
   });
 
-  it('reports the elevation pitch to the target alongside the bearing', () => {
+  it('reports planar distance to the target, and nothing once you are on it', () => {
     const { game } = makeGame();
     const player = game.player!.body;
     player.quat.identity(); // facing -z
     const c = game.state.contrabandPos;
-    // target straight ahead and above: positive pitch
-    player.pos.set(c.x, c.y - 50, c.z + 100);
-    const up = game.navMarker()!;
-    expect(up.yaw).toBeCloseTo(0, 6);
-    expect(up.pitch).toBeCloseTo(Math.atan2(50, 100), 6);
-    // target straight ahead and below: negative pitch
-    player.pos.set(c.x, c.y + 50, c.z + 100);
-    const down = game.navMarker()!;
-    expect(down.pitch).toBeCloseTo(Math.atan2(-50, 100), 6);
-    // returns null when the player is essentially on the target
+    player.pos.set(c.x, c.y - 50, c.z + 100); // 100 out on the flat, 50 below it
+    const m = game.navMarker()!;
+    expect(m.yaw).toBeCloseTo(0, 6);
+    expect(m.distance).toBeCloseTo(100, 6); // elevation never leaks into the distance
     player.pos.copy(c);
     expect(game.navMarker()).toBeNull();
   });

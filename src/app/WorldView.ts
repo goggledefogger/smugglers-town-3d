@@ -19,11 +19,10 @@ export interface WorldView {
   targetBearing(): number;
   /**
    * Orientation + planar distance to the player's current target, for the 3D
-   * nav chevron. yaw = bearing clockwise from ahead; pitch = elevation
-   * (positive = above the horizon); distance = flat ground distance. Null
-   * when there is no player or target.
+   * nav chevron. yaw = bearing clockwise from ahead; distance = flat ground
+   * distance. Null when there is no player or target.
    */
-  navMarker(): { yaw: number; pitch: number; distance: number } | null;
+  navMarker(): { yaw: number; distance: number } | null;
   /** Clear fraction of a segment through the world's buildings; a world without them returns 1. */
   lineOfSight(from: Vector3, to: Vector3): number;
 }

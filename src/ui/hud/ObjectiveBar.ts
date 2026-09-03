@@ -14,7 +14,7 @@ export class ObjectiveBar extends HudComponent {
 
   override render() {
     const s = this.snapshot;
-    const delivering = s?.targetIsDelivery ?? false;
+    const delivering = s?.navGoal === 'deliver';
     const carrierText = s?.carrierName
       ? `Held by: ${s.carrierName}${s.carrierIsAlly ? ' (ally)' : s.carrierIsPlayer ? '' : ' (foe)'}`
       : '';

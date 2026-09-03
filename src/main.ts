@@ -79,7 +79,7 @@ const events = new EventBus<GameEventMap>();
 const initialHud: HudSnapshot = {
   phase: 'intro', timeLeftS: config.match.roundS, speed: 0, damage: 0, vehicleName: '', scores: { 0: 0, 1: 0 },
   carrierName: null, carrierIsPlayer: false, carrierIsAlly: false,
-  objective: 'FIND CONTRABAND', distanceToTargetM: 0, targetIsDelivery: false,
+  objective: 'FIND CONTRABAND', distanceToTargetM: 0, navGoal: 'collect',
   locationLabel: 'Procedural Desert', winner: null, teamPips: []
 };
 const store = createStore<HudSnapshot>(initialHud);
@@ -395,7 +395,7 @@ function frame(now: number): void {
     pickups.sync(world.state, simTime, dt, carrierView?.pose ?? null);
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
     const nav = world.navMarker();
-    if (nav) dirArrowEl.setNav(nav.yaw, nav.pitch, nav.distance);
+    if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
     minimap.draw(world.state, world.vehicles, world.state.carrier);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);

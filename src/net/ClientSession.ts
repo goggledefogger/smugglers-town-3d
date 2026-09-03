@@ -10,6 +10,7 @@ import type { WorldView } from '../app/WorldView.ts';
 import type { MatchPhase, VehicleActor } from '../app/Game.ts';
 import type { GameEvents } from '../app/events.ts';
 import type { HudSnapshot, Store } from '../app/store.ts';
+import { navTarget, OBJECTIVE_TEXT } from '../app/navTarget.ts';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
 import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
 import { VehicleBody } from '../core/physics/VehicleBody.ts';
@@ -202,12 +203,11 @@ export class ClientSession implements WorldView {
     return this.navMarker()?.yaw ?? 0;
   }
 
-  navMarker(): { yaw: number; pitch: number; distance: number } | null {
+  navMarker(): { yaw: number; distance: number } | null {
     const player = this.player;
     if (!player) return null;
-    const target = this.st.carrier ? this.st.bases[player.team] : this.st.contrabandPos;
+    const target = navTarget(this.st, player, this.vehicles).pos;
     _tmpV.copy(target).sub(player.body.pos);
-    const dy = _tmpV.y;
     _tmpV.y = 0;
     const planar = _tmpV.length();
     if (planar < 1) return null;
@@ -217,11 +217,7 @@ export class ClientSession implements WorldView {
     fwd.normalize();
     const ahead = _tmpV.dot(fwd);
     const right = _tmpV.cross(fwd).y;
-    return {
-      yaw: Math.atan2(right, ahead),
-      pitch: Math.atan2(dy, planar),
-      distance: planar
-    };
+    return { yaw: Math.atan2(right, ahead), distance: planar };
   }
 
   private pushHud(): void {
@@ -229,7 +225,7 @@ export class ClientSession implements WorldView {
     if (!player) return;
     const st = this.st;
     const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
-    const target = st.carrier ? st.bases[player.team] : st.contrabandPos;
+    const nav = navTarget(st, player, this.vehicles);
     this.store.set({
       phase: this.matchPhase,
       timeLeftS: this.timeLeftS,
@@ -240,9 +236,9 @@ export class ClientSession implements WorldView {
       carrierName: carrierActor ? (carrierActor.isPlayer ? 'YOU' : carrierActor.label) : null,
       carrierIsPlayer: carrierActor?.isPlayer ?? false,
       carrierIsAlly: carrierActor ? carrierActor.team === player.team : false,
-      objective: st.carrier ? 'DELIVER CONTRABAND' : 'FIND CONTRABAND',
-      distanceToTargetM: player.body.pos.distanceTo(target) / WORLD_M_PER_M,
-      targetIsDelivery: st.carrier !== null,
+      objective: OBJECTIVE_TEXT[nav.goal],
+      distanceToTargetM: player.body.pos.distanceTo(nav.pos) / WORLD_M_PER_M,
+      navGoal: nav.goal,
       locationLabel: this.terrainProvider.label,
       winner: st.winner,
       teamPips: this.vehicles.map(a => ({ team: a.team, isPlayer: a.isPlayer }))

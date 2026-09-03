@@ -1,72 +1,119 @@
 import { html, css } from 'lit';
 import { HudComponent } from './HudComponent.ts';
+import { navOrientation, navTransform } from './navArrow.ts';
+import type { NavGoal } from '../../app/navTarget.ts';
+
+/** One face colour per goal; the shaded back and edge mix themselves from it. */
+const GOAL_LABEL: Record<NavGoal, string> = {
+  collect: 'CONTRABAND',
+  deliver: 'YOUR BASE',
+  chase: 'CHASE',
+  escort: 'ESCORT'
+};
 
 /**
  * 3D navigation chevron toward the contraband or your base. Unlike a flat
- * compass arrow, it points into the world with both yaw and pitch, so "ahead
- * and far" reads differently from "behind and over your shoulder" or "up on
- * the rooftop." Built with CSS 3D transforms (preserve-3d + perspective) so
- * the HUD stays in Lit and never touches three.js for this.
+ * compass arrow it lies in the world's ground plane, so "ahead and far" reads
+ * differently from "behind and over your shoulder." Built with CSS 3D
+ * transforms (preserve-3d + perspective) so the HUD stays in Lit and never
+ * touches three.js for this.
  *
- * The chevron is a folded sign: front face, back face, and an extruded edge,
- * leaned back toward the viewer at a fixed pitch so it reads as a 3D marker
- * floating in space, not a sticker on the screen. Per frame the frame loop
- * calls setNav() which writes the transform straight to the element — it
- * never steps at the 10 Hz snapshot cadence or lags behind a turn.
+ * The chevron is an extruded plate — front face, back face, and an edge slab
+ * between them — lying on a ground plane leaned away from the camera, the way
+ * a racer paints a turn arrow on the road. navArrow.ts owns the orientation;
+ * see it for why the rotation order matters. Per frame the frame loop calls
+ * setNav() which writes the transform straight to the element — it never steps
+ * at the 10 Hz snapshot cadence or lags behind a turn.
  */
 export class DirArrow extends HudComponent {
   static override styles = css`
-    :host { display:block; position:absolute; top:16%; left:50%;
-      width:0; height:0; text-align:center; pointer-events:none;
-      perspective:340px; }
-    .stage {
-      transform-style:preserve-3d;
-      will-change:transform;
+    /*
+     * Two knobs. --chev-size drives every length below as a ratio of itself,
+     * so the marker scales to a phone or a 4K panel from one value. --chev-face
+     * drives every colour: the shaded back and edge are mixed from it, so the
+     * delivery state overrides that one property and the whole plate follows.
+     *
+     * The host is a full-width, zero-height strip rather than a left:50% anchor
+     * point. Chrome clamps margin:auto to zero when the container is narrower
+     * than the child, which parked the chevron half its width off the point it
+     * spins and projects about, so it orbited instead of turning in place.
+     */
+    :host {
+      --chev-size: clamp(48px, 5vw, 72px);
+      --chev-depth: calc(var(--chev-size) * 0.11);
+      --chev-centre: calc(var(--chev-size) / 2);
+      --chev-glow: calc(var(--chev-size) * 0.22);
+      --chev-face: var(--good);
+      --chev-back: color-mix(in srgb, var(--chev-face) 55%, #000);
+      --chev-edge: color-mix(in srgb, var(--chev-face) 28%, #000);
+      --chev-label: var(--ink);
+
+      display: block;
+      position: absolute;
+      top: 16%;
+      left: 0;
+      right: 0;
+      height: 0;
+      text-align: center;
+      pointer-events: none;
+      perspective: calc(var(--chev-size) * 5.3);
+      perspective-origin: 50% var(--chev-centre);
     }
-    /* fixed lean toward the viewer: the "nice angle" that makes a flat
-       chevron read as a 3D sign pointing into the world */
-    .fold {
-      transform-style:preserve-3d;
-      transform:rotateX(46deg);
-      position:relative;
-      width:64px; height:64px; margin:0 auto;
+    /* each goal is one property; every mix above re-derives from it */
+    :host(.goal-deliver) { --chev-face: var(--hot); --chev-label: var(--sand); }
+    :host(.goal-chase) { --chev-face: var(--accent); --chev-label: var(--sand); }
+    :host(.goal-escort) { --chev-face: var(--cool); }
+
+    .stage { transform-style: preserve-3d; will-change: transform; }
+
+    /* the lean lives on .stage with the yaw, in one chain: a lean applied here
+       would multiply in after the yaw and become roll */
+    .plate {
+      transform-style: preserve-3d;
+      position: relative;
+      width: var(--chev-size);
+      height: var(--chev-size);
+      margin: 0 auto;
     }
+    /* no backface-visibility: the three faces all point the same way, so
+       hiding backfaces could only ever make the chevron vanish */
     .face {
-      position:absolute; inset:0;
-      backface-visibility:hidden;
+      position: absolute;
+      inset: 0;
+      clip-path: polygon(50% 0, 100% 60%, 66% 60%, 66% 100%, 34% 100%, 34% 60%, 0 60%);
     }
-    /* front chevron, facing the viewer */
+    /* drop-shadow, not box-shadow: clip-path clips a box-shadow away with the
+       rest of the box, so the glow never drew. A filter follows the clipped
+       silhouette instead — dark rim first to hold the shape against a bright
+       sky, then the colour bloom */
     .front {
-      clip-path:polygon(50% 0, 100% 60%, 66% 60%, 66% 100%, 34% 100%, 34% 60%, 0 60%);
-      background:#3f3;
-      box-shadow:0 0 14px #3f3, 0 0 5px #0008;
-      transition:background .2s, box-shadow .2s;
+      background: var(--chev-face);
+      filter: drop-shadow(0 0 calc(var(--chev-glow) / 4) rgb(0 0 0 / .75))
+              drop-shadow(0 0 var(--chev-glow) var(--chev-face));
+      transition: background .2s, filter .2s;
     }
-    /* rear chevron on the back of the folded sign, darker for depth */
     .back {
-      transform:translateZ(-7px);
-      clip-path:polygon(50% 0, 100% 60%, 66% 60%, 66% 100%, 34% 100%, 34% 60%, 0 60%);
-      background:#1a1;
-      opacity:0.55;
+      background: var(--chev-back);
+      transform: translateZ(calc(var(--chev-depth) * -1));
+      opacity: .55;
     }
-    /* the extruded edge between the faces, a thin slab read as thickness */
+    /* a thin slab between the faces, read as thickness */
     .edge {
-      position:absolute; inset:0;
-      transform:translateZ(-3.5px);
-      clip-path:polygon(50% 0, 100% 60%, 66% 60%, 66% 100%, 34% 100%, 34% 60%, 0 60%);
-      background:#070;
-      opacity:0.4;
-      filter:blur(0.6px);
+      background: var(--chev-edge);
+      transform: translateZ(calc(var(--chev-depth) / -2));
+      opacity: .4;
+      filter: blur(0.6px);
     }
-    .fold.toDelivery .front { background:#f33; box-shadow:0 0 14px #f33, 0 0 5px #0008; }
-    .fold.toDelivery .back { background:#a11; }
-    .fold.toDelivery .edge { background:#700; }
     .label {
-      font-size:13px; color:#fff; text-shadow:0 0 4px #000, 0 0 8px #000;
-      margin-top:8px; font-weight:bold; letter-spacing:.04em;
-      transition:color .2s;
+      margin-top: calc(var(--chev-size) * 0.12);
+      white-space: nowrap;
+      color: var(--chev-label);
+      font-size: calc(var(--chev-size) * 0.2);
+      font-weight: 700;
+      letter-spacing: .04em;
+      text-shadow: 0 0 4px #000, 0 0 8px #000;
+      transition: color .2s;
     }
-    .label.toDelivery { color:#ffd; }
   `;
 
   private stageEl: HTMLElement | null = null;
@@ -77,35 +124,32 @@ export class DirArrow extends HudComponent {
    * children, so this can run every frame without fighting re-renders. Color
    * and label come from the 10 Hz snapshot via render().
    * yaw: radians clockwise from straight ahead (horizontal bearing)
-   * pitch: radians, positive = target above the horizon
    * distance: planar world distance to the target (for the closeness cue)
    */
-  setNav(yaw: number, pitch: number, distance: number): void {
+  setNav(yaw: number, distance: number): void {
     this.stageEl ??= this.renderRoot.querySelector('.stage');
     if (!this.stageEl) return;
-    // world-forward is -Z; yaw is clockwise so rotateZ(-yaw) turns the nose
-    // left/right to match. clamp pitch so the marker never flips overhead.
-    const p = Math.max(-0.9, Math.min(0.9, pitch));
-    // the beacon beam takes over near the target: shrink + fade the chevron
-    const closeness = 1 - Math.min(1, distance / 40);
-    const scale = 1 - closeness * 0.35;
-    this.stageEl.style.transform =
-      `rotateX(${p}rad) rotateZ(${-yaw}rad) scale(${scale})`;
-    this.stageEl.style.opacity = String(1 - closeness * 0.6);
+    const o = navOrientation(yaw, distance);
+    this.stageEl.style.transform = navTransform(o);
+    this.stageEl.style.opacity = String(o.opacity);
   }
 
   override render() {
-    const s = this.snapshot;
-    const toDelivery = s?.targetIsDelivery ?? false;
+    const goal: NavGoal = this.snapshot?.navGoal ?? 'collect';
+    // the goal is a host class so one custom property retints the whole marker
+    for (const g of Object.keys(GOAL_LABEL) as NavGoal[]) this.classList.toggle(`goal-${g}`, g === goal);
+    // naming the car you are chasing beats a bare verb when four of them are on screen
+    const who = this.snapshot?.carrierName;
+    const label = (goal === 'chase' || goal === 'escort') && who ? `${GOAL_LABEL[goal]} ${who}` : GOAL_LABEL[goal];
     return html`
       <div class="stage">
-        <div class="fold ${toDelivery ? 'toDelivery' : ''}">
+        <div class="plate">
           <div class="face edge"></div>
           <div class="face back"></div>
           <div class="face front"></div>
         </div>
       </div>
-      <div class="label ${toDelivery ? 'toDelivery' : ''}">${toDelivery ? 'YOUR BASE' : 'CONTRABAND'}</div>
+      <div class="label">${label}</div>
     `;
   }
 }
