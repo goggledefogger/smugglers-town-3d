@@ -17,13 +17,25 @@
         "seed": {
           ".validate": "newData.isNumber()"
         },
+        "keyShared": {
+          ".validate": "newData.isBoolean()"
+        },
         "map": {
-          ".validate": "newData.hasChild('kind')",
+          ".validate": "newData.hasChild('kind') && (newData.child('kind').val() === 'desert' || newData.hasChildren(['query', 'label', 'lat', 'lon']))",
           "kind": {
             ".validate": "newData.val() === 'desert' || newData.val() === 'city'"
           },
           "query": {
-            ".validate": "newData.isString() && newData.val().length <= 80"
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 80"
+          },
+          "label": {
+            ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 80"
+          },
+          "lat": {
+            ".validate": "newData.isNumber() && newData.val() >= -90 && newData.val() <= 90"
+          },
+          "lon": {
+            ".validate": "newData.isNumber() && newData.val() >= -180 && newData.val() <= 180"
           },
           "$other": {
             ".validate": false

@@ -7,6 +7,7 @@ import {
   type Database
 } from 'firebase/database';
 import { firebaseApp, identity } from '../services/firebase.ts';
+import { decodeMatchMap, type MatchMap } from './protocol.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('lobby');
@@ -27,7 +28,13 @@ export interface LobbyRoom {
   createdAt: number;
   phase: 'lobby' | 'playing';
   seed: number;
-  map: { kind: 'desert' | 'city'; query?: string };
+  map: MatchMap;
+  /**
+   * The host will hand its Maps key to players when the match starts. Lives in
+   * the room, not just the hello, because a joiner has to know before readying
+   * up whether it needs a key of its own — the hello comes far too late.
+   */
+  keyShared: boolean;
   players: Record<string, LobbyPlayer>;
 }
 
@@ -98,20 +105,14 @@ export function parseRoom(raw: unknown, code: string): LobbyRoom | null {
   if (typeof r['createdAt'] !== 'number') return null;
   if (r['phase'] !== 'lobby' && r['phase'] !== 'playing') return null;
   if (typeof r['seed'] !== 'number') return null;
-  const map = parseMap(r['map']);
+  const map = decodeMatchMap(r['map']);
   if (!map) return null;
   const players = parsePlayers(r['players']);
   if (!players) return null;
-  return { code, host: r['host'], createdAt: r['createdAt'], phase: r['phase'], seed: r['seed'], map, players };
-}
-
-function parseMap(raw: unknown): LobbyRoom['map'] | null {
-  if (typeof raw !== 'object' || raw === null) return null;
-  const m = raw as Record<string, unknown>;
-  if (m['kind'] !== 'desert' && m['kind'] !== 'city') return null;
-  if (m['query'] === undefined) return { kind: m['kind'] };
-  if (typeof m['query'] !== 'string' || m['query'].length > 80) return null;
-  return { kind: m['kind'], query: m['query'] };
+  return {
+    code, host: r['host'], createdAt: r['createdAt'], phase: r['phase'], seed: r['seed'],
+    map, keyShared: r['keyShared'] === true, players
+  };
 }
 
 function parsePlayers(raw: unknown): Record<string, LobbyPlayer> | null {
@@ -215,11 +216,16 @@ class LobbyImpl implements Lobby {
   }
 }
 
-export async function createLobby(name: string, vehicle: number, map: LobbyRoom['map']): Promise<Lobby> {
+export async function createLobby(
+  name: string, vehicle: number, map: MatchMap, keyShared: boolean
+): Promise<Lobby> {
   const database = getDatabase(await firebaseApp());
   const selfId = await identity();
   const player: LobbyPlayer = { name: validateName(name), vehicle, team: 0, ready: false, joinedAt: Date.now() };
-  const newRoom = { host: selfId, createdAt: Date.now(), phase: 'lobby', seed: 0, map, players: { [selfId]: player } };
+  const newRoom = {
+    host: selfId, createdAt: Date.now(), phase: 'lobby', seed: 0, map, keyShared,
+    players: { [selfId]: player }
+  };
 
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = makeRoomCode(Math.random);

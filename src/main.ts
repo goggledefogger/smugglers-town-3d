@@ -270,12 +270,31 @@ async function openOnline(type: number): Promise<void> {
       events,
       store,
       lobbyEl: document.querySelector('sr-lobby') as LobbyScreen,
-      makeTerrain: seed => createDesertTerrain(
-        new Heightfield(config.world.mapHalf * 2, 256, generateDesertHeightfieldData(seed % 1000))
-      ),
+      // owns the tile lifecycle: a match's world replaces whatever was loaded,
+      // so nothing downstream clears tiles this just streamed
+      makeTerrain: async (seed, map, apiKey) => {
+        clearTiles();
+        if (map.kind === 'desert') {
+          return createDesertTerrain(
+            new Heightfield(config.world.mapHalf * 2, 256, generateDesertHeightfieldData(seed % 1000))
+          );
+        }
+        if (!apiKey) throw new Error('no-maps-key');
+        loaderEl.hidden = false;
+        try {
+          const { terrain: loaded, tiles: newTiles } = await relocateTo(
+            map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy
+          );
+          tiles = newTiles;
+          if (tiles) renderer.scene.add(tiles.group);
+          // one ground for everything, cut from the tiles — same as single player
+          return tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
+        } finally {
+          loaderEl.hidden = true;
+        }
+      },
       makeHostGame: (seed, terrain, seats) => {
         game = new Game(terrain, { events, store, seed });
-        clearTiles();
         prepareTerrain(terrain, mulberry32(seed));
         game.reset(terrain, seats);
         return game;
@@ -285,11 +304,13 @@ async function openOnline(type: number): Promise<void> {
         online = match;
         world = match.world;
         // a client has no game of its own: seat the same rocks from the same seed
-        if (match.world !== game) {
-          clearTiles();
-          prepareTerrain(terrain, mulberry32(match.seed));
-        }
+        if (match.world !== game) prepareTerrain(terrain, mulberry32(match.seed));
         swapTerrainMesh(terrain);
+        log.info('match start', {
+          mode: match.world === game ? 'host' : 'client',
+          seed: match.seed, terrain: terrain.label, real: terrain.isReal
+        });
+        if (terrain.isReal) events.emit('location:changed', { label: terrain.label, isReal: true });
         showroom.dispose();
         introEl.remove();
         rebuildViews();

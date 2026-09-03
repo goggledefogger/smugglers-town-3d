@@ -34,3 +34,80 @@ describe('HostSession seat binding', () => {
     host.dispose();
   });
 });
+
+describe('HostSession start barrier', () => {
+  const seat = (hub: ReturnType<typeof createLoopbackHub>, uid: 'ada' | 'bob') => {
+    const t = hub.join(`peer-${uid}`);
+    t.send(encode({ t: 'j', uid, token: TOKENS[uid] }), 'host');
+    return t;
+  };
+
+  it('holds the start until every player reports its world built', async () => {
+    const hub = createLoopbackHub();
+    const host = new HostSession(hub.join('host'), new EventBus<GameEventMap>(), TOKENS);
+    const ada = seat(hub, 'ada');
+    const bob = seat(hub, 'bob');
+    await tick();
+
+    const wait = host.waitForReady(['ada', 'bob'], 2000);
+    let settled = false;
+    void wait.then(() => { settled = true; });
+
+    ada.send(encode({ t: 'r' }), 'host');
+    await tick();
+    expect(settled).toBe(false); // one loaded is not everyone
+
+    bob.send(encode({ t: 'r' }), 'host');
+    expect(await wait).toEqual([]);
+    host.dispose();
+  });
+
+  it('gives up on a straggler rather than hanging the match', async () => {
+    const hub = createLoopbackHub();
+    const host = new HostSession(hub.join('host'), new EventBus<GameEventMap>(), TOKENS);
+    const ada = seat(hub, 'ada');
+    seat(hub, 'bob');
+    await tick();
+
+    const started = Date.now();
+    const wait = host.waitForReady(['ada', 'bob'], 120);
+    ada.send(encode({ t: 'r' }), 'host');
+    expect(await wait).toEqual(['bob']);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(100);
+    host.dispose();
+  });
+
+  it('stops waiting the moment a loading player drops, without burning the timeout', async () => {
+    const hub = createLoopbackHub();
+    const host = new HostSession(hub.join('host'), new EventBus<GameEventMap>(), TOKENS);
+    const ada = seat(hub, 'ada');
+    const bob = seat(hub, 'bob');
+    await tick();
+
+    const started = Date.now();
+    const wait = host.waitForReady(['ada', 'bob'], 10000);
+    ada.send(encode({ t: 'r' }), 'host');
+    await tick();
+    bob.leave();
+
+    expect(await wait).toEqual(['bob']);
+    expect(Date.now() - started).toBeLessThan(2000); // the timeout is for the stuck, not the gone
+    host.dispose();
+  });
+
+  it('ignores a ready from a peer that never claimed a seat', async () => {
+    const hub = createLoopbackHub();
+    const host = new HostSession(hub.join('host'), new EventBus<GameEventMap>(), TOKENS);
+    const ada = seat(hub, 'ada');
+    const stranger = hub.join('peer-stranger');
+    await tick();
+
+    const wait = host.waitForReady(['ada'], 150);
+    stranger.send(encode({ t: 'r' }), 'host');
+    await tick();
+
+    ada.send(encode({ t: 'r' }), 'host');
+    expect(await wait).toEqual([]);
+    host.dispose();
+  });
+});

@@ -1,14 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { ClientSession } from '../src/net/ClientSession.ts';
 import { createLoopbackHub } from '../src/net/LoopbackTransport.ts';
-import { encode, type HelloMsg, type SnapshotMsg } from '../src/net/protocol.ts';
+import { encode, PROTOCOL_VERSION, type HelloMsg, type SnapshotMsg } from '../src/net/protocol.ts';
 import { EventBus, type GameEventMap } from '../src/app/events.ts';
 import { createStore, type HudSnapshot } from '../src/app/store.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { createDesertTerrain } from '../src/core/terrain/ProceduralTerrain.ts';
 
 const hello: HelloMsg = {
-  t: 'h', seed: 1, map: { kind: 'desert' },
+  t: 'h', v: PROTOCOL_VERSION, seed: 1, map: { kind: 'desert' },
   roster: [{ id: 1, name: 'me', team: 0, vehicle: 2, owner: 'me' }, { id: 2, name: 'bot', team: 1, vehicle: 0, owner: null }],
   bases: [[100, 0, 0], [-100, 0, 0]]
 };

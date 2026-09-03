@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  encode, decode, inputToMsg, inputFromMsg,
+  encode, decode, inputToMsg, inputFromMsg, PROTOCOL_VERSION,
   type InputMsg, type SnapshotMsg, type EventMsg, type HelloMsg, type BodySnap
 } from '../src/net/protocol.ts';
 import type { VehicleInput } from '../src/core/physics/vehicleStats.ts';
@@ -125,22 +125,44 @@ describe('EventMsg', () => {
 });
 
 describe('HelloMsg', () => {
-  it('round trips with and without map.query', () => {
-    const withQuery: HelloMsg = {
-      t: 'h', seed: 42, map: { kind: 'city', query: 'portland' }, bases: [[273, 2, 0], [-273, 2, 0]],
+  it('round trips a city with its resolved centre, and a desert without one', () => {
+    const city: HelloMsg = {
+      t: 'h', v: PROTOCOL_VERSION, seed: 42,
+      map: { kind: 'city', query: 'portland', label: 'Portland, OR, USA', lat: 45.5152, lon: -122.6784 },
+      bases: [[273, 2, 0], [-273, 2, 0]],
       roster: [
         { id: 0, name: 'A', team: 0, vehicle: 2, owner: 'peer-1' },
         { id: 1, name: 'B', team: 1, vehicle: 0, owner: null }
       ]
     };
-    expect(decode(encode(withQuery))).toEqual(withQuery);
+    expect(decode(encode(city))).toEqual(city);
 
-    const noQuery: HelloMsg = { t: 'h', seed: 7, map: { kind: 'desert' }, roster: [], bases: [[0, 0, 0], [1, 1, 1]] };
-    expect(decode(encode(noQuery))).toEqual(noQuery);
+    const desert: HelloMsg = { t: 'h', v: PROTOCOL_VERSION, seed: 7, map: { kind: 'desert' }, roster: [], bases: [[0, 0, 0], [1, 1, 1]] };
+    expect(decode(encode(desert))).toEqual(desert);
+  });
+
+  it('carries a shared Maps key only when the host sent one', () => {
+    const base: HelloMsg = { t: 'h', v: PROTOCOL_VERSION, seed: 1, map: { kind: 'desert' }, roster: [], bases: [[0, 0, 0], [0, 0, 0]] };
+    expect(decode(encode(base))).not.toHaveProperty('key');
+    const shared: HelloMsg = { ...base, key: 'AIzaSyExampleKey' };
+    expect(decode(encode(shared))).toEqual(shared);
+    // a non-string or oversized key is a malformed peer message, not a hello
+    expect(decode(JSON.stringify({ ...base, key: 42 }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, key: 'x'.repeat(129) }))).toBeNull();
+  });
+
+  it('rejects a city that is missing its resolved centre', () => {
+    const bases = [[0, 0, 0], [0, 0, 0]];
+    const hello = (map: unknown) => JSON.stringify({ t: 'h', v: PROTOCOL_VERSION, seed: 1, map, roster: [], bases });
+    expect(decode(hello({ kind: 'city', query: 'portland' }))).toBeNull();
+    expect(decode(hello({ kind: 'city', query: 'p', label: 'P', lat: 91, lon: 0 }))).toBeNull();
+    expect(decode(hello({ kind: 'city', query: 'p', label: 'P', lat: 0, lon: 181 }))).toBeNull();
+    expect(decode(hello({ kind: 'city', query: '', label: 'P', lat: 0, lon: 0 }))).toBeNull();
+    expect(decode(hello({ kind: 'city', query: 'x'.repeat(81), label: 'P', lat: 0, lon: 0 }))).toBeNull();
   });
 
   it('rejects a bad map kind, out-of-range vehicle, and a wrong-typed owner', () => {
-    const base = { t: 'h', seed: 1, map: { kind: 'desert' }, roster: [] as unknown[], bases: [[0, 0, 0], [1, 1, 1]] };
+    const base = { t: 'h', v: PROTOCOL_VERSION, seed: 1, map: { kind: 'desert' }, roster: [] as unknown[], bases: [[0, 0, 0], [1, 1, 1]] };
     expect(decode(JSON.stringify({ ...base, map: { kind: 'moon' } }))).toBeNull();
     expect(decode(JSON.stringify({
       ...base, roster: [{ id: 0, name: 'A', team: 0, vehicle: 9, owner: null }]

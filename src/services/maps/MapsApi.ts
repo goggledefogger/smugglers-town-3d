@@ -16,10 +16,16 @@ declare global {
 
 let mapsApiPromise: Promise<void> | null = null;
 
+/**
+ * The key binds at script load and the API cannot be reloaded with a different
+ * one, so the first successful load wins for the life of the page. A *failed*
+ * load must not stick, though: the usual cause is a bad key, and the whole
+ * point of the lobby's CHECK button is pasting a better one and trying again.
+ */
 export function loadMapsApi(apiKey: string): Promise<void> {
   if (window.google?.maps) return Promise.resolve();
   if (mapsApiPromise) return mapsApiPromise;
-  mapsApiPromise = new Promise((resolve, reject) => {
+  const load = new Promise<void>((resolve, reject) => {
     const cb = '__gmapsCb';
     window[cb] = () => resolve();
     const s = document.createElement('script');
@@ -28,6 +34,10 @@ export function loadMapsApi(apiKey: string): Promise<void> {
       'Could not load Google Maps JS API — check that Maps JavaScript API is enabled for your key.'
     ));
     document.head.appendChild(s);
+  });
+  mapsApiPromise = load.catch((err: unknown) => {
+    mapsApiPromise = null;
+    throw err;
   });
   return mapsApiPromise;
 }
@@ -75,6 +85,15 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
   return { samples, gridN: N };
 }
 
+/** A Static Maps satellite image URL. The one place that spells this endpoint. */
+export function satelliteUrl(
+  lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number
+): string {
+  return 'https://maps.googleapis.com/maps/api/staticmap'
+    + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}`
+    + `&maptype=satellite&key=${encodeURIComponent(apiKey)}`;
+}
+
 export async function fetchSatellite(lat: number, lon: number, apiKey: string): Promise<HTMLCanvasElement> {
   // Stitch a grid of Static Maps satellite tiles into one high-res canvas.
   // A single 640px image over ~5.5km is hopelessly blurry; a 3x3 grid at
@@ -103,8 +122,7 @@ export async function fetchSatellite(lat: number, lon: number, apiKey: string): 
     for (let c = 0; c < GRID; c++) {
       const la = lat + dlat - (r / (GRID - 1)) * spanDeg;
       const lo = lon - dlon + (c / (GRID - 1)) * spanDeg * 2 * cosLat;
-      const url = `https://maps.googleapis.com/maps/api/staticmap?center=${la},${lo}&zoom=${zoom}&size=${TILE}x${TILE}&maptype=satellite&key=${encodeURIComponent(apiKey)}`;
-      rowPromises.push(loadImg(url));
+      rowPromises.push(loadImg(satelliteUrl(la, lo, apiKey, zoom, TILE, TILE)));
     }
     const imgs = await Promise.all(rowPromises);
     for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * TILE, r * TILE, TILE, TILE);

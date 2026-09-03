@@ -34,6 +34,8 @@ export class HostSession {
   private readonly lastSeq = new Map<string, number>();
   private readonly unsubs: (() => void)[] = [];
   private readonly joined = new Set<string>();
+  /** uids that have reported their world built and are safe to start. */
+  private readonly worldReady = new Set<string>();
   private snapTimer = 0;
   private waiters: (() => void)[] = [];
 
@@ -53,6 +55,8 @@ export class HostSession {
       log.info('peer left', { uid });
       this.peerUid.delete(id);
       this.joined.delete(uid);
+      // whoever is waiting on this peer should stop waiting now, not in 20 s
+      for (const w of [...this.waiters]) w();
       // a dropped player's car coasts to a stop instead of holding its last input
       this.game?.setRemoteInput(uid, NEUTRAL);
     }));
@@ -82,9 +86,35 @@ export class HostSession {
   }
 
   /**
-   * Begin the match: from here inputs drive the game, snapshots flow, and
-   * every peer that has already joined gets its hello. Done after
-   * `waitForPeers` so the countdown starts with everyone present.
+   * Resolves once every uid in `expected` has reported its world built, or
+   * after `timeoutMs`; returns whoever never did.
+   *
+   * A peer that drops while loading stops being waited on immediately — the
+   * timeout is there for the stuck, not for the gone.
+   */
+  waitForReady(expected: readonly string[], timeoutMs: number): Promise<string[]> {
+    return new Promise(resolve => {
+      const never = (): string[] => expected.filter(u => !this.worldReady.has(u));
+      // still worth waiting for: not ready yet, and still connected
+      const outstanding = (): string[] => never().filter(u => this.joined.has(u));
+      if (outstanding().length === 0) return resolve(never());
+      const timer = setTimeout(() => finish(), timeoutMs);
+      const check = (): void => {
+        if (outstanding().length === 0) finish();
+      };
+      const finish = (): void => {
+        clearTimeout(timer);
+        this.waiters = this.waiters.filter(w => w !== check);
+        resolve(never());
+      };
+      this.waiters.push(check);
+    });
+  }
+
+  /**
+   * Announce the match: every joined peer gets its hello and starts building
+   * its world. Snapshots only start flowing once `update()` is called, which
+   * the caller does after `waitForReady`, so nobody is left behind.
    */
   start(game: Game, hello: Omit<HelloMsg, 't'>): void {
     this.game = game;
@@ -144,6 +174,14 @@ export class HostSession {
       this.peerUid.set(from, m.uid);
       this.joined.add(m.uid);
       if (this.hello) this.transport.send(encode({ t: 'h', ...this.hello }), from);
+      for (const w of [...this.waiters]) w();
+      return;
+    }
+    if (m.t === 'r') {
+      const uid = this.peerUid.get(from);
+      if (!uid) return;
+      log.info('peer world ready', { uid });
+      this.worldReady.add(uid);
       for (const w of [...this.waiters]) w();
       return;
     }

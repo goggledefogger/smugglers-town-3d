@@ -7,6 +7,16 @@ import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 
 export type PeerId = string;
 
+/**
+ * Bumped whenever the hello changes shape or meaning. A host and a client on
+ * different builds is the normal case, not an exotic one — the host plays from
+ * a dev server while friends join the deployed site — and the failure it caused
+ * was silent: a client too old to understand a city map built the desert
+ * instead and drove around a different world for the whole match. Better to
+ * refuse the match and say why.
+ */
+export const PROTOCOL_VERSION = 2;
+
 /** Client → host, ~30 Hz. Latest seq wins. */
 export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: number; j: boolean; p: number }
 
@@ -25,20 +35,58 @@ type NetEventName = Exclude<keyof GameEventMap, 'location:changed'>;
 /** Host → all, reliable, once per gameplay event. A typed union over GameEventMap minus 'location:changed'. */
 export type EventMsg = { [K in NetEventName]: { t: 'e'; name: K; payload: GameEventMap[K] } }[NetEventName];
 
+/**
+ * Where a match is played. A city carries the geocoded centre, not just the
+ * search text: every client builds its world from these exact coordinates, so
+ * nobody re-geocodes and no two players can land on different Portlands.
+ */
+export type MatchMap =
+  | { kind: 'desert' }
+  | { kind: 'city'; query: string; label: string; lat: number; lon: number };
+
+export const MAX_PLACE_LEN = 80;
+
+/**
+ * The one map validator. The lobby record and the hello message both cross a
+ * trust boundary, so both come through here.
+ */
+export function decodeMatchMap(v: unknown): MatchMap | null {
+  if (!isRecord(v)) return null;
+  if (v.kind === 'desert') return { kind: 'desert' };
+  if (v.kind !== 'city') return null;
+  if (typeof v.query !== 'string' || v.query.length === 0 || v.query.length > MAX_PLACE_LEN) return null;
+  if (typeof v.label !== 'string' || v.label.length === 0 || v.label.length > MAX_PLACE_LEN) return null;
+  if (!inRange(v.lat, -90, 90) || !inRange(v.lon, -180, 180)) return null;
+  return { kind: 'city', query: v.query, label: v.label, lat: v.lat, lon: v.lon };
+}
+
 /** owner null = bot */
 export interface RosterEntry { id: number; name: string; team: 0 | 1; vehicle: number; owner: PeerId | null }
 
 /** Host → a joining client: everything needed to build the world. */
 export interface HelloMsg {
-  t: 'h'; seed: number; map: { kind: 'desert' | 'city'; query?: string }; roster: RosterEntry[];
+  t: 'h'; v: number; seed: number; map: MatchMap; roster: RosterEntry[];
   /** The host's base positions; clients cannot derive them, their colliders differ. */
   bases: [[number, number, number], [number, number, number]];
+  /**
+   * The host's Google Maps key, when they chose to share it, so players can
+   * load a city without one of their own. Sent per-peer to seats that already
+   * proved their token, never broadcast.
+   */
+  key?: string;
 }
 
 /** Client → host on connect: which lobby seat this peer is, proven by the seat's token. */
 export interface JoinMsg { t: 'j'; uid: string; token: string }
 
-export type NetMsg = InputMsg | SnapshotMsg | EventMsg | HelloMsg | JoinMsg;
+/**
+ * Client → host once its world is built and it can actually play. A city takes
+ * tens of seconds to stream, so without this the host starts the clock while a
+ * guest is still fetching tiles and that player arrives to a match in progress.
+ */
+export interface ReadyMsg { t: 'r' }
+
+export type NetMsg = InputMsg | SnapshotMsg | EventMsg | HelloMsg | JoinMsg | ReadyMsg;
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 const r4 = (n: number): number => Math.round(n * 10000) / 10000;
@@ -65,8 +113,6 @@ const isVec3 = (v: unknown): v is [number, number, number] => Array.isArray(v) &
 const isQuat = (v: unknown): v is [number, number, number, number] => Array.isArray(v) && v.length === 4 && v.every(isNum);
 
 const PHASES = new Set<SnapshotMsg['phase']>(['countdown', 'playing', 'suddenDeath', 'gameover']);
-const MAP_KINDS = new Set<HelloMsg['map']['kind']>(['desert', 'city']);
-
 function decodeInput(r: Record<string, unknown>): InputMsg | null {
   if (!isInt(r.seq) || r.seq < 0) return null;
   if (!inRange(r.th, 0, 1)) return null;
@@ -143,12 +189,15 @@ function decodeRosterEntry(v: unknown): RosterEntry | null {
 
 function decodeHello(r: Record<string, unknown>): HelloMsg | null {
   if (!isInt(r.seed)) return null;
-  if (!isRecord(r.map)) return null;
-  if (typeof r.map.kind !== 'string' || !MAP_KINDS.has(r.map.kind as HelloMsg['map']['kind'])) return null;
-  let query: string | undefined;
-  if (r.map.query !== undefined) {
-    if (typeof r.map.query !== 'string') return null;
-    query = r.map.query;
+  // a host older than versioning sent no v at all: call it 1 and let the
+  // caller report the mismatch, rather than dropping the message into a timeout
+  const v = isInt(r.v) ? r.v : 1;
+  const map = decodeMatchMap(r.map);
+  if (!map) return null;
+  let key: string | undefined;
+  if (r.key !== undefined) {
+    if (typeof r.key !== 'string' || r.key.length === 0 || r.key.length > 128) return null;
+    key = r.key;
   }
   if (!Array.isArray(r.roster)) return null;
   const roster: RosterEntry[] = [];
@@ -158,9 +207,10 @@ function decodeHello(r: Record<string, unknown>): HelloMsg | null {
     roster.push(entry);
   }
   if (!Array.isArray(r.bases) || r.bases.length !== 2 || !isVec3(r.bases[0]) || !isVec3(r.bases[1])) return null;
-  const kind = r.map.kind as HelloMsg['map']['kind'];
-  const map = query !== undefined ? { kind, query } : { kind };
-  return { t: 'h', seed: r.seed, map, roster, bases: [r.bases[0], r.bases[1]] };
+  const bases: HelloMsg['bases'] = [r.bases[0], r.bases[1]];
+  return key !== undefined
+    ? { t: 'h', v, seed: r.seed, map, roster, bases, key }
+    : { t: 'h', v, seed: r.seed, map, roster, bases };
 }
 
 function decodeJoin(r: Record<string, unknown>): JoinMsg | null {
@@ -185,6 +235,7 @@ export function decode(text: unknown): NetMsg | null {
     case 'e': return decodeEvent(raw);
     case 'h': return decodeHello(raw);
     case 'j': return decodeJoin(raw);
+    case 'r': return { t: 'r' };
     default: return null;
   }
 }

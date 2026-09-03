@@ -12,7 +12,7 @@ function player(overrides: Partial<LobbyPlayer> = {}): LobbyPlayer {
 function room(overrides: Partial<LobbyRoom> = {}): LobbyRoom {
   return {
     code: 'ABCD', host: 'host-uid', createdAt: 1, phase: 'lobby', seed: 0,
-    map: { kind: 'desert' }, players: { 'host-uid': player() }, ...overrides
+    map: { kind: 'desert' }, keyShared: false, players: { 'host-uid': player() }, ...overrides
   };
 }
 
@@ -76,15 +76,27 @@ describe('parseRoom', () => {
   it('accepts a valid snapshot', () => {
     const raw = {
       host: 'host-uid', createdAt: 1, phase: 'lobby', seed: 7,
-      map: { kind: 'city', query: 'Portland' },
+      map: { kind: 'city', query: 'Portland', label: 'Portland, OR, USA', lat: 45.5152, lon: -122.6784 },
+      keyShared: true,
       players: { 'host-uid': { name: 'Ann', vehicle: 2, team: 1, ready: true, joinedAt: 5 } }
     };
     expect(parseRoom(raw, 'WXYZ')).toEqual({ code: 'WXYZ', ...raw });
   });
 
-  it('accepts a map with no query', () => {
+  it('accepts a desert map, and treats a missing keyShared as not shared', () => {
     const raw = { host: 'h', createdAt: 1, phase: 'lobby', seed: 0, map: { kind: 'desert' }, players: {} };
     expect(parseRoom(raw, 'ABCD')?.map).toEqual({ kind: 'desert' });
+    expect(parseRoom(raw, 'ABCD')?.keyShared).toBe(false);
+  });
+
+  it('rejects a city room that never resolved its centre', () => {
+    // without lat/lon two players would geocode the text separately and could
+    // land in different places; the room is unusable, not merely incomplete
+    const raw = {
+      host: 'h', createdAt: 1, phase: 'lobby', seed: 0,
+      map: { kind: 'city', query: 'Portland' }, players: {}
+    };
+    expect(parseRoom(raw, 'ABCD')).toBeNull();
   });
 
   it('rejects a non-object', () => {
