@@ -1,6 +1,7 @@
 /**
  * AI driver: a small state machine (seek / chase / deliver / support) plus
- * steering toward the current target. Produces a VehicleInput each tick.
+ * steering toward the current target, via a routed waypoint when the game
+ * supplies one. Produces a VehicleInput each tick.
  */
 import { Vector3, MathUtils } from 'three';
 import type { VehicleInput } from '../physics/vehicleStats.ts';
@@ -22,6 +23,13 @@ export const DEFAULT_DRIVER: DriverConfig = {
   slowTurnAngle: 1.3,
   slowTurnSpeed: 20
 };
+
+/**
+ * Next point to steer toward on the way from `from` to `to`, or null to
+ * drive straight. `kind` names the target ('contraband', 'carrier',
+ * 'base0', 'base1') so routes can be shared and cached per target.
+ */
+export type RouteFn = (kind: string, from: Vector3, to: Vector3) => Vector3 | null;
 
 /** Full throttle but crawling for this long means we are wedged against something. */
 const STUCK_S = 0.8;
@@ -48,10 +56,9 @@ export class DriverBrain {
     private readonly teamOf: (v: VehicleBody) => number
   ) {}
 
-  think(dt: number, self: VehicleBody, match: MatchState): void {
+  think(dt: number, self: VehicleBody, match: MatchState, route: RouteFn | null = null): void {
     if (this.unstickS > 0) {
-      // reversing out of whatever we hit; bots have no pathfinding, so this
-      // is what gets them off building walls
+      // reversing out of whatever we hit — the fallback when routing wasn't enough
       this.unstickS -= dt;
       this.throttle = 0;
       this.brake = 1;
@@ -72,7 +79,7 @@ export class DriverBrain {
         this.state = Math.random() < 0.6 ? 'deliver' : 'seek';
       }
     }
-    this.steerToward(self, match);
+    this.steerToward(self, match, route);
     if (this.throttle > 0.5 && self.speed < 3 && self.onGround) this.stuckS += dt;
     else this.stuckS = 0;
     if (this.stuckS > STUCK_S) {
@@ -82,25 +89,34 @@ export class DriverBrain {
     }
   }
 
-  private steerToward(self: VehicleBody, match: MatchState): void {
+  private steerToward(self: VehicleBody, match: MatchState, route: RouteFn | null): void {
     // the state is re-evaluated on a timer, so the carrier may have delivered
     // (or been stolen from) since: fall back to seeking rather than crash
     const carrier = match.carrier;
+    let kind: string;
     if (this.state === 'chase' && carrier) {
       _target.copy(carrier.pos).addScaledVector(carrier.vel, 0.3);
       _target.y = self.pos.y;
+      kind = 'carrier';
     } else if (this.state === 'deliver' && carrier) {
-      _target.copy(match.bases[this.teamOf(self) === 1 ? 1 : 0]);
+      const team = this.teamOf(self) === 1 ? 1 : 0;
+      _target.copy(match.bases[team]);
+      kind = 'base' + team;
     } else {
       _target.copy(match.contrabandPos);
+      kind = 'contraband';
     }
     _toTarget.copy(_target).sub(self.pos);
     _toTarget.y = 0;
-    const dist = _toTarget.length();
-    if (dist < 1) {
+    if (_toTarget.length() < 1) {
       this.steer = 0;
       this.throttle = 0;
       return;
+    }
+    const wp = route?.(kind, self.pos, _target);
+    if (wp) {
+      _toTarget.copy(wp).sub(self.pos);
+      _toTarget.y = 0;
     }
     _toTarget.normalize();
     self.forward(_fwd);

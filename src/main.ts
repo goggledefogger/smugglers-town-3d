@@ -17,6 +17,7 @@ import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
 import { Minimap } from './render/Minimap.ts';
+import { Showroom } from './render/Showroom.ts';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
@@ -54,6 +55,7 @@ app.innerHTML = `
 `;
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
+const hudEl = document.getElementById('hud')!;
 const minimapCanvas = document.getElementById('minimap') as HTMLCanvasElement;
 const loaderEl = document.querySelector('sr-loader') as LoaderOverlay;
 const introEl = document.querySelector('sr-intro') as IntroScreen;
@@ -65,7 +67,7 @@ const dirArrowEl = document.querySelector('sr-dirarrow') as DirArrow;
 // ---- stores, events, game ----
 const events = new EventBus<GameEventMap>();
 const initialHud: HudSnapshot = {
-  phase: 'intro', speed: 0, damage: 0, vehicleName: '', scores: { 0: 0, 1: 0 },
+  phase: 'intro', timeLeftS: config.match.roundS, speed: 0, damage: 0, vehicleName: '', scores: { 0: 0, 1: 0 },
   carrierName: null, carrierIsPlayer: false, carrierIsAlly: false,
   objective: 'FIND CONTRABAND', distanceToTargetM: 0, targetIsDelivery: false,
   locationLabel: 'Procedural Desert', winner: null, teamPips: []
@@ -87,6 +89,7 @@ const propScatter = new PropScatter(renderer.scene);
 const pickups = new Pickups(renderer.scene);
 const cameraRig = new CameraRig(renderer.camera, () => game.terrainProvider.heightfield);
 const minimap = new Minimap(minimapCanvas, config.world.mapHalf);
+const showroom = new Showroom(renderer.scene, renderer.camera, () => game.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let colliderRefreshAt = 0;
@@ -109,20 +112,31 @@ function rebuildViews(): void {
   }
 }
 
-/** New terrain or rematch: re-seat props, refresh colliders, then spawn everything clear of them. */
-function startMatch(terrain: TerrainProvider): void {
+/** Re-seat props on a terrain and refresh colliders (buildings + props). */
+function prepareTerrain(terrain: TerrainProvider): void {
   propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal);
   applyColliders();
+}
+
+/** New terrain or rematch: props, colliders, then spawn everything clear of them. */
+function startMatch(terrain: TerrainProvider): void {
+  prepareTerrain(terrain);
   game.reset(terrain);
   rebuildViews();
 }
-startMatch(desertTerrain);
+
+// boot into the garage: terrain only, no match until the player picks a ride
+prepareTerrain(desertTerrain);
+hudEl.hidden = true;
+relocateBarEl.hidden = true;
+pickups.setVisible(false);
 
 // ---- keyboard + hotkeys ----
 const keyboard = new KeyboardState();
 
 window.addEventListener('keydown', (e) => {
   if (['INPUT', 'TEXTAREA'].includes(document.activeElement?.tagName ?? '')) return;
+  if (introEl.isConnected) return; // the garage owns the keys until the match starts
   if (e.code === 'KeyR') resetPlayer();
   if (e.code === 'KeyC') cameraRig.cycleMode();
   if (e.code.startsWith('Digit')) {
@@ -178,6 +192,9 @@ events.on('contraband:dropped', ({ vehicleId }) => {
 events.on('contraband:delivered', ({ team }) => {
   bannerEl.show(`DELIVERED! ${team === 0 ? 'YOUR CREW' : 'RIVALS'}`, 1500);
 });
+events.on('match:countdown', ({ n }) => bannerEl.show(n > 0 ? String(n) : 'GO!', n > 0 ? 900 : 700));
+events.on('match:finalMinute', () => bannerEl.show('FINAL MINUTE', 1500));
+events.on('match:suddenDeath', () => bannerEl.show('SUDDEN DEATH: NEXT DELIVERY WINS', 2500));
 events.on('match:win', ({ team }) => {
   bannerEl.show(team === 0 ? 'YOUR CREW WINS!' : 'RIVALS WIN!', 4000);
   setTimeout(() => {
@@ -191,8 +208,15 @@ events.on('location:changed', ({ label }) => {
 });
 
 // ---- screens wiring ----
-introEl.onStart = () => {
+introEl.onSelect = (type) => showroom.setType(type);
+introEl.onStart = (type) => {
+  showroom.dispose();
+  game.playerType = type;
+  startMatch(game.terrainProvider);
   introEl.remove();
+  hudEl.hidden = false;
+  relocateBarEl.hidden = false;
+  pickups.setVisible(true);
 };
 
 endEl.onRematch = () => {
@@ -269,6 +293,8 @@ function frame(now: number): void {
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
     dirArrowEl.setBearing(game.targetBearing());
     minimap.draw(game.state, game.vehicles, game.state.carrier);
+  } else if (introEl.isConnected) {
+    showroom.update(dt, window.innerWidth, window.innerHeight);
   }
   renderer.render();
   requestAnimationFrame(frame);

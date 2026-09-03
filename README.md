@@ -3,7 +3,8 @@
 A 4v4 arcade vehicle combat game — a single piece of contraband spawns on the
 map. Grab it, rush it back to your crew's base (each team has one, fixed for
 the match). Get rammed and it transfers to the attacker. First team to
-**5 deliveries** wins.
+**5 deliveries** wins, or whoever leads when the **5-minute** clock runs
+out; a tie goes to sudden death.
 
 Plays instantly on a procedural desert. With a Google Maps API key (Maps
 JavaScript + Elevation + Static Maps + Photorealistic 3D Tiles), relocate the
@@ -20,7 +21,7 @@ npm run dev        # → http://localhost:5173
 | Script | What it does |
 |---|---|
 | `npm run dev` | Vite dev server with HMR |
-| `npm test` | Vitest suite (71 tests, node env) |
+| `npm test` | Vitest suite (81 tests, node env) |
 | `npm run test:watch` | Tests in watch mode |
 | `npm run typecheck` | `tsc --noEmit` (strict) |
 | `npm run build` | Typecheck + production build to `dist/` |
@@ -38,6 +39,10 @@ npm run dev        # → http://localhost:5173
 | `1`–`5` | Switch vehicle (Buggy, Rally, SUV, Trophy, Monster) |
 
 Keys typed into a text field (search box, API key) never reach the game.
+
+The game opens in the garage: pick a ride from the roster (`↑`/`↓` or `1`–`5`,
+`Enter` or **START ENGINE** to go). The selected vehicle turns on a 3D
+showroom stand with its stats alongside, and the choice sticks for rematches.
 
 ## Vehicle roster
 

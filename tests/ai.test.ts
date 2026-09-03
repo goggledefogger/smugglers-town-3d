@@ -62,6 +62,21 @@ describe('DriverBrain', () => {
     expect(input.steer).toBeLessThan(0);
   });
 
+  it('steers toward the routed waypoint rather than the raw target', () => {
+    // target straight ahead (-z), but the route says go right (+x)
+    const self = makeBody(0, 0);
+    const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
+    const state = makeMatchState(null);
+    state.contrabandPos.set(0, 3, -100);
+    const seen: string[] = [];
+    brain.think(1, self, state, (kind, from) => {
+      seen.push(kind);
+      return new Vector3(from.x + 20, 0, from.z);
+    });
+    expect(seen).toEqual(['contraband']);
+    expect(brain.input().steer).toBeLessThan(0);
+  });
+
   it('reverses out after being wedged at full throttle', () => {
     const self = makeBody(0, 0);
     self.onGround = true; // speed stays 0: wedged against something

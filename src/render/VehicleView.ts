@@ -121,6 +121,11 @@ export class VehicleView {
     this.sync(1 / 60, 1);
   }
 
+  /** The showroom has no integrity to show. */
+  setHealthBarVisible(v: boolean): void {
+    this.healthBar.visible = v;
+  }
+
   private updateHealthBar(): void {
     const ctx = this.barCanvas.getContext('2d')!;
     ctx.clearRect(0, 0, 64, 8);

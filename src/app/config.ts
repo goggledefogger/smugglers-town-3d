@@ -36,7 +36,13 @@ export const config = {
   },
   match: {
     /** Player + N allies on team 0. */
-    teamSize: 4
+    teamSize: 4,
+    /** Round length (s); the leader wins at the buzzer, a tie goes to sudden death. */
+    roundS: 300,
+    /** Start countdown (s): cars settle, nobody drives. */
+    countdownS: 3,
+    /** Warning banner when this much time is left (s). */
+    finalMinuteS: 60
   },
   camera: {
     fovBase: 62,

@@ -2,10 +2,12 @@
  * Reactive store the UI subscribes to. Game pushes updates; Lit components
  * re-render on change. Kept intentionally small — snapshot-in snapshot-out.
  */
-export type GamePhase = 'intro' | 'playing' | 'gameover';
+export type GamePhase = 'intro' | 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
 
 export interface HudSnapshot {
   readonly phase: GamePhase;
+  /** Seconds left on the round clock. */
+  readonly timeLeftS: number;
   readonly speed: number;
   readonly damage: number;
   readonly vehicleName: string;

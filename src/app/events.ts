@@ -9,6 +9,11 @@ export interface GameEventMap {
   'contraband:dropped': { vehicleId: number };
   /** Integrity hit zero; the car respawned near its base. */
   'vehicle:wrecked': { vehicleId: number };
+  /** Start countdown tick; n = 0 is "go". */
+  'match:countdown': { n: number };
+  'match:finalMinute': Record<string, never>;
+  /** Clock ran out tied: the next delivery wins. */
+  'match:suddenDeath': Record<string, never>;
   'match:win': { team: 0 | 1 };
   'location:changed': { label: string; isReal: boolean };
 }

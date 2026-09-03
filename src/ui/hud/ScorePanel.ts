@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { HudComponent } from './HudComponent.ts';
 
+/** Scores with the round clock between them; the clock goes hot in the final minute. */
 export class ScorePanel extends HudComponent {
   static override styles = css`
     :host { display: block; }
@@ -11,7 +12,9 @@ export class ScorePanel extends HudComponent {
     .team .val { font-family:'Russo One',sans-serif; font-size:26px; line-height:1; }
     .you .val { color:var(--accent); }
     .opp .val { color:var(--cool); }
-    .vs { font-family:'Russo One',sans-serif; color:var(--muted); font-size:16px; opacity:.7; }
+    .clock { font-family:'JetBrains Mono',monospace; font-size:18px; color:var(--ink); min-width:58px; text-align:center; }
+    .clock.low { color:var(--hot); }
+    .clock.sudden { font-family:'Russo One',sans-serif; font-size:11px; color:var(--hot); letter-spacing:.08em; }
     .pips { display:flex; gap:4px; margin-left:10px; }
     .pip { width:10px; height:10px; border-radius:3px; }
     .pip.t0 { background:#3f3; } .pip.t1 { background:#f33; }
@@ -23,10 +26,13 @@ export class ScorePanel extends HudComponent {
     const pips = (s?.teamPips ?? []).map(
       p => html`<span class="pip ${p.team === 0 ? 't0' : 't1'} ${p.isPlayer ? 'me' : ''}"></span>`
     );
+    const sudden = s?.phase === 'suddenDeath';
+    const t = Math.max(0, Math.ceil(s?.timeLeftS ?? 0));
+    const clock = `${Math.floor(t / 60)}:${String(t % 60).padStart(2, '0')}`;
     return html`
       <div class="panel">
         <div class="team you"><span class="name">Your Crew</span><span class="val">${s?.scores[0] ?? 0}</span></div>
-        <span class="vs">VS</span>
+        <span class="clock ${sudden ? 'sudden' : t <= 60 ? 'low' : ''}">${sudden ? 'SUDDEN DEATH' : clock}</span>
         <div class="team opp"><span class="name">Rivals</span><span class="val">${s?.scores[1] ?? 0}</span></div>
         <div class="pips">${pips}</div>
       </div>

@@ -8,6 +8,7 @@ export class RelocateBar extends LitElement {
   static override styles = css`
     :host { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:20;
       display:flex; gap:6px; align-items:center; }
+    :host([hidden]) { display:none; }
     input { padding:8px 10px; background:rgba(0,0,0,.6); border:2px solid var(--line);
       border-radius:6px; color:var(--ink); font-family:inherit; font-size:13px; outline:none; }
     input:focus { border-color:var(--accent); }

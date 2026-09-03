@@ -165,10 +165,15 @@ export class VehicleBody {
         this.vel.addScaledVector(fwd, -this.cfg.driveForce * stats.accel * 0.6 * input.brake * dt);
       }
     }
-    // rolling resistance + lateral grip
-    this.vel.multiplyScalar(1 - 0.9 * dt);
+    // rolling resistance scaled so full throttle's terminal velocity IS the
+    // top-speed stat (a fixed coefficient left three of five types
+    // drag-limited well under their stat). Lateral grip: velocity retained
+    // per second is 19 % at grip 0.7 (rally slides), 4 % at 0.82 (buggy),
+    // 0.1 % at 1.0 and up (planted); a linear exponent made every car planted
+    const dragK = (this.cfg.driveForce * stats.accel) / topSpeed;
+    this.vel.multiplyScalar(1 - dragK * dt);
     const sideVel = this.vel.dot(right);
-    this.vel.addScaledVector(right, -sideVel * (1 - Math.pow(0.001, dt * stats.grip)));
+    this.vel.addScaledVector(right, -sideVel * (1 - Math.pow(0.001, dt * stats.grip ** 4)));
     if (this.vel.length() > topSpeed) this.vel.setLength(topSpeed);
     this.applySteer(dt, input, up, fwdSpeed);
     if (input.jump && !this.jumpHeld) {

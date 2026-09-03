@@ -39,6 +39,12 @@ export class Pickups {
     return m;
   }
 
+  /** Hidden in the garage, where no match exists yet. */
+  setVisible(v: boolean): void {
+    this.contraband.visible = v;
+    for (const b of this.bases) b.visible = v;
+  }
+
   /** carrier: the carrier's rendered pose, so the crate rides the interpolated car. */
   sync(state: MatchState, timeS: number, dt: number, carrier: Pose | null): void {
     if (carrier) {

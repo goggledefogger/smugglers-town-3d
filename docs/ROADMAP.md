@@ -34,24 +34,32 @@ Expected feel: everything is larger and slower relative to the car; a
 cross-field run takes ~70 s at top speed instead of ~11 s. That is closer to
 the original, but it changes pacing enough to warrant a round timer (item 2).
 
-## 2. Round structure
+## 1b. Menus
 
-- Timed rounds (e.g. 5 min) with the score at the buzzer, in place of or on
-  top of win-at-5; countdown in the HUD, "FINAL MINUTE" banner, sudden death
-  on a tie.
-- A 3-2-1 start countdown instead of dropping into a running sim.
+The garage (vehicle pick) exists. Left: a game-setup screen (round length,
+team size, bot difficulty, place presets) ahead of it, a pause menu, and
+options (key bindings, audio). Mid-match `1`–`5` vehicle switching should go
+once setup exists; it is a debug leftover.
+
+## 2. Round structure — mostly done
+
+Done: 5-minute clock, 3-2-1 countdown, final-minute warning, sudden death on
+a tie. Left:
+
 - Match summary on the end screen: deliveries and steals per driver.
 
-## 3. Bots
+## 3. Bots — pathing done
 
-- Pathing: bots drive straight at their target and rely on the stuck-recovery
-  reverse to get off walls. The building collider grid already exists; A* (or
-  a flow field toward the contraband/base) over its 10 m cells would let them
-  navigate a downtown.
+Done: BFS flow fields over a 20 m occupancy grid built from the colliders;
+bots follow waypoints around buildings and props. Left:
+
 - Roles: when an ally carries, escorts should body-block chasers rather than
   drive to the base and wait.
 - Difficulty setting: reaction time (`reevaluateS`), top-speed cap, steal
   aggression.
+- Field quality: the 20 m grid treats any cell touching a collider as
+  blocked, so streets narrower than ~20 m close; a finer grid or a
+  clearance-aware BFS would open them.
 
 ## 4. Graphics
 

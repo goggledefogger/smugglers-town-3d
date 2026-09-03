@@ -73,6 +73,51 @@ describe('VehicleBody.step', () => {
     expect(up.y).toBeGreaterThan(0.7);
   });
 
+  it('lets low-grip cars slide where high-grip ones bite', () => {
+    const rally = makeBody(1);   // grip 0.70
+    const suv = makeBody(2);     // grip 1.00
+    const monster = makeBody(4); // grip 1.20
+    for (const v of [rally, suv, monster]) {
+      v.pos.set(0, 1, 0);
+      v.vel.set(20, 0, 0); // pure sideways (facing -z)
+      run(v, NO_INPUT, 0.5);
+    }
+    expect(Math.abs(rally.vel.x)).toBeGreaterThan(5);
+    expect(Math.abs(suv.vel.x)).toBeLessThan(1);
+    expect(Math.abs(monster.vel.x)).toBeLessThan(Math.abs(suv.vel.x) + 1e-6);
+  });
+
+  it('accelerates and tops out by type', () => {
+    const rally = makeBody(1);
+    const monster = makeBody(4);
+    for (const v of [rally, monster]) {
+      v.pos.set(0, 1, 0);
+      run(v, { ...NO_INPUT, throttle: 1 }, 1);
+    }
+    expect(rally.speed).toBeGreaterThan(monster.speed * 1.5);
+    // keep driving (teleported back each second so the field edge isn't hit):
+    // the top-speed stat must be the terminal velocity, not a drag accident
+    for (let s = 0; s < 5; s++) {
+      for (const v of [rally, monster]) {
+        v.pos.set(0, 1, 0);
+        run(v, { ...NO_INPUT, throttle: 1 }, 1);
+      }
+    }
+    expect(rally.speed).toBeCloseTo(DEFAULT_PHYSICS.maxSpeed * VEHICLE_TYPES[1]!.maxSpeed, -1);
+    expect(monster.speed).toBeCloseTo(DEFAULT_PHYSICS.maxSpeed * VEHICLE_TYPES[4]!.maxSpeed, -1);
+  });
+
+  it('turns faster with a higher handling stat', () => {
+    const buggy = makeBody(0);   // steer 1.25
+    const monster = makeBody(4); // steer 0.85
+    for (const v of [buggy, monster]) {
+      v.pos.set(0, 1, 0);
+      v.vel.set(0, 0, -20);
+      run(v, { ...NO_INPUT, throttle: 1, steer: 1 }, 0.3);
+    }
+    expect(Math.abs(buggy.forward().x)).toBeGreaterThan(Math.abs(monster.forward().x) * 1.2);
+  });
+
   it('scales landing damage by durability', () => {
     const buggy = makeBody(0);   // durability 0.55
     const monster = makeBody(4); // durability 1.5

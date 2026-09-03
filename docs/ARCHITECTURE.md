@@ -97,16 +97,34 @@ bilinear interpolation, because bilinear's slope kinks at every grid edge hit
 the car as a jolt several times a second at speed.
 
 Brake past a stop becomes reverse (35 % of top speed) with the steering
-flipped so the rear swings the way you steer. Damage from landings, walls
+flipped so the rear swings the way you steer. Every roster stat does
+something: `accel` scales drive force, `maxSpeed` is the terminal velocity
+(rolling drag is derived from drive force ÷ top speed, so the stat is the
+real ceiling), `steer` scales turn rate, `grip` sets how much lateral
+velocity survives each second (19 % at 0.7, 0.1 % at 1.0), `durability`
+divides damage, and `mass` decides rams. Damage from landings, walls
 and rams is divided by the vehicle's `durability`; at integrity 0 the body
 stays wrecked until `Game.wreck` drops its crate and respawns it. Physics
 tuning enters through `app/config.physics` (plus the field size); the
 `DEFAULT_PHYSICS` in the module exists for tests.
 
-### `core/ai/DriverBrain.ts`
-Bots have no pathfinding. A stuck detector (full throttle but crawling for
-0.8 s while grounded) triggers a 0.9 s reverse with a random steer, which is
-what gets them off building walls. Spawns use the most open spot
+### `core/ai/DriverBrain.ts` and `core/ai/NavGrid.ts`
+Bots steer toward a waypoint supplied by a `RouteFn` when the game has one,
+else straight at the target. `NavGrid` is a 20 m occupancy grid rebuilt from
+the same colliders physics uses (cell centers within a car's half-width of a
+collider are blocked); a `FlowField` is a BFS distance map from a target
+over that grid, and the waypoint is the cell three steps down it. `Game`
+caches one field per target kind — bases never move, the contraband rarely,
+the carrier's refreshes when it moves more than four cells or every 0.5 s.
+A stuck detector (full throttle but crawling for 0.8 s while grounded) still
+triggers a 0.9 s reverse with a random steer as the fallback.
+
+### Round structure (`app/Game.ts`)
+A match runs countdown → playing → (suddenDeath) → gameover. During the
+countdown cars settle but nobody drives and the banner counts 3-2-1-go. The
+clock (`config.match.roundS`) only runs while playing; at zero the leader
+wins, a tie goes to sudden death where the next delivery wins. Win-at-five
+applies throughout. `GameDeps.round` overrides the timings for tests. Spawns use the most open spot
 near the field center (`Game.findOpenCenter`) and contraband / drop-zone
 placement requires clear ground around the point, so a downtown start never
 wedges anyone between towers.
@@ -213,6 +231,12 @@ interpolated between sim steps; a cosmetic pitch/roll from the terrain under
 the wheels is added on top. Wheels sit in pivots (the front pair steer with
 the input) and spin on their axle with forward speed; wheel radius scales
 with the type's mass and the roll bar carries the type's accent color.
+
+The app boots into the garage (`ui/screens/IntroScreen.ts`) with no match
+spawned: the HUD, relocate bar and pickups are hidden, and `render/Showroom`
+turns the selected vehicle at the field center with the camera orbiting it
+and the frustum shifted right of the garage panel (`setViewOffset`).
+`Game.playerType` records the pick; START spawns the match.
 
 Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
 

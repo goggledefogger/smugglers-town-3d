@@ -3,6 +3,10 @@
  * physics/gameplay at a fixed 60 Hz via an accumulator, and pushes HUD
  * snapshots to the store. Rendering subscribes to world state; Game never
  * touches the renderer directly.
+ *
+ * A match runs countdown → playing → (suddenDeath) → gameover. The clock
+ * only runs while playing; at zero the leader wins, a tie goes to sudden
+ * death where the next delivery wins. Win-at-scoreGoal applies throughout.
  */
 import { Vector3 } from 'three';
 import { config } from './config.ts';
@@ -11,7 +15,8 @@ import { VehicleBody, type BuildingCollider, type VehiclePhysicsConfig } from '.
 import { VEHICLE_TYPES } from '../core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../core/physics/vehicleCollisions.ts';
 import { MatchRules } from '../core/gameplay/MatchRules.ts';
-import { DriverBrain } from '../core/ai/DriverBrain.ts';
+import { DriverBrain, type RouteFn } from '../core/ai/DriverBrain.ts';
+import { NavGrid, type FlowField } from '../core/ai/NavGrid.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { GameEvents } from './events.ts';
@@ -25,16 +30,33 @@ export interface VehicleActor {
   brain: DriverBrain | null;
 }
 
+export interface RoundConfig {
+  readonly roundS: number;
+  readonly countdownS: number;
+  readonly finalMinuteS: number;
+}
+
 export interface GameDeps {
   readonly events: GameEvents;
   readonly store: Store<HudSnapshot>;
+  /** Defaults to config.match; tests shorten it. */
+  readonly round?: RoundConfig;
 }
+
+export type MatchPhase = 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
 
 const _tmpV = new Vector3();
 const _tmpFwd = new Vector3();
 const UP = new Vector3(0, 1, 0);
 /** The one place physics tuning enters the sim: app/config, with the field size folded in. */
 const PHYSICS: VehiclePhysicsConfig = { ...config.physics, worldHalf: config.world.mapHalf };
+
+interface CachedField {
+  readonly field: FlowField;
+  readonly x: number;
+  readonly z: number;
+  readonly at: number;
+}
 
 export class Game {
   readonly vehicles: VehicleActor[] = [];
@@ -49,11 +71,23 @@ export class Game {
   private winner: 0 | 1 | null = null;
   private buildingColliders: BuildingCollider[] = [];
   private hudTimer = 0;
+  private readonly round: RoundConfig;
+  private phase: MatchPhase = 'countdown';
+  private countdownLeft = 0;
+  private lastCountdownN = -1;
+  private timeLeftS = 0;
+  private finalMinuteShown = false;
+  private readonly nav = new NavGrid(config.world.mapHalf * 2);
+  private readonly fields = new Map<string, CachedField>();
+  private readonly _wp = new Vector3();
+  /** Roster index the player drives at the next spawn (garage choice); persists across rematches. */
+  playerType = 2;
 
   constructor(
     private terrain: TerrainProvider,
     private readonly deps: GameDeps
   ) {
+    this.round = deps.round ?? config.match;
     this.match = new MatchRules(
       config.scoring, this.bodies, this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
     );
@@ -62,6 +96,22 @@ export class Game {
   /** True when any building collider comes within r of (x, z). */
   readonly blockedWithin = (x: number, z: number, r: number): boolean =>
     this.buildingColliders.some(c => x + r > c.min.x && x - r < c.max.x && z + r > c.min.z && z - r < c.max.z);
+
+  /**
+   * Waypoint for a bot at `from` heading to `to`, routed around buildings on
+   * the nav grid; null means drive straight. Fields are cached per target
+   * kind: bases never move, the contraband rarely, the carrier constantly.
+   */
+  readonly route: RouteFn = (kind, from, to) => {
+    if (this.nav.isEmpty) return null;
+    let e = this.fields.get(kind);
+    const moved = e ? Math.hypot(e.x - to.x, e.z - to.z) : Infinity;
+    if (!e || moved > this.nav.cell * 4 || (moved > 0 && this.timeS - e.at > 0.5)) {
+      e = { field: this.nav.flowField(to.x, to.z), x: to.x, z: to.z, at: this.timeS };
+      this.fields.set(kind, e);
+    }
+    return e.field.waypoint(from.x, from.z, 3, this._wp);
+  };
 
   /**
    * Most open spot near the field center: the first candidate (nearest the
@@ -87,6 +137,12 @@ export class Game {
     this.winner = null;
     this.timeS = 0;
     this.accumulator = 0;
+    this.timeLeftS = this.round.roundS;
+    this.finalMinuteShown = false;
+    this.countdownLeft = this.round.countdownS;
+    this.lastCountdownN = -1;
+    this.phase = this.round.countdownS > 0 ? 'countdown' : 'playing';
+    this.fields.clear();
     // building colliders belong to the terrain, not the match: a rematch on
     // real terrain keeps them and a relocation replaces them explicitly
     this.vehicles.length = 0;
@@ -104,7 +160,7 @@ export class Game {
     for (let i = 0; i < total; i++) {
       const team = i < config.match.teamSize ? 0 : 1;
       const isPlayer = i === 0;
-      const typeIdx = isPlayer ? 2 : pickVehicleType();
+      const typeIdx = isPlayer ? this.playerType : pickVehicleType();
       const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS);
       const ang = (i / total) * Math.PI * 2;
       // ring around the open spot; walk outward along the ray if a slot is still blocked
@@ -116,7 +172,7 @@ export class Game {
         if (!this.blockedWithin(x, z, 4)) break;
       }
       body.pos.set(x, hf.sample(x, z) + 3, z);
-      body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -ang + Math.PI / 2);
+      body.quat.setFromAxisAngle(UP, -ang + Math.PI / 2);
       body.snapPrev();
       this.teams.set(body.id, team);
       this.bodies.push(body);
@@ -138,17 +194,24 @@ export class Game {
     return this.match.state;
   }
 
+  get matchPhase(): MatchPhase {
+    return this.phase;
+  }
+
   get terrainProvider(): TerrainProvider {
     return this.terrain;
   }
 
   setBuildingColliders(c: BuildingCollider[]): void {
     this.buildingColliders = c;
+    this.nav.rebuild(c);
+    this.fields.clear();
   }
 
   /** Swap the player's vehicle type in place, keeping position and velocity. */
   switchPlayerVehicle(typeIdx: number): void {
     if (typeIdx < 0 || typeIdx >= VEHICLE_TYPES.length) return;
+    this.playerType = typeIdx;
     const player = this.vehicles.find(a => a.isPlayer);
     if (!player) return;
     const pos = player.body.pos.clone();
@@ -174,7 +237,7 @@ export class Game {
 
   /** Advance the simulation by frameDt seconds (fixed-step inside). */
   update(frameDt: number, playerInput: VehicleInput | null): void {
-    if (this.winner !== null) return;
+    if (this.phase === 'gameover') return;
     const dt = Math.min(frameDt, config.loop.maxFrameDt);
     this.accumulator += dt;
     while (this.accumulator >= config.loop.step) {
@@ -192,13 +255,19 @@ export class Game {
   }
 
   private stepSim(dt: number, playerInput: VehicleInput | null): void {
+    if (this.phase === 'countdown') {
+      this.stepCountdown(dt);
+      return;
+    }
     this.timeS += dt;
+    if (this.phase === 'playing') this.tickClock(dt);
+    if (this.phase === 'gameover') return;
     for (const actor of this.vehicles) {
       let input: VehicleInput;
       if (actor.isPlayer) {
         input = playerInput ?? NEUTRAL_INPUT;
       } else {
-        actor.brain!.think(dt, actor.body, this.match.state);
+        actor.brain!.think(dt, actor.body, this.match.state, this.route);
         input = actor.brain!.input();
       }
       actor.body.step(dt, input, this.terrain.heightfield, this.buildingColliders);
@@ -215,6 +284,46 @@ export class Game {
     this.match.checkPickup(1);
     this.match.checkDelivery(1);
     this.processMatchEvents();
+  }
+
+  /** Cars settle onto the ground, nobody drives, the banner counts 3-2-1-go. */
+  private stepCountdown(dt: number): void {
+    const n = Math.ceil(this.countdownLeft);
+    if (n !== this.lastCountdownN) {
+      this.lastCountdownN = n;
+      this.deps.events.emit('match:countdown', { n });
+    }
+    for (const actor of this.vehicles) {
+      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.buildingColliders);
+    }
+    this.countdownLeft -= dt;
+    if (this.countdownLeft <= 0) {
+      this.phase = 'playing';
+      this.deps.events.emit('match:countdown', { n: 0 });
+    }
+  }
+
+  private tickClock(dt: number): void {
+    this.timeLeftS = Math.max(0, this.timeLeftS - dt);
+    if (!this.finalMinuteShown && this.timeLeftS <= this.round.finalMinuteS) {
+      this.finalMinuteShown = true;
+      this.deps.events.emit('match:finalMinute', {});
+    }
+    if (this.timeLeftS > 0) return;
+    const s = this.match.state.scores;
+    if (s[0] !== s[1]) {
+      this.endMatch(s[0] > s[1] ? 0 : 1);
+    } else {
+      this.phase = 'suddenDeath';
+      this.deps.events.emit('match:suddenDeath', {});
+    }
+  }
+
+  private endMatch(team: 0 | 1): void {
+    this.winner = team;
+    this.phase = 'gameover';
+    this.deps.events.emit('match:win', { team });
+    this.pushHud();
   }
 
   /** Integrity hit zero: the crate drops where the car died and the car respawns near its base. */
@@ -245,11 +354,10 @@ export class Game {
           break;
         case 'deliver':
           this.deps.events.emit('contraband:delivered', { team: e.team });
+          if (this.phase === 'suddenDeath') this.endMatch(e.team);
           break;
         case 'win':
-          this.winner = e.team;
-          this.deps.events.emit('match:win', { team: e.team });
-          this.pushHud();
+          if (this.phase !== 'gameover') this.endMatch(e.team);
           break;
       }
     }
@@ -289,7 +397,8 @@ export class Game {
     const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
     const target = this.playerTarget(player);
     this.deps.store.set({
-      phase: this.winner !== null ? 'gameover' : 'playing',
+      phase: this.phase,
+      timeLeftS: this.timeLeftS,
       speed: player.body.speed,
       damage: player.body.damage,
       vehicleName: player.body.stats.name,
