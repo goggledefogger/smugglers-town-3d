@@ -10,9 +10,9 @@ import type { WorldView } from '../app/WorldView.ts';
 import type { MatchPhase, VehicleActor } from '../app/Game.ts';
 import type { GameEvents } from '../app/events.ts';
 import type { HudSnapshot, Store } from '../app/store.ts';
-import { navTarget, OBJECTIVE_TEXT } from '../app/navTarget.ts';
+import { navMarkerFor } from '../app/navTarget.ts';
+import { buildHudSnapshot } from '../app/hudSnapshot.ts';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
-import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
 import { VehicleBody } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
@@ -36,8 +36,6 @@ const KEEP_SNAPS = 14;
 const TELEPORT_UNITS = 40;
 const _qa = new Quaternion();
 const _qb = new Quaternion();
-const _tmpV = new Vector3();
-const _tmpFwd = new Vector3();
 
 interface MutableState {
   scores: Record<0 | 1, number>;
@@ -199,50 +197,24 @@ export class ClientSession implements WorldView {
     }
   }
 
-  targetBearing(): number {
-    return this.navMarker()?.yaw ?? 0;
-  }
 
   navMarker(): { yaw: number; distance: number; target: Vector3 } | null {
     const player = this.player;
-    if (!player) return null;
-    const target = navTarget(this.st, player, this.vehicles).pos;
-    _tmpV.copy(target).sub(player.body.pos);
-    _tmpV.y = 0;
-    const planar = _tmpV.length();
-    if (planar < 1) return null;
-    _tmpV.normalize();
-    const fwd = player.body.forward(_tmpFwd);
-    fwd.y = 0;
-    fwd.normalize();
-    const ahead = _tmpV.dot(fwd);
-    const right = _tmpV.cross(fwd).y;
-    return { yaw: Math.atan2(right, ahead), distance: planar, target };
+    return player ? navMarkerFor(this.st, player, this.vehicles) : null;
   }
 
   private pushHud(): void {
     const player = this.player;
     if (!player) return;
-    const st = this.st;
-    const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
-    const nav = navTarget(st, player, this.vehicles);
-    this.store.set({
+    this.store.set(buildHudSnapshot({
+      state: this.st,
+      player,
+      vehicles: this.vehicles,
       phase: this.matchPhase,
       timeLeftS: this.timeLeftS,
-      speed: player.body.speed,
-      damage: player.body.damage,
-      vehicleName: player.body.stats.name,
-      scores: st.scores,
-      carrierName: carrierActor ? (carrierActor.isPlayer ? 'YOU' : carrierActor.label) : null,
-      carrierIsPlayer: carrierActor?.isPlayer ?? false,
-      carrierIsAlly: carrierActor ? carrierActor.team === player.team : false,
-      objective: OBJECTIVE_TEXT[nav.goal],
-      distanceToTargetM: player.body.pos.distanceTo(nav.pos) / WORLD_M_PER_M,
-      navGoal: nav.goal,
       locationLabel: this.terrainProvider.label,
-      winner: st.winner,
-      teamPips: this.vehicles.map(a => ({ team: a.team, isPlayer: a.isPlayer }))
-    });
+      winner: this.st.winner
+    }));
   }
 
   dispose(): void {

@@ -12,7 +12,7 @@
  * Deliberately free of runtime imports so the HUD store, the local sim and the
  * network client can all share it without an import cycle.
  */
-import type { Vector3 } from 'three';
+import { Vector3 } from 'three';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
 import type { VehicleActor } from './Game.ts';
 
@@ -59,4 +59,35 @@ export function navTarget(
     pos: carrier.body.pos,
     carrier
   };
+}
+
+const _toTarget = new Vector3();
+const _fwd = new Vector3();
+
+/**
+ * Bearing, planar distance and target position for the nav chevron and the
+ * radar. Both the local sim and the network client need it and had a copy
+ * each, 15 of 17 lines identical.
+ *
+ * Null when there is no player, or when you are all but standing on the
+ * target — a bearing from zero distance is noise, not information.
+ */
+export function navMarkerFor(
+  state: MatchState,
+  player: VehicleActor,
+  vehicles: readonly VehicleActor[]
+): { yaw: number; distance: number; target: Vector3 } | null {
+  const target = navTarget(state, player, vehicles).pos;
+  _toTarget.copy(target).sub(player.body.pos);
+  _toTarget.y = 0;
+  const planar = _toTarget.length();
+  if (planar < 1) return null;
+  _toTarget.normalize();
+  const fwd = player.body.forward(_fwd);
+  fwd.y = 0;
+  fwd.normalize();
+  // ahead first: cross() below overwrites _toTarget with the cross product
+  const ahead = _toTarget.dot(fwd);
+  const right = _toTarget.cross(fwd).y;
+  return { yaw: Math.atan2(right, ahead), distance: planar, target };
 }

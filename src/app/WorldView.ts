@@ -15,8 +15,6 @@ export interface WorldView {
   readonly alpha: number;
   readonly matchPhase: MatchPhase;
   readonly terrainProvider: TerrainProvider;
-  /** Radians clockwise from straight ahead to the player's current target. */
-  targetBearing(): number;
   /**
    * Orientation + planar distance to the player's current target, for the 3D
    * nav chevron. yaw = bearing clockwise from ahead; distance = flat ground

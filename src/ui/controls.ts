@@ -14,7 +14,7 @@ import type { VehicleInput } from '../core/physics/vehicleStats.ts';
  * code box could not accept the digits its own codes contain, and WASD steered
  * the car while you typed a place name.
  */
-export function deepActiveElement(): Element | null {
+function deepActiveElement(): Element | null {
   let el: Element | null = document.activeElement;
   while (el?.shadowRoot?.activeElement) el = el.shadowRoot.activeElement;
   return el;

@@ -92,13 +92,13 @@ describe('Game', () => {
     player.quat.identity(); // facing -z
     const c = game.state.contrabandPos;
     player.pos.set(c.x, c.y, c.z + 100);            // contraband straight ahead
-    expect(game.targetBearing()).toBeCloseTo(0, 6);
+    expect(game.navMarker()!.yaw).toBeCloseTo(0, 6);
     player.pos.set(c.x - 100, c.y, c.z);            // to the right (+x)
-    expect(game.targetBearing()).toBeCloseTo(Math.PI / 2, 6);
+    expect(game.navMarker()!.yaw).toBeCloseTo(Math.PI / 2, 6);
     player.pos.set(c.x + 100, c.y, c.z);            // to the left
-    expect(game.targetBearing()).toBeCloseTo(-Math.PI / 2, 6);
+    expect(game.navMarker()!.yaw).toBeCloseTo(-Math.PI / 2, 6);
     player.pos.set(c.x + 100, c.y, c.z - 100);      // behind-left
-    expect(game.targetBearing()).toBeCloseTo(-3 * Math.PI / 4, 6);
+    expect(game.navMarker()!.yaw).toBeCloseTo(-3 * Math.PI / 4, 6);
   });
 
   it('reports planar distance to the target, and nothing once you are on it', () => {

@@ -439,6 +439,16 @@ layers are thin enough over core that they're exercised by the smoke path
 UI logic that has bitten us (`navArrow`, `navTarget`), which is DOM-free
 precisely so it can be tested here.
 
-Multiplayer has its own end-to-end check: `npm run e2e:online` drives two
-headless browsers through a real room against Firebase, and takes `E2E_URL` so
-it can run against the deployed site as well as the dev server.
+The renderer and HUD are covered by `npm run smoke`, which drives a headless
+desert match at desktop and phone sizes and asserts the things that have
+actually broken: console errors, HUD corners off-screen, horizontal overflow,
+and a radar that never rasterised its relief. Multiplayer has `npm run
+e2e:online`, two headless browsers through a real room against Firebase. Both
+take `E2E_URL`, so both can run against a deployment.
+
+The local sim and the network client are two `WorldView` implementations of one
+match, so anything they both need is shared rather than copied: `navMarkerFor`
+in `app/navTarget.ts` and `buildHudSnapshot` in `app/hudSnapshot.ts`. They each
+used to hold their own copy — 15 of 17 lines and 19 of 24 identical — which is
+how one bug in the nav target came to exist in two places and get fixed in
+one.

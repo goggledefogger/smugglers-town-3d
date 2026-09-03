@@ -81,10 +81,6 @@ export function attachRemoteLog(sink: LogSink, level: Level = 'info'): void {
   for (const e of ring) if (ORDER[e.l] >= ORDER[level]) sink(e);
 }
 
-export function detachRemoteLog(): void {
-  remote = null;
-}
-
 export function logEntries(): readonly LogEntry[] {
   return ring;
 }

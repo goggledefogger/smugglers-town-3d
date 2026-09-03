@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { mulberry32 } from '../src/core/rng.ts';
 import {
-  makeRoomCode, assignTeam, canStart, parseRoom, validateName,
+  makeRoomCode, assignTeam, canStart, parseRoom, validateName, seatsFor,
   MAX_PLAYERS, ROOM_CODE_ALPHABET, type LobbyRoom, type LobbyPlayer, type Team
 } from '../src/net/lobby.ts';
+import { config } from '../src/app/config.ts';
 
 function player(overrides: Partial<LobbyPlayer> = {}): LobbyPlayer {
   return { name: 'Driver', vehicle: 0, team: 0 as Team, ready: false, joinedAt: 0, ...overrides };
@@ -160,5 +161,50 @@ describe('validateName', () => {
 describe('MAX_PLAYERS', () => {
   it('is 8', () => {
     expect(MAX_PLAYERS).toBe(8);
+  });
+});
+
+describe('seatsFor', () => {
+  const roomOf = (players: Record<string, Partial<LobbyPlayer>>): LobbyRoom =>
+    room({ players: Object.fromEntries(Object.entries(players).map(([k, v]) => [k, player(v)])) });
+
+  it('fills both teams to size, whoever is missing', () => {
+    const seats = seatsFor(roomOf({ host: { team: 0, joinedAt: 1 } }), 'host');
+    for (const team of [0, 1] as const) {
+      expect(seats.filter(s => s.team === team)).toHaveLength(config.match.teamSize);
+    }
+    expect(seats.filter(s => s.control === 'bot')).toHaveLength(config.match.teamSize * 2 - 1);
+  });
+
+  it('marks the local player and addresses everyone else by uid', () => {
+    const seats = seatsFor(roomOf({
+      host: { team: 0, joinedAt: 1, name: 'Ann' },
+      guest: { team: 1, joinedAt: 2, name: 'Bo' }
+    }), 'host');
+    expect(seats.find(s => s.name === 'Ann')?.control).toBe('local');
+    expect(seats.find(s => s.name === 'Bo')?.control).toBe('guest');
+  });
+
+  it('gives a player who never connected their seat back as a bot', () => {
+    const room2 = roomOf({
+      host: { team: 0, joinedAt: 1, name: 'Ann' },
+      ghost: { team: 1, joinedAt: 2, name: 'Ghost' }
+    });
+    const seats = seatsFor(room2, 'host', ['ghost']);
+    expect(seats.some(s => s.name === 'Ghost')).toBe(false);
+    expect(seats.filter(s => s.team === 1).every(s => s.control === 'bot')).toBe(true);
+  });
+
+  it('seats in join order and never exceeds the room cap', () => {
+    const many: Record<string, Partial<LobbyPlayer>> = {};
+    for (let i = 0; i < MAX_PLAYERS + 3; i++) {
+      many[`u${i}`] = { team: (i % 2) as Team, joinedAt: 100 - i, name: `P${i}` };
+    }
+    const seats = seatsFor(roomOf(many), 'u0');
+    const humans = seats.filter(s => s.control !== 'bot');
+    expect(humans).toHaveLength(MAX_PLAYERS);
+    // latest joiners are the ones cut, so the earliest joinedAt survives
+    expect(humans.some(s => s.name === `P${MAX_PLAYERS + 2}`)).toBe(true);
+    expect(humans.some(s => s.name === 'P0')).toBe(false);
   });
 });

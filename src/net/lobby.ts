@@ -8,6 +8,8 @@ import {
 } from 'firebase/database';
 import { firebaseApp, identity } from '../services/firebase.ts';
 import { decodeMatchMap, type MatchMap } from './protocol.ts';
+import { config } from '../app/config.ts';
+import type { Seat } from '../app/Game.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('lobby');
@@ -90,6 +92,22 @@ export function canStart(room: LobbyRoom, selfId: string): boolean {
     if (uid !== room.host && !p.ready) return false;
   }
   return true;
+}
+
+/** Lobby players in join order take seats; the rest of 4v4 are bots, teams filled evenly. */
+export function seatsFor(room: LobbyRoom, selfId: string, missing: readonly string[] = []): Seat[] {
+  const seats: Seat[] = Object.entries(room.players)
+    .filter(([uid]) => !missing.includes(uid))
+    .sort((a, b) => a[1].joinedAt - b[1].joinedAt)
+    // the rules cannot count seats, so the cap is enforced here, by join order
+    .slice(0, MAX_PLAYERS)
+    .map(([uid, p]) => ({ name: p.name, team: p.team, vehicle: p.vehicle, control: uid === selfId ? 'local' : uid }));
+  for (const team of [0, 1] as const) {
+    while (seats.filter(s => s.team === team).length < config.match.teamSize) {
+      seats.push({ name: '', team, vehicle: null, control: 'bot' });
+    }
+  }
+  return seats;
 }
 
 export function validateName(name: string): string {

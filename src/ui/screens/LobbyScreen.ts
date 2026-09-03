@@ -2,7 +2,7 @@ import { html, css, LitElement, type TemplateResult } from 'lit';
 import { VEHICLE_TYPES } from '../../core/physics/vehicleStats.ts';
 import { isTypingInField } from '../controls.ts';
 import type { LobbyRoom, LobbyPlayer, Team } from '../../net/lobby.ts';
-import type { MatchMap } from '../../net/protocol.ts';
+import { MAX_PLACE_LEN, type MatchMap } from '../../net/protocol.ts';
 
 const TEAM_NAME: Record<Team, string> = { 0: 'Your Crew', 1: 'Rivals' };
 
@@ -569,7 +569,7 @@ export class LobbyScreen extends LitElement {
           @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.check(); }} />
         <label for="place">Where</label>
         <div class="check-row">
-          <input id="place" type="text" placeholder="Any place on Earth…"
+          <input id="place" type="text" placeholder="Any place on Earth…" maxlength=${MAX_PLACE_LEN}
             @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.check(); }} />
           <button class="slim" ?disabled=${this.checking} @click=${() => this.check()}>
             ${this.checking ? 'CHECKING…' : 'CHECK'}

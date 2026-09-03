@@ -33,5 +33,11 @@ export interface VehicleInput {
   brake: number;      // [0, 1]
   steer: number;      // [-1, 1], +1 turns left
   jump: boolean;
-  pitch?: number;     // [-1, 1] air-control pitch
+  /**
+   * [-1, 1] air-control pitch. VehicleBody applies it and the wire carries it,
+   * but no input source produces one yet — KeyboardState has no binding — so it
+   * is always undefined in practice. Bind a key to make it real, or drop the
+   * field; it is half a feature either way.
+   */
+  pitch?: number;
 }

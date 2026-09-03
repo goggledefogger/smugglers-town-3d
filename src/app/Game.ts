@@ -10,7 +10,6 @@
  */
 import { Vector3 } from 'three';
 import { config } from './config.ts';
-import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
 import { VehicleBody, type BuildingCollider, type VehiclePhysicsConfig } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../core/physics/vehicleCollisions.ts';
@@ -20,7 +19,8 @@ import { DriverBrain, type RouteFn } from '../core/ai/DriverBrain.ts';
 import { NavGrid, type FlowField } from '../core/world/NavGrid.ts';
 import { SpawnPlanner, DEFAULT_SPAWN } from '../core/spawn/SpawnPlanner.ts';
 import { mulberry32, type Rng } from '../core/rng.ts';
-import { navTarget, OBJECTIVE_TEXT } from './navTarget.ts';
+import { navMarkerFor } from './navTarget.ts';
+import { buildHudSnapshot } from './hudSnapshot.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { GameEvents } from './events.ts';
@@ -65,8 +65,6 @@ export interface GameDeps {
 
 export type MatchPhase = 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
 
-const _tmpV = new Vector3();
-const _tmpFwd = new Vector3();
 const UP = new Vector3(0, 1, 0);
 /** Broadphase cell for building colliders; a car only tests the 3×3 cells around it. */
 const BROAD_CELL = 40;
@@ -483,61 +481,25 @@ export class Game {
     }
   }
 
-  /** Where the player should be heading, and why. See navTarget.ts. */
-  private playerTarget(player: VehicleActor): Vector3 {
-    return navTarget(this.match.state, player, this.vehicles).pos;
-  }
 
-  /**
-   * Bearing from the player's heading to the target, radians clockwise from
-   * straight ahead. Sampled every frame by the direction arrow, so it is
-   * not part of the 10 Hz HUD snapshot.
-   */
-  targetBearing(): number {
-    return this.navMarker()?.yaw ?? 0;
-  }
 
   navMarker(): { yaw: number; distance: number; target: Vector3 } | null {
     const player = this.player;
-    if (!player) return null;
-    const target = this.playerTarget(player);
-    _tmpV.copy(target).sub(player.body.pos);
-    _tmpV.y = 0;
-    const planar = _tmpV.length();
-    if (planar < 1) return null;
-    _tmpV.normalize();
-    const fwd = player.body.forward(_tmpFwd);
-    fwd.y = 0;
-    fwd.normalize();
-    // ahead first: cross() below overwrites _tmpV with the cross product
-    const ahead = _tmpV.dot(fwd);
-    const right = _tmpV.cross(fwd).y;
-    return { yaw: Math.atan2(right, ahead), distance: planar, target };
+    return player ? navMarkerFor(this.match.state, player, this.vehicles) : null;
   }
 
   private pushHud(): void {
     const player = this.player;
     if (!player) return;
-    const st = this.match.state;
-    const carrierActor = st.carrier ? this.vehicles.find(a => a.body === st.carrier) : null;
-    const nav = navTarget(st, player, this.vehicles);
-    this.deps.store.set({
+    this.deps.store.set(buildHudSnapshot({
+      state: this.match.state,
+      player,
+      vehicles: this.vehicles,
       phase: this.phase,
       timeLeftS: this.timeLeftS,
-      speed: player.body.speed,
-      damage: player.body.damage,
-      vehicleName: player.body.stats.name,
-      scores: st.scores,
-      carrierName: carrierActor ? (carrierActor.isPlayer ? 'YOU' : carrierActor.label) : null,
-      carrierIsPlayer: carrierActor?.isPlayer ?? false,
-      carrierIsAlly: carrierActor ? carrierActor.team === player.team : false,
-      objective: OBJECTIVE_TEXT[nav.goal],
-      distanceToTargetM: player.body.pos.distanceTo(nav.pos) / WORLD_M_PER_M,
-      navGoal: nav.goal,
       locationLabel: this.terrain.label,
-      winner: this.winner,
-      teamPips: this.vehicles.map(a => ({ team: a.team, isPlayer: a.isPlayer }))
-    });
+      winner: this.winner
+    }));
   }
 }
 

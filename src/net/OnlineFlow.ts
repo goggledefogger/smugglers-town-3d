@@ -9,7 +9,6 @@
  * the same coordinates rather than each geocoding the text and drifting. The
  * lobby only ever resolves a place; the world itself loads once, at start.
  */
-import { config } from '../app/config.ts';
 import type { Game, Seat } from '../app/Game.ts';
 import type { GameEvents } from '../app/events.ts';
 import type { HudSnapshot, Store } from '../app/store.ts';
@@ -20,7 +19,7 @@ import type { LobbyScreen, CityMap } from '../ui/screens/LobbyScreen.ts';
 import { previewPlace } from '../services/relocate.ts';
 import { firebaseApp, firebaseConfig, identity, remoteLogSink } from '../services/firebase.ts';
 import { attachRemoteLog, dumpLogs, logger } from '../app/log.ts';
-import { canStart, createLobby, joinLobby, validateName, MAX_PLAYERS, type Lobby, type LobbyRoom } from './lobby.ts';
+import { canStart, createLobby, joinLobby, seatsFor, validateName, type Lobby, type LobbyRoom } from './lobby.ts';
 import { connectTrystero } from './TrysteroTransport.ts';
 import type { Transport } from './Transport.ts';
 import { HostSession } from './HostSession.ts';
@@ -372,21 +371,6 @@ export class OnlineFlow {
   }
 }
 
-/** Lobby players in join order take seats; the rest of 4v4 are bots, teams filled evenly. */
-export function seatsFor(room: LobbyRoom, selfId: string, missing: readonly string[] = []): Seat[] {
-  const seats: Seat[] = Object.entries(room.players)
-    .filter(([uid]) => !missing.includes(uid))
-    .sort((a, b) => a[1].joinedAt - b[1].joinedAt)
-    // the rules cannot count seats, so the cap is enforced here, by join order
-    .slice(0, MAX_PLAYERS)
-    .map(([uid, p]) => ({ name: p.name, team: p.team, vehicle: p.vehicle, control: uid === selfId ? 'local' : uid }));
-  for (const team of [0, 1] as const) {
-    while (seats.filter(s => s.team === team).length < config.match.teamSize) {
-      seats.push({ name: '', team, vehicle: null, control: 'bot' });
-    }
-  }
-  return seats;
-}
 
 async function connect(code: string): Promise<Transport> {
   return connectTrystero(code, await firebaseApp(), firebaseConfig.databaseURL);
