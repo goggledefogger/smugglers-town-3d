@@ -13,7 +13,8 @@
     "typecheck": "tsc --noEmit",
     "deploy": "npm run build && firebase deploy --only hosting",
     "serve": "npm run build && firebase emulators:start --only hosting",
-    "e2e:online": "node scripts/online-e2e.mjs"
+    "e2e:online": "node scripts/online-e2e.mjs",
+    "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
     "@trystero-p2p/firebase": "^0.25.4",

@@ -79,10 +79,17 @@ npm run typecheck && npm test && npm run build
 
 The desert start needs no key and covers physics, colliders, bots and the
 HUD: start the dev server, press Start Engine, drive, brake, reverse, turn,
-and watch the console. Headless works too; the repo's tests do not drive a
-browser, but a short Playwright script that clicks Start Engine, holds a key
-for a few seconds and reads the console is a fine smoke check, and how the
-tile pipeline gets verified.
+and watch the console.
+
+`npm run smoke` does that headlessly at desktop and phone sizes, and is the
+only automated cover the renderer and HUD have: it drives the car, then asserts
+no console errors, all four HUD corners on-screen, no horizontal overflow, and
+that the radar actually rasterised terrain rather than a flat fill. Everything
+it checks is something that has really broken. Add a case when you fix a bug it
+would have caught, and make sure the new check fails before your fix — a check
+that cannot fail is worse than none.
+
+`E2E_URL=… npm run smoke` runs it against a deployment.
 
 ### Checking multiplayer
 

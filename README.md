@@ -80,6 +80,7 @@ Truck between two towers if you try.
 |---|---|
 | `npm run dev` | Dev server with hot reload |
 | `npm test` | Test suite (187 tests, plain node) |
+| `npm run smoke` | Headless desert match: HUD, radar, input and layout, desktop and phone |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |
