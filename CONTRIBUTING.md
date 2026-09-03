@@ -106,6 +106,52 @@ The architecture doc has an "Extension points" section. The short list:
   in `core/physics/collision.ts`.
 - A terrain source: implement `TerrainProvider`.
 
+## Logging
+
+One logger, `src/app/log.ts`, and nothing else — a raw `console.log` in `src/`
+is a bug, because it reaches neither the ring buffer a player copies out nor
+the Firebase sink. Get a scoped logger once per module and use it:
+
+```ts
+const log = logger('tiles');
+log.info('tiles loaded', { tiles: 84, ms: 9100 });
+```
+
+Scopes in use: `app`, `render`, `tiles`, `relocate`, `online`, `lobby`,
+`firebase`, `rtc`, `host`, `client`. `core/` does not log; it returns.
+
+Levels earn their place by who reads them:
+
+- `debug` — ring buffer only, plus the console with `?debug` in the URL. Where
+  per-item detail goes: one dropped tile, a frame-scale change.
+- `info` — the events you would want in a stranger's bug report: boot, match
+  start, a finished relocation. Every session starts with one `boot` line
+  carrying the protocol version, user agent and GPU.
+- `warn` / `error` — something the player will notice.
+
+Pass structured data as the second argument, never interpolated into the
+message: `log.info('tiles loaded', { tiles, ms })`, not
+`log.info(\`loaded \${tiles} tiles\`)`. The messages are grepped and the data is
+parsed. High-frequency failures log at `debug` and are counted, with one
+summary at `info` or `warn` — see the tile failure tally in `Tileset.ts`.
+
+Reading them back: `stt.dump()` in the console, the lobby's *copy debug log*
+button, or `firebase database:get /logs/<session>` (see `docs/DEPLOY.md`).
+
+## Styling
+
+Every component styles itself from the token scale in `index.html`'s `:root` —
+`--space-*`, `--radius-*`, `--text-*`, `--border`, the palette, and the derived
+surfaces (`--scrim`, `--field-bg`, `--inset-bg`). Reach for a token before a
+number: a raw `padding: 11px` or `background: #3f3` in a component is the thing
+to fix, not to match.
+
+Where one value should drive several, derive rather than restate. The nav
+chevron sets `--chev-face` and mixes its shaded back and edge from it with
+`color-mix()`, so retinting the whole marker for the delivery state is one
+property. Component-local tokens like that belong on the component's `:host`;
+only genuinely shared scales go in `index.html`.
+
 ## Comments
 
 Comment the *why*, not the *what*. This codebase has a few places where the

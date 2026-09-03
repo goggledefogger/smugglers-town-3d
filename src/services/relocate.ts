@@ -96,9 +96,12 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
       ...(opts.anisotropy !== undefined ? { anisotropy: opts.anisotropy } : {}),
       onProgress: (n, total) => onProgress(`Streaming 3D building tiles ${n}/${total}`)
     });
-    console.info(`3D tiles: ${tiles.tileCount} tiles loaded`);
   } catch (e) {
-    console.warn('3D tiles failed (terrain still loaded):', e);
+    // the terrain still loads; the city just has no buildings to crash into
+    log.warn('3D tiles failed, terrain only', e);
   }
+  log.info('relocated', {
+    label, lat, lon, tiles: tiles?.tileCount ?? 0, ms: Date.now() - startedAt
+  });
   return { terrain, tiles };
 }

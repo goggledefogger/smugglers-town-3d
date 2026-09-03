@@ -44,6 +44,7 @@ import { LoaderOverlay } from './ui/screens/LoaderOverlay.ts';
 import { RelocateBar } from './ui/screens/RelocateBar.ts';
 import type { LobbyScreen } from './ui/screens/LobbyScreen.ts';
 
+const log = logger('app');
 const app = document.getElementById('app')!;
 
 // ---- DOM shell ----
@@ -162,6 +163,15 @@ function startMatch(terrain: TerrainProvider): void {
   rebuildViews();
 }
 
+// one boot line per session: a bug report with no breadcrumbs is a guess, and
+// the protocol version is what tells two mismatched builds apart
+log.info('boot', {
+  protocol: PROTOCOL_VERSION,
+  ua: navigator.userAgent.slice(0, 90),
+  view: `${window.innerWidth}x${window.innerHeight}@${window.devicePixelRatio}`,
+  gpu: renderer.gpu
+});
+
 // boot into the garage: terrain only, no match until the player picks a ride
 prepareTerrain(desertTerrain);
 hudEl.hidden = true;
@@ -249,6 +259,7 @@ events.on('location:changed', ({ label }) => {
 introEl.onSelect = (type) => showroom.setType(type);
 introEl.onStart = (type) => {
   showroom.dispose();
+  log.info('match start', { mode: 'single', vehicle: type, terrain: game.terrainProvider.label });
   game.playerType = type;
   startMatch(game.terrainProvider);
   introEl.remove();
@@ -362,6 +373,7 @@ relocateBarEl.onSearch = async (q, key) => {
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {
+    log.error('relocate failed', err);
     relocateBarEl.status = err instanceof Error ? err.message : String(err);
   } finally {
     loaderEl.hidden = true;

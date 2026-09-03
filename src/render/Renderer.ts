@@ -9,6 +9,9 @@ import {
   SRGBColorSpace, ACESFilmicToneMapping
 } from 'three';
 import { makeSkyTexture, SKY_HORIZON, SKY_MID_LIGHT } from './skyTexture.ts';
+import { logger } from '../app/log.ts';
+
+const log = logger('render');
 
 export interface RendererDeps {
   readonly canvas: HTMLCanvasElement;
@@ -79,7 +82,7 @@ export class GameRenderer {
     this.scale = next;
     this.lastAdjustMs = nowMs;
     this.renderer.setPixelRatio(this.maxRatio * this.scale);
-    console.info(`render scale ${this.scale.toFixed(3)} (${(1 / this.frameAvg).toFixed(0)} fps avg)`);
+    log.debug('render scale', { scale: Number(this.scale.toFixed(3)), fps: Math.round(1 / this.frameAvg) });
   }
 
   render(): void {
@@ -88,6 +91,18 @@ export class GameRenderer {
 
   get maxAnisotropy(): number {
     return this.renderer.capabilities.getMaxAnisotropy();
+  }
+
+  /**
+   * The GPU behind the canvas, for bug reports — "it runs badly" means
+   * something different on an integrated chip than on a discrete one. Browsers
+   * may withhold the extension for fingerprinting reasons; then it is unknown.
+   */
+  get gpu(): string {
+    const gl = this.renderer.getContext();
+    const ext = gl.getExtension('WEBGL_debug_renderer_info');
+    if (!ext) return 'unknown';
+    return String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL) ?? 'unknown').slice(0, 60);
   }
 
   dispose(): void {

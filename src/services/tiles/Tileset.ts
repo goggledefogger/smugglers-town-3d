@@ -26,6 +26,7 @@ import { latLonToEcef, WORLD_M_PER_M, type Ecef, type GeoOrigin } from '../../co
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
+import { logger } from '../../app/log.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP,
   type Grid, type TileRaster
@@ -127,6 +128,20 @@ function withSession(url: string, session: string | null): string {
 const isJson = (uri: string | undefined): uri is string => uri !== undefined && /\.json$/i.test(uriPath(uri));
 const isGlb = (uri: string | undefined): uri is string => uri !== undefined && /\.glb$/i.test(uriPath(uri));
 
+const log = logger('tiles');
+
+/**
+ * Streaming a city drops tiles routinely, so each failure is debug noise while
+ * the tally is the thing worth carrying: it is the difference between "Tokyo
+ * looks sparse" and "Tokyo half loaded and here is why".
+ */
+const failures = new Map<string, number>();
+
+function noteFailure(kind: string, data: unknown): void {
+  failures.set(kind, (failures.get(kind) ?? 0) + 1);
+  log.debug(kind, data);
+}
+
 export async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
   const res = await fetch(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
   if (!res.ok) throw new Error('3D tiles root HTTP ' + res.status);
@@ -137,12 +152,12 @@ async function fetchSubTileset(url: string, apiKey: string): Promise<TilesetRoot
   try {
     const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
     if (!res.ok) {
-      console.warn('sub-tileset HTTP ' + res.status, uriPath(url).slice(-40));
+      noteFailure('sub-tileset http', { status: res.status, path: uriPath(url).slice(-40) });
       return null;
     }
     return await res.json();
   } catch (e) {
-    console.warn('sub-tileset fetch threw', e);
+    noteFailure('sub-tileset threw', e);
     return null;
   }
 }
@@ -254,12 +269,12 @@ async function loadTileGlb(
   try {
     const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
     if (!res.ok) {
-      console.warn('tile HTTP ' + res.status, uriPath(url).slice(-40));
+      noteFailure('tile http', { status: res.status, path: uriPath(url).slice(-40) });
       return null;
     }
     buf = await res.arrayBuffer();
   } catch (e) {
-    console.warn('tile fetch threw', e);
+    noteFailure('tile threw', e);
     return null;
   }
   const root = (await gltfLoader.parseAsync(buf, '')).scene;
@@ -366,7 +381,7 @@ export class TileStreamer {
         .slice(0, CORE_REFINE_BATCH);
       if (coarse.length === 0) return;
       await Promise.all(coarse.map(t => this.refine(t).catch(e => {
-        console.warn('tile refine failed', e);
+        noteFailure('refine failed', e);
         t.done = true;
       })));
       onProgress?.(this.tiles.length, this.tiles.length);
@@ -390,7 +405,9 @@ export class TileStreamer {
     this.group.updateMatrixWorld(true);
     for (const t of this.tiles) t.raster = rasterizeTile(t.group, this.grid);
     this.dirty = true;
-    console.info(`3D tiles: ground datum shifted ${(-(offset + TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1)} m`);
+    log.info('ground datum shifted', {
+      metres: Number((-(offset + TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
+    });
   }
 
   /**
@@ -416,7 +433,7 @@ export class TileStreamer {
     this.inFlight = true;
     this.refine(tile)
       .catch(e => {
-        console.warn('tile refine failed', e);
+        noteFailure('refine failed', e);
         tile.done = true;
       })
       .finally(() => {
@@ -441,7 +458,7 @@ export class TileStreamer {
     try {
       g = await loadTileGlb(tile, this.placement, this.apiKey, this.anisotropy);
     } catch (e) {
-      console.warn('tile parse failed', e);
+      noteFailure('parse failed', e);
     }
     if (!g) return null;
     this.group.add(g);
@@ -486,10 +503,16 @@ export interface LoadTilesOptions {
 /** Load the tiles around the match center; the returned streamer keeps refining. */
 export async function load3DTiles(opts: LoadTilesOptions): Promise<TileStreamer> {
   const { lat, lon, apiKey, terrain } = opts;
+  failures.clear();
+  const startedAt = Date.now();
   const root = await fetchTilesRoot(apiKey);
   // datum altitude puts the tile ground at world y≈0 alongside the terrain mesh
   const ecef0 = latLonToEcef(lat, lon, terrain.datumAltM);
   const streamer = new TileStreamer(apiKey, terrain, { lat, lon }, ecef0, opts.anisotropy ?? 1);
   await streamer.loadInitial(root.root ?? root, opts.onProgress);
+  const tally = Object.fromEntries(failures);
+  const summary = { tiles: streamer.tileCount, ms: Date.now() - startedAt, lat, lon, ...tally };
+  if (failures.size > 0) log.warn('tiles loaded with failures', summary);
+  else log.info('tiles loaded', summary);
   return streamer;
 }
