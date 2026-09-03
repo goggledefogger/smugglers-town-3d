@@ -325,6 +325,27 @@ Where one value should drive several, they derive: the nav chevron sets
 `--chev-face` and mixes its shaded back and edge from it with `color-mix()`, so
 a state change is one custom property rather than three rules.
 
+Navigation is deliberately two things, as it was in Smuggler's Run. The
+chevron gives a bearing and knows nothing about the ground — it will point you
+straight through a ridge — and the radar (`ui/hud/Minimap.ts`) is what you read
+to pick a line around one, which is why its substance is shaded terrain relief
+rather than blips on a flat fill. It is heading-up so "left around that hill"
+is left on screen too, with a north tick on the rim; anything past its range is
+pinned to the rim keeping its bearing, so an objective is never simply absent.
+The relief is rasterised once per terrain and only rotated per frame, because a
+real place is a 313k-vertex heightfield. Both halves read the same target from
+`navMarker()`, so they can never disagree. `ui/hud/radar.ts` holds the pure
+projection and shading maths, tested in node.
+
+The HUD's corners are positioned in `index.html` — the `.hud-corner` classes
+were named in `main.ts` from the first commit but never styled, so until
+recently the whole HUD stacked in normal flow underneath the canvas. Corners
+use `env(safe-area-inset-*)` so nothing hides under a notch, and shrink on
+small or short viewports. The game has no touch controls and is not playable on
+a phone, but the page behaves: `dvh` heights, no overscroll, `touch-action:
+none` on the canvas, 16px form fields so iOS does not zoom on focus, and no
+horizontal overflow at 390 px.
+
 `ui/hud/navArrow.ts` holds the nav chevron's orientation and `app/navTarget.ts`
 decides where it points; both are pure and DOM-free, so they unit test in node
 despite serving the HUD. The chevron is a rigid plate lying on a leaned ground

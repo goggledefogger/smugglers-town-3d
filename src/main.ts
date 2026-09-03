@@ -19,7 +19,7 @@ import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
-import { Minimap } from './render/Minimap.ts';
+
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
 import { PMREMGenerator } from 'three';
@@ -37,6 +37,7 @@ import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
 import { HealthBar } from './ui/hud/HealthBar.ts';
 import { DirArrow } from './ui/hud/DirArrow.ts';
+import { Minimap } from './ui/hud/Minimap.ts';
 import { Banner } from './ui/hud/Banner.ts';
 import { IntroScreen } from './ui/screens/IntroScreen.ts';
 import { EndScreen } from './ui/screens/EndScreen.ts';
@@ -54,7 +55,7 @@ app.innerHTML = `
     <div class="hud-corner hud-tl"><sr-health></sr-health></div>
     <div class="hud-corner hud-tr"><sr-score></sr-score></div>
     <div class="hud-corner hud-bl"><sr-objective></sr-objective></div>
-    <div class="hud-corner hud-br"><sr-speed></sr-speed><canvas id="minimap" width="170" height="170"></canvas></div>
+    <div class="hud-corner hud-br"><sr-speed></sr-speed><sr-minimap></sr-minimap></div>
     <sr-dirarrow id="dirarrow"></sr-dirarrow>
     <sr-banner id="banner"></sr-banner>
   </div>
@@ -67,7 +68,6 @@ app.innerHTML = `
 
 const canvas = document.getElementById('c') as HTMLCanvasElement;
 const hudEl = document.getElementById('hud')!;
-const minimapCanvas = document.getElementById('minimap') as HTMLCanvasElement;
 const loaderEl = document.querySelector('sr-loader') as LoaderOverlay;
 const introEl = document.querySelector('sr-intro') as IntroScreen;
 const endEl = document.querySelector('sr-end') as EndScreen;
@@ -111,7 +111,7 @@ const pickups = new Pickups(renderer.scene);
 const cameraRig = new CameraRig(
   renderer.camera, () => world.terrainProvider.heightfield, (a, b) => world.lineOfSight(a, b)
 );
-const minimap = new Minimap(minimapCanvas, config.world.mapHalf);
+const minimapEl = document.querySelector('sr-minimap') as Minimap;
 const showroom = new Showroom(renderer.scene, renderer.camera, () => world.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
@@ -154,6 +154,7 @@ function swapTerrainMesh(terrain: TerrainProvider): void {
   const old = terrainMesh.mesh;
   if (old) renderer.scene.remove(old);
   renderer.scene.add(terrainMesh.build(terrain, renderer.maxAnisotropy));
+  minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }
 
 /** New terrain or rematch: props, colliders, then spawn everything clear of them. */
@@ -174,6 +175,7 @@ log.info('boot', {
 
 // boot into the garage: terrain only, no match until the player picks a ride
 prepareTerrain(desertTerrain);
+minimapEl.setTerrain(desertTerrain.heightfield, config.world.mapHalf);
 hudEl.hidden = true;
 relocateBarEl.hidden = true;
 pickups.setVisible(false);
@@ -387,6 +389,7 @@ relocateBarEl.onSearch = async (q, key) => {
 (document.querySelector('sr-objective') as ObjectiveBar).bind(store);
 (document.querySelector('sr-speed') as SpeedGauge).bind(store);
 dirArrowEl.bind(store);
+minimapEl.bind(store);
 
 // ---- frame loop ----
 let last = performance.now();
@@ -420,6 +423,7 @@ function frame(now: number): void {
         groundDirty = false;
         game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
         terrainMesh.refresh(game.terrainProvider.heightfield);
+        minimapEl.setTerrain(game.terrainProvider.heightfield, config.world.mapHalf);
       }
     }
     for (const v of vehicleViews) v.sync(dt, world.alpha);
@@ -429,7 +433,7 @@ function frame(now: number): void {
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
-    minimap.draw(world.state, world.vehicles, world.state.carrier);
+    minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);
   }

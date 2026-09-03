@@ -497,7 +497,7 @@ export class Game {
     return this.navMarker()?.yaw ?? 0;
   }
 
-  navMarker(): { yaw: number; distance: number } | null {
+  navMarker(): { yaw: number; distance: number; target: Vector3 } | null {
     const player = this.player;
     if (!player) return null;
     const target = this.playerTarget(player);
@@ -512,7 +512,7 @@ export class Game {
     // ahead first: cross() below overwrites _tmpV with the cross product
     const ahead = _tmpV.dot(fwd);
     const right = _tmpV.cross(fwd).y;
-    return { yaw: Math.atan2(right, ahead), distance: planar };
+    return { yaw: Math.atan2(right, ahead), distance: planar, target };
   }
 
   private pushHud(): void {

@@ -49,6 +49,10 @@ Every number does something. Heavy cars win rams and shrug off damage. Light
 ones accelerate and turn better. The Rally Car is the fastest thing on the
 map and will slide off a corner if you ask too much of it.
 
+The radar in the corner shades the terrain, because the direction arrow is a
+bearing and nothing more — it will happily point you through a butte. Reading
+the ground for a line around one is the game.
+
 Landings, walls, and rams all cost integrity. At zero you wreck: the crate
 drops where you died and you respawn at your base.
 
