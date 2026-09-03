@@ -3,7 +3,7 @@
 // Usage: npm run dev (in another terminal), then npm run e2e:online
 // Needs Chrome installed and network access to the Firebase project
 import { chromium } from 'playwright-core';
-const URL = 'http://localhost:5173/';
+const URL = process.env.E2E_URL ?? 'http://localhost:5173/';
 const b = await chromium.launch({ channel: 'chrome', headless: true });
 const mk = async (tag) => {
   const ctx = await b.newContext({ viewport: { width: 1100, height: 750 } });
