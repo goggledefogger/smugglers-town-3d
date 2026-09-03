@@ -1,7 +1,9 @@
 # Internet multiplayer
 
-Status: **spec, not implemented.** The refactors it depends on are listed at
-the end; most are done.
+Status: **version 1 is implemented and live** — lobby with room codes,
+WebRTC host-authoritative play, bots in the empty seats, two-browser e2e in
+`scripts/online-e2e.mjs`. Not yet: client prediction, host migration, city
+maps online, quick-match, tightened database rules (see below).
 
 ## Goal
 
@@ -144,6 +146,19 @@ src/services/firebase.ts  app init and anonymous sign-in
    and a synchronised countdown.
 4. Client prediction for the local car, binary packets, quick-match, host
    migration, and a decision on TURN.
+
+## What version 1 does not do yet
+
+- **Desert only.** A city needs every player's own Maps key and identical
+  tiles; the seed cannot reproduce Google's tree.
+- **No prediction.** The local car feels ~100–150 ms behind the keys.
+- **Host leaves = match over.** No migration.
+- **Rematch reloads the page** back to the garage.
+- **Rules are open but validated.** Rooms are short-lived and codes are
+  four characters, which is fine for friends. Owner-only writes need the
+  join to stop rewriting the whole room in one transaction; the tightened
+  rule set is drafted in `docs/DEPLOY.md`.
+- **STUN only.** Peers behind symmetric NATs on both ends will not connect.
 
 ## Questions for Danny
 

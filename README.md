@@ -10,6 +10,10 @@ imagery, and photorealistic buildings you crash into.
 
 ## Play
 
+Single player starts from the garage. **Play Online** opens a lobby: create a
+room, share the four-letter code, and friends join from the deployed site; bots
+fill the empty seats. Online matches play on the desert for now.
+
 ```bash
 npm install
 npm run dev        # → http://localhost:5173
@@ -64,7 +68,8 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (103 tests, plain node) |
+| `npm test` | Test suite (160 tests, plain node) |
+| `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |
 | `npm run deploy` | Build and ship to Firebase Hosting |

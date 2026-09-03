@@ -24,6 +24,7 @@ Useful scripts:
 | `npm test` | The unit suite, plain node, under a second |
 | `npm run build` | Typecheck plus a production bundle in `dist/` |
 | `npm run serve` | Build and serve it the way hosting will |
+| `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 
 ## Where things live
 
@@ -83,6 +84,15 @@ browser, but a short Playwright script that clicks Start Engine, holds a key
 for a few seconds and reads the console is a fine smoke check, and how the
 tile pipeline gets verified.
 
+### Checking multiplayer
+
+`npm run e2e:online` (with the dev server running) launches two headless
+Chrome contexts, creates a room in one, joins from the other, readies up,
+starts, drives, and prints both HUDs. It talks to the real Firebase project,
+so it needs network. For a manual check, two browser profiles (not two tabs:
+they share the anonymous sign-in) against the deployed site is the closest
+thing to a friend joining.
+
 ### Adding things
 
 The architecture doc has an "Extension points" section. The short list:
@@ -126,6 +136,6 @@ complete.
 ## Secrets and services
 
 Nothing secret ships in the bundle. The Google Maps key is the player's own.
-The Firebase web config that will appear in `src/services/` is an
-identifier, not a secret; access is controlled by the rules files in the repo
-root, which default to deny. Deploying is in [`docs/DEPLOY.md`](docs/DEPLOY.md).
+The Firebase web config in `src/services/firebase.ts` is an identifier, not
+a secret; what anyone can do with it is set by the rules files in the repo
+root. Deploying is in [`docs/DEPLOY.md`](docs/DEPLOY.md).

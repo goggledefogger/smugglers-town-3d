@@ -12,7 +12,9 @@
 │ simulation           │ three.js presentation     │
 │ (pure, DOM-free)     │ (reads sim state)         │
 ├──────────────────────┴──────────────────────────┤
-│ services/    Google Maps, 3D Tiles (network)     │
+│ net/         lobby, transport, host/client       │  multiplayer
+├─────────────────────────────────────────────────┤
+│ services/    Google Maps, 3D Tiles, Firebase     │
 └─────────────────────────────────────────────────┘
 ```
 
@@ -27,6 +29,10 @@ Dependency rules (enforced by review, not tooling):
   colliders; it is behind plain interfaces so the game runs without it.
 - `app/` composes core + is composed by `main.ts`. `ui/` is driven by the
   store and dispatches through callbacks wired in `main.ts`.
+- `net/` sits beside `app/`: it drives a `Game` on the host and presents a
+  `WorldView` on a client. `core/` never learns what a peer is, and the
+  whole directory loads on first use (dynamic import), so single player
+  never pays for Firebase.
 
 ## Frame data flow
 
@@ -194,6 +200,29 @@ against hand-computed values:
   ECEF positions (~6.3 M m); without subtracting the match center first, the
   rotation projects the earth radius onto the up axis and geometry renders
   kilometers off the ground.
+
+## Multiplayer (`net/`)
+
+Host-authoritative over WebRTC, exactly as `docs/MULTIPLAYER.md` specifies.
+`OnlineFlow` runs the lobby (`lobby.ts`, Realtime Database rooms with
+presence via `onDisconnect`) and, on start, connects every player through
+Trystero (`TrysteroTransport`, signalling through the same database) and
+hands `main.ts` a `RunningMatch`. The host's `HostSession` owns a seeded
+`Game` whose seats are `local`, `bot`, or a remote uid; remote inputs arrive
+as the latest wins, snapshots leave at 20 Hz, gameplay events are forwarded
+as they fire. A `ClientSession` runs no simulation: it mirrors the host's
+bodies as puppets with the host's ids, interpolated four ticks behind the
+newest snapshot, and implements `WorldView` so the renderer, HUD, camera and
+minimap do not know which they are drawing. The desert, the props and the
+spawn layout all derive from the match seed, so every machine builds the
+same world without shipping it. `protocol.ts` is the trust boundary: every
+message from a peer is validated field by field before use.
+
+Three Firebase gotchas are recorded where they bit, worth knowing up front:
+a transaction's first run sees the local cache (null for an unread room), a
+pre-registered `onDisconnect` write is validated against the rules at
+registration time, and Vite reloads the page the first time it optimises a
+newly imported dependency, which will confuse a browser test.
 
 ## Services
 

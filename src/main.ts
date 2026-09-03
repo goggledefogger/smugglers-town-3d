@@ -8,6 +8,9 @@
  */
 import { config } from './app/config.ts';
 import { Game } from './app/Game.ts';
+import type { WorldView } from './app/WorldView.ts';
+import type { OnlineFlow, RunningMatch } from './net/OnlineFlow.ts';
+import { mulberry32 } from './core/rng.ts';
 import { type GameEventMap, EventBus } from './app/events.ts';
 import { createStore, type HudSnapshot } from './app/store.ts';
 import { GameRenderer } from './render/Renderer.ts';
@@ -37,6 +40,7 @@ import { IntroScreen } from './ui/screens/IntroScreen.ts';
 import { EndScreen } from './ui/screens/EndScreen.ts';
 import { LoaderOverlay } from './ui/screens/LoaderOverlay.ts';
 import { RelocateBar } from './ui/screens/RelocateBar.ts';
+import type { LobbyScreen } from './ui/screens/LobbyScreen.ts';
 
 const app = document.getElementById('app')!;
 
@@ -52,6 +56,7 @@ app.innerHTML = `
     <sr-banner id="banner"></sr-banner>
   </div>
   <sr-relocate id="relocate"></sr-relocate>
+  <sr-lobby id="lobby" hidden></sr-lobby>
   <sr-loader id="loader" hidden></sr-loader>
   <sr-end id="end" hidden></sr-end>
   <sr-intro id="intro"></sr-intro>
@@ -82,7 +87,11 @@ const desertData = generateDesertHeightfieldData(Math.floor(Math.random() * 1000
 const desertHf = new Heightfield(config.world.mapHalf * 2, 256, desertData);
 const desertTerrain = createDesertTerrain(desertHf);
 
-const game = new Game(desertTerrain, { events, store });
+let game = new Game(desertTerrain, { events, store });
+/** What the renderer draws: the local game, or a mirrored world while online. */
+let world: WorldView = game;
+let online: RunningMatch | null = null;
+let onlineFlow: OnlineFlow | null = null;
 
 // ---- renderer + views ----
 const renderer = new GameRenderer({ canvas });
@@ -97,10 +106,10 @@ renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
 const pickups = new Pickups(renderer.scene);
 const cameraRig = new CameraRig(
-  renderer.camera, () => game.terrainProvider.heightfield, (a, b) => game.lineOfSight(a, b)
+  renderer.camera, () => world.terrainProvider.heightfield, (a, b) => world.lineOfSight(a, b)
 );
 const minimap = new Minimap(minimapCanvas, config.world.mapHalf);
-const showroom = new Showroom(renderer.scene, renderer.camera, () => game.terrainProvider.heightfield);
+const showroom = new Showroom(renderer.scene, renderer.camera, () => world.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let colliderRefreshAt = 0;
@@ -118,17 +127,30 @@ function rebuildViews(): void {
     v.dispose();
   }
   vehicleViews.length = 0;
-  for (const actor of game.vehicles) {
-    const view = new VehicleView(actor, () => game.terrainProvider.heightfield);
+  for (const actor of world.vehicles) {
+    const view = new VehicleView(actor, () => world.terrainProvider.heightfield);
     vehicleViews.push(view);
     renderer.scene.add(view.group);
   }
 }
 
 /** Re-seat props on a terrain and refresh colliders (buildings + props). */
-function prepareTerrain(terrain: TerrainProvider): void {
-  propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal);
+function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.random): void {
+  propScatter.scatter(terrain.heightfield, config.world.mapHalf, terrain.isReal, rng);
   applyColliders();
+}
+
+function clearTiles(): void {
+  if (!tiles) return;
+  renderer.scene.remove(tiles.group);
+  tiles.dispose();
+  tiles = null;
+}
+
+function swapTerrainMesh(terrain: TerrainProvider): void {
+  const old = terrainMesh.mesh;
+  if (old) renderer.scene.remove(old);
+  renderer.scene.add(terrainMesh.build(terrain, renderer.maxAnisotropy));
 }
 
 /** New terrain or rematch: props, colliders, then spawn everything clear of them. */
@@ -161,7 +183,7 @@ window.addEventListener('keydown', (e) => {
 /** Drop the player on a nearby spot clear of buildings. */
 function resetPlayer(): void {
   const p = game.player?.body;
-  if (!p) return;
+  if (!p || online) return;
   let x = p.pos.x, z = p.pos.z;
   for (let tries = 0; tries < 10; tries++) {
     x = p.pos.x + (Math.random() - 0.5) * 60;
@@ -176,12 +198,13 @@ function resetPlayer(): void {
 }
 
 function switchVehicle(n: number): void {
+  if (online) return;
   game.switchPlayerVehicle(n);
   rebuildViews();
 }
 
 // ---- events → UI ----
-const actorOf = (id: number) => game.vehicles.find(a => a.body.id === id);
+const actorOf = (id: number) => world.vehicles.find(a => a.body.id === id);
 events.on('contraband:pickup', ({ vehicleId }) => {
   const a = actorOf(vehicleId);
   if (!a) return;
@@ -213,7 +236,7 @@ events.on('match:win', ({ team }) => {
   setTimeout(() => {
     endEl.hidden = false;
     endEl.winner = team;
-    endEl.scores = { ...game.state.scores };
+    endEl.scores = { ...world.state.scores };
   }, 1500);
 });
 events.on('location:changed', ({ label }) => {
@@ -232,7 +255,58 @@ introEl.onStart = (type) => {
   pickups.setVisible(true);
 };
 
+introEl.onOnline = (type) => {
+  void openOnline(type);
+};
+
+/** The lobby and its network code load on first use, so single player never pays for Firebase. */
+async function openOnline(type: number): Promise<void> {
+  if (!onlineFlow) {
+    await import('./ui/screens/LobbyScreen.ts');
+    const { OnlineFlow } = await import('./net/OnlineFlow.ts');
+    onlineFlow = new OnlineFlow({
+      events,
+      store,
+      lobbyEl: document.querySelector('sr-lobby') as LobbyScreen,
+      makeTerrain: seed => createDesertTerrain(
+        new Heightfield(config.world.mapHalf * 2, 256, generateDesertHeightfieldData(seed % 1000))
+      ),
+      makeHostGame: (seed, terrain, seats) => {
+        game = new Game(terrain, { events, store, seed });
+        clearTiles();
+        prepareTerrain(terrain, mulberry32(seed));
+        game.reset(terrain, seats);
+        return game;
+      },
+      onMatch: (match, terrain) => {
+        online?.dispose();
+        online = match;
+        world = match.world;
+        // a client has no game of its own: seat the same rocks from the same seed
+        if (match.world !== game) {
+          clearTiles();
+          prepareTerrain(terrain, mulberry32(match.seed));
+        }
+        swapTerrainMesh(terrain);
+        showroom.dispose();
+        introEl.remove();
+        rebuildViews();
+        hudEl.hidden = false;
+        relocateBarEl.hidden = true;
+        pickups.setVisible(true);
+      },
+      onLeave: () => undefined
+    });
+  }
+  onlineFlow.open(type);
+}
+
 endEl.onRematch = () => {
+  // ponytail: an online rematch is a fresh lobby; reload rather than unwind the session
+  if (online) {
+    location.reload();
+    return;
+  }
   endEl.hidden = true;
   endEl.winner = null;
   // rematch on whatever terrain is loaded; a relocation's tiles stay in place
@@ -258,15 +332,10 @@ relocateBarEl.onSearch = async (q, key) => {
     const terrain: TerrainProvider = newTiles
       ? { ...loaded, heightfield: newTiles.groundHeightfield() }
       : loaded;
-    if (tiles) {
-      renderer.scene.remove(tiles.group);
-      tiles.dispose();
-    }
+    clearTiles();
     tiles = newTiles;
     if (tiles) renderer.scene.add(tiles.group);
-    const oldMesh = terrainMesh.mesh;
-    if (oldMesh) renderer.scene.remove(oldMesh);
-    renderer.scene.add(terrainMesh.build(terrain, renderer.maxAnisotropy));
+    swapTerrainMesh(terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {
@@ -295,9 +364,11 @@ function frame(now: number): void {
   renderer.adapt(rawDt, now);
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
-    game.update(dt, keyboard.toVehicleInput());
+    const input = keyboard.toVehicleInput();
+    if (online) online.tick(dt, input);
+    else game.update(dt, input);
     simTime += dt;
-    const player = game.player?.body ?? null;
+    const player = world.player?.body ?? null;
     if (tiles && player) {
       tiles.update(player.pos, now);
       // refined tiles change the building footprints; rebuild at most every 1.5 s
@@ -314,13 +385,13 @@ function frame(now: number): void {
         terrainMesh.refresh(game.terrainProvider.heightfield);
       }
     }
-    for (const v of vehicleViews) v.sync(dt, game.alpha);
-    const carrier = game.state.carrier;
+    for (const v of vehicleViews) v.sync(dt, world.alpha);
+    const carrier = world.state.carrier;
     const carrierView = carrier ? vehicleViews.find(v => v.actor.body === carrier) : undefined;
-    pickups.sync(game.state, simTime, dt, carrierView?.pose ?? null);
+    pickups.sync(world.state, simTime, dt, carrierView?.pose ?? null);
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
-    dirArrowEl.setBearing(game.targetBearing());
-    minimap.draw(game.state, game.vehicles, game.state.carrier);
+    dirArrowEl.setBearing(world.targetBearing());
+    minimap.draw(world.state, world.vehicles, world.state.carrier);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);
   }

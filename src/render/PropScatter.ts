@@ -27,7 +27,8 @@ export class PropScatter {
     scene.add(this.group);
   }
 
-  scatter(hf: Heightfield, mapHalf: number, real: boolean): void {
+  /** Re-seat the props; `rng` seeded from the match makes every player's rocks the same rocks. */
+  scatter(hf: Heightfield, mapHalf: number, real: boolean, rng: () => number = Math.random): void {
     this.clear();
     // On real satellite terrain the imagery already carries visual detail,
     // so keep props sparse (cover only) and skip the desert-only cacti
@@ -37,11 +38,11 @@ export class PropScatter {
       new DodecahedronGeometry(2, 0), new MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95 }), nRocks
     );
     for (let i = 0; i < nRocks; i++) {
-      const x = (Math.random() - 0.5) * mapHalf * 1.9;
-      const z = (Math.random() - 0.5) * mapHalf * 1.9;
+      const x = (rng() - 0.5) * mapHalf * 1.9;
+      const z = (rng() - 0.5) * mapHalf * 1.9;
       const y = hf.sample(x, z);
-      const s = 0.5 + Math.random() * 1.8;
-      _q.setFromEuler(_e.set(Math.random(), Math.random(), Math.random()));
+      const s = 0.5 + rng() * 1.8;
+      _q.setFromEuler(_e.set(rng(), rng(), rng()));
       rocks.setMatrixAt(i, _m.compose(_p.set(x, y + s * 1.2, z), _q, _s.set(s, s * 0.8, s)));
       this.colliders.push({
         min: new Vector3(x - 1.8 * s, y, z - 1.8 * s),
@@ -56,10 +57,10 @@ export class PropScatter {
       );
       _q.identity();
       for (let i = 0; i < nCacti; i++) {
-        const x = (Math.random() - 0.5) * mapHalf * 1.9;
-        const z = (Math.random() - 0.5) * mapHalf * 1.9;
+        const x = (rng() - 0.5) * mapHalf * 1.9;
+        const z = (rng() - 0.5) * mapHalf * 1.9;
         const y = hf.sample(x, z);
-        const sy = 1 + Math.random();
+        const sy = 1 + rng();
         cacti.setMatrixAt(i, _m.compose(_p.set(x, y + 2, z), _q, _s.set(1, sy, 1)));
         this.colliders.push({
           min: new Vector3(x - 0.6, y, z - 0.6),

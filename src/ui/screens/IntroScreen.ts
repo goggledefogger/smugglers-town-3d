@@ -60,6 +60,10 @@ export class IntroScreen extends LitElement {
     .play { padding:14px 42px; background:var(--accent); color:#1a1410; font-family:'Russo One',sans-serif;
       font-size:18px; border:none; border-radius:10px; cursor:pointer; box-shadow:0 6px 0 #b0390f;
       transition:transform .08s, box-shadow .2s; }
+    .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .online { padding:13px 22px; background:transparent; color:var(--accent); font-family:'Russo One',sans-serif;
+      font-size:14px; border:2px solid var(--accent); border-radius:10px; cursor:pointer; letter-spacing:.04em; }
+    .online:hover { background:rgba(255,120,60,.12); }
     .play:hover { transform:translateY(-2px); box-shadow:0 8px 0 #b0390f; }
     .play:active { transform:translateY(4px); box-shadow:0 2px 0 #b0390f; }
     @media (max-width: 760px) {
@@ -74,6 +78,8 @@ export class IntroScreen extends LitElement {
   declare selected: number;
 
   onStart?: (typeIdx: number) => void;
+  /** The multiplayer lobby, with the same garage pick. */
+  onOnline?: (typeIdx: number) => void;
   onSelect?: (typeIdx: number) => void;
 
   private readonly onKey = (e: KeyboardEvent): void => {
@@ -150,7 +156,10 @@ export class IntroScreen extends LitElement {
           <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump<br>
           <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>↑</kbd><kbd>↓</kbd> or <kbd>1-5</kbd> pick · <kbd>Enter</kbd> start
         </div>
-        <button class="play" @click=${() => this.onStart?.(this.selected)}>START ENGINE</button>
+        <span class="actions">
+          <button class="online" @click=${() => this.onOnline?.(this.selected)}>PLAY ONLINE</button>
+          <button class="play" @click=${() => this.onStart?.(this.selected)}>START ENGINE</button>
+        </span>
       </footer>
     `;
   }

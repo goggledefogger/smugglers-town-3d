@@ -1,7 +1,39 @@
 {
   "rules": {
-    ".read": false,
-    ".write": false,
-    "_comment": "Deny-all default. Realtime Database is the likely home for live match state (positions at 10-20 Hz, scores, lobbies); open paths deliberately, scoped to an authenticated user. Not wired into firebase.json yet — see docs/DEPLOY.md."
+    "rooms": {
+      "$code": {
+        ".read": true,
+        ".write": true,
+        ".validate": "$code.matches(/^[A-Z2-9]{4}$/) && newData.hasChildren(['host', 'createdAt', 'phase', 'seed', 'map'])",
+        "host": { ".validate": "newData.isString()" },
+        "createdAt": { ".validate": "newData.isNumber()" },
+        "phase": { ".validate": "newData.val() === 'lobby' || newData.val() === 'playing'" },
+        "seed": { ".validate": "newData.isNumber()" },
+        "map": {
+          ".validate": "newData.hasChild('kind')",
+          "kind": { ".validate": "newData.val() === 'desert' || newData.val() === 'city'" },
+          "query": { ".validate": "newData.isString() && newData.val().length <= 80" },
+          "$other": { ".validate": false }
+        },
+        "players": {
+          "$uid": {
+            ".validate": "newData.hasChildren(['name', 'vehicle', 'team', 'ready', 'joinedAt'])",
+            "name": { ".validate": "newData.isString() && newData.val().length >= 1 && newData.val().length <= 24" },
+            "vehicle": { ".validate": "newData.isNumber() && newData.val() >= 0 && newData.val() <= 4" },
+            "team": { ".validate": "newData.val() === 0 || newData.val() === 1" },
+            "ready": { ".validate": "newData.isBoolean()" },
+            "joinedAt": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+        "$other": { ".validate": false }
+      }
+    },
+    "signal": {
+      "$room": {
+        ".read": true,
+        ".write": true
+      }
+    }
   }
 }

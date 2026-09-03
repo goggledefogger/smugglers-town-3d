@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Smugglers Town 3D: Turf Wars — a 4v4 arcade vehicle combat game with real-world terrain",
+  "description": "Smugglers Town 3D: Turf Wars \u2014 a 4v4 arcade vehicle combat game with real-world terrain",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
@@ -12,15 +12,19 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "deploy": "npm run build && firebase deploy --only hosting",
-    "serve": "npm run build && firebase emulators:start --only hosting"
+    "serve": "npm run build && firebase emulators:start --only hosting",
+    "e2e:online": "node scripts/online-e2e.mjs"
   },
   "dependencies": {
+    "@trystero-p2p/firebase": "^0.25.4",
+    "firebase": "^12.18.0",
     "lit": "3.2.1",
     "three": "0.169.0"
   },
   "devDependencies": {
     "@types/google.maps": "3.58.1",
     "@types/three": "^0.169.0",
+    "playwright-core": "1.55",
     "typescript": "5.6.3",
     "vite": "5.4.11",
     "vitest": "2.1.8"
