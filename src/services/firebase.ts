@@ -24,7 +24,6 @@ export async function firebaseApp(): Promise<FirebaseApp> {
   return app;
 }
 
-const CLIENT_ID_KEY = 'stt_client_id';
 let identityPromise: Promise<string> | null = null;
 
 /** Cached for the session — repeat callers get the same id without re-signing-in. */
@@ -37,18 +36,10 @@ async function resolveIdentity(): Promise<string> {
   try {
     const credential = await signInAnonymously(getAuth(await firebaseApp()));
     return credential.user.uid;
-  } catch {
-    // Anonymous auth may not be enabled on the project yet (auth/admin-restricted-operation,
-    // auth/configuration-not-found, auth/operation-not-allowed) — fall back to a local id
-    // rather than block the lobby on a provider toggle in the console.
-    return localClientId();
+  } catch (err) {
+    // the database rules bind every seat to auth.uid, so there is no useful
+    // identity without a sign-in; say so instead of inventing one
+    const code = (err as { code?: string }).code ?? '';
+    throw new Error(`Sign-in failed${code ? ` (${code})` : ''}; the lobby needs Anonymous auth`);
   }
-}
-
-function localClientId(): string {
-  const existing = localStorage.getItem(CLIENT_ID_KEY);
-  if (existing) return existing;
-  const id = crypto.randomUUID();
-  localStorage.setItem(CLIENT_ID_KEY, id);
-  return id;
 }

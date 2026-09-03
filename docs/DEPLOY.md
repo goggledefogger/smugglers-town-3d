@@ -29,50 +29,37 @@ service the project hasn't provisioned.
 
 ### Realtime Database
 
-Backs the [lobby](MULTIPLAYER.md#lobby): room codes, presence, and Trystero's
-signalling. `firebase.json` already points at `database.rules.json`, but
-that deploys only once the instance exists — create the default instance in
-the console (region **us-central1**, to match Hosting), then:
+Backs the [lobby](MULTIPLAYER.md#lobby): room codes, presence, seat tokens,
+and Trystero's signalling. `firebase.json` points at `database.rules.json`;
 
 ```bash
 firebase deploy --only database
 ```
 
-pushes the rules. Version 1 does not require auth, so the rules validate
-shape instead of ownership (`players` is deliberately not a required child:
-a host's pre-registered `onDisconnect` removal of its own seat must pass
-validation while the room is still standing): anyone can write a well-formed room or player, but a malformed
-one (wrong types, an extra field, a `phase` outside `lobby`/`playing`) is
-rejected. Anonymous auth is enabled on the project and `identity()` signs every
-browser in, so the rules can be tightened to per-user ownership once the
-join stops rewriting the whole room in one transaction:
+pushes the rules. Every path requires a signed-in user (Anonymous auth is
+enabled on the project; `identity()` signs each browser in and refuses to
+run the lobby without it). Ownership is enforced by the rules:
 
-```json
-{
-  "rules": {
-    "rooms": {
-      "$code": {
-        ".read": true,
-        ".write": "auth != null && (!data.exists() || data.child('host').val() === auth.uid)",
-        ".validate": "$code.matches(/^[A-Z2-9]{4}$/) && newData.hasChildren(['host', 'createdAt', 'phase', 'seed', 'map'])",
-        "players": {
-          "$uid": {
-            ".write": "auth != null && $uid === auth.uid",
-            ".validate": "newData.hasChildren(['name', 'vehicle', 'team', 'ready', 'joinedAt'])"
-          }
-        }
-      }
-    },
-    "signal": {
-      "$room": { ".read": "auth != null", ".write": "auth != null" }
-    }
-  }
-}
-```
+- `rooms/$code`: only the host may create it (`host` must be their own
+  uid), change room-level fields, or delete it; the host can never change.
+- `rooms/$code/players/$uid`: only that uid may write its seat, and a new
+  seat is refused once `phase` is `playing`. The join writes only its own
+  seat for exactly this reason; the 8-seat cap is enforced by the host at
+  start, since rules cannot count children.
+- `tokens/$code/$uid`: a random secret each player writes for itself,
+  readable only by that player and the room's host. The host demands it in
+  the WebRTC join message, which is what ties a transport peer to an
+  authenticated seat.
+- `signal/$room`: any signed-in user, for Trystero's handshake. Trystero
+  keys its entries by its own random peer id, which Firebase cannot tie to
+  `auth.uid`, so per-peer ownership is not expressible here. What that
+  leaves open: a signed-in stranger who knows a room code can join the
+  WebRTC mesh and watch snapshots; without a seat token they can never
+  drive a car or write a room.
 
-i.e. only the host may write room-level fields (`host === auth.uid`), only a
-player may write their own `players/$uid`, and signalling requires a signed-in
-peer instead of being open to anyone.
+Shapes are validated field by field; `players` is deliberately not a
+required child of the room, because a host's pre-registered `onDisconnect`
+removal of its own seat is validated while the room is still standing.
 
 ### Firestore (profiles, stats, saved locations)
 

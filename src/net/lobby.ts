@@ -3,7 +3,7 @@
  * section of docs/MULTIPLAYER.md for the layout this mirrors.
  */
 import {
-  getDatabase, ref, update, set, onValue, onDisconnect, runTransaction,
+  getDatabase, ref, get, update, set, onValue, onDisconnect, runTransaction,
   type Database
 } from 'firebase/database';
 import { firebaseApp, identity } from '../services/firebase.ts';
@@ -40,6 +40,13 @@ export interface Lobby {
   setTeam(team: Team): Promise<void>;
   /** Host only: phase → 'playing', seed written. */
   start(seed: number): Promise<void>;
+  /**
+   * A secret only this player and the host can read; the host demands it in
+   * the join message, which binds a transport peer to an authenticated seat.
+   */
+  readonly token: string;
+  /** Host only: every player's token, keyed by uid. */
+  tokens(): Promise<Record<string, string>>;
   /** Host leaving deletes the room. */
   leave(): Promise<void>;
 }
@@ -138,11 +145,14 @@ class LobbyImpl implements Lobby {
   /** Resolves with the first snapshot, so a caller never sees "no room" that merely means "not loaded yet". */
   readonly ready: Promise<void>;
 
-  constructor(code: string, selfId: string, isHost: boolean, database: Database) {
+  readonly token: string;
+
+  constructor(code: string, selfId: string, isHost: boolean, database: Database, token: string) {
     this.code = code;
     this.selfId = selfId;
     this.isHost = isHost;
     this.database = database;
+    this.token = token;
     let first: () => void = () => undefined;
     this.ready = new Promise<void>(resolve => { first = resolve; });
     this.stopListening = onValue(ref(database, `rooms/${code}`), snapshot => {
@@ -180,8 +190,19 @@ class LobbyImpl implements Lobby {
     await update(ref(this.database, `rooms/${this.code}`), { phase: 'playing', seed });
   }
 
+  async tokens(): Promise<Record<string, string>> {
+    const snap = await get(ref(this.database, `tokens/${this.code}`));
+    const raw: unknown = snap.val();
+    const out: Record<string, string> = {};
+    if (typeof raw === 'object' && raw !== null) {
+      for (const [uid, v] of Object.entries(raw as Record<string, unknown>)) if (typeof v === 'string') out[uid] = v;
+    }
+    return out;
+  }
+
   async leave(): Promise<void> {
     this.stopListening();
+    await set(ref(this.database, `tokens/${this.code}/${this.selfId}`), null).catch(() => undefined);
     if (this.isHost) await set(ref(this.database, `rooms/${this.code}`), null);
     else await set(this.selfRef(), null);
   }
@@ -200,12 +221,14 @@ export async function createLobby(name: string, vehicle: number, map: LobbyRoom[
   for (let attempt = 0; attempt < 10; attempt++) {
     const code = makeRoomCode(Math.random);
     const roomRef = ref(database, `rooms/${code}`);
-    const result = await runTransaction(roomRef, current => (current === null ? newRoom : undefined));
+    const result = await runTransaction(roomRef, current => (current === null ? newRoom : undefined))
+      .catch(() => ({ committed: false }));
     if (!result.committed) continue; // code already taken, try another
 
+    const token = await claimToken(database, code, selfId);
     await onDisconnect(roomRef).remove();
     await onDisconnect(ref(database, `rooms/${code}/players/${selfId}`)).remove();
-    const lobby = new LobbyImpl(code, selfId, true, database);
+    const lobby = new LobbyImpl(code, selfId, true, database, token);
     await lobby.ready;
     return lobby;
   }
@@ -215,28 +238,33 @@ export async function createLobby(name: string, vehicle: number, map: LobbyRoom[
 export async function joinLobby(code: string, name: string, vehicle: number): Promise<Lobby> {
   const database = getDatabase(await firebaseApp());
   const selfId = await identity();
-  const validName = validateName(name);
-  const roomRef = ref(database, `rooms/${code}`);
-
-  let failure: 'not-found' | 'full' | 'started' = 'not-found';
-  const result = await runTransaction(roomRef, (current: unknown) => {
-    // the first run sees the LOCAL cache, null for a room this client has never
-    // read; returning it unchanged makes the SDK round-trip to the server and
-    // run again with the real room, whereas aborting here would never ask
-    if (current === null) return current;
-    const room = current as { phase?: unknown; players?: Record<string, LobbyPlayer> };
-    if (room.phase !== 'lobby') { failure = 'started'; return undefined; }
-    const players = room.players ?? {};
-    if (!(selfId in players) && Object.keys(players).length >= MAX_PLAYERS) { failure = 'full'; return undefined; }
-    const player: LobbyPlayer = { name: validName, vehicle, team: assignTeam(players), ready: false, joinedAt: Date.now() };
-    return { ...room, players: { ...players, [selfId]: player } };
-  });
-
-  if (!result.committed) throw new Error(failure);
-  if (!result.snapshot.exists()) throw new Error('not-found');
-
-  await onDisconnect(ref(database, `rooms/${code}/players/${selfId}`)).remove();
-  const lobby = new LobbyImpl(code, selfId, false, database);
+  const room = parseRoom((await get(ref(database, `rooms/${code}`))).val(), code);
+  if (!room) throw new Error('not-found');
+  if (room.phase !== 'lobby') throw new Error('started');
+  if (!(selfId in room.players) && Object.keys(room.players).length >= MAX_PLAYERS) throw new Error('full');
+  // only this seat is written: the rules let a player write nothing else in
+  // the room, and refuse a new seat once the match has started
+  const player: LobbyPlayer = {
+    name: validateName(name), vehicle, team: assignTeam(room.players), ready: false, joinedAt: Date.now()
+  };
+  const seatRef = ref(database, `rooms/${code}/players/${selfId}`);
+  try {
+    await set(seatRef, player);
+  } catch {
+    throw new Error('started');
+  }
+  const token = await claimToken(database, code, selfId);
+  await onDisconnect(seatRef).remove();
+  const lobby = new LobbyImpl(code, selfId, false, database, token);
   await lobby.ready;
   return lobby;
+}
+
+/** Write a fresh secret under tokens/$code/$uid, readable only by its owner and the host. */
+async function claimToken(database: Database, code: string, uid: string): Promise<string> {
+  const token = crypto.randomUUID();
+  const tokenRef = ref(database, `tokens/${code}/${uid}`);
+  await set(tokenRef, token);
+  await onDisconnect(tokenRef).remove();
+  return token;
 }

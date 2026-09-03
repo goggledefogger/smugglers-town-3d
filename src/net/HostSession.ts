@@ -1,8 +1,14 @@
 /**
  * The host's side of a match: runs the real `Game`, feeds it each remote
  * driver's latest input, and broadcasts snapshots at `SNAP_HZ` plus every
- * gameplay event as it happens. Peers identify themselves with a join
- * message carrying their lobby uid; that uid is the seat's `control`.
+ * gameplay event as it happens.
+ *
+ * Peers identify themselves with a join message carrying their lobby uid
+ * and that seat's token. Transport ids are not tied to Firebase identity,
+ * so the token is what proves a peer is the player it claims: it was
+ * written under database rules only the owner and the host can read. A
+ * seat binds once — a second peer claiming a bound uid, or a bound peer
+ * claiming another uid, is ignored.
  */
 import type { Game } from '../app/Game.ts';
 import type { GameEvents, GameEventMap } from '../app/events.ts';
@@ -33,7 +39,9 @@ export class HostSession {
 
   constructor(
     private readonly transport: Transport,
-    events: GameEvents
+    events: GameEvents,
+    /** uid → token for every seat in the lobby, from the database. */
+    private readonly tokens: Readonly<Record<string, string>>
   ) {
     this.unsubs.push(transport.onMessage((data, from) => this.onMessage(data, from)));
     this.unsubs.push(transport.onPeerLeave(id => {
@@ -120,6 +128,8 @@ export class HostSession {
     const m = decode(data);
     if (!m) return;
     if (m.t === 'j') {
+      if (this.tokens[m.uid] !== m.token) return;
+      if (this.peerUid.has(from) || this.joined.has(m.uid)) return;
       this.peerUid.set(from, m.uid);
       this.joined.add(m.uid);
       if (this.hello) this.transport.send(encode({ t: 'h', ...this.hello }), from);

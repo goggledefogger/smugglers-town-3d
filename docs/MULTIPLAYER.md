@@ -3,7 +3,7 @@
 Status: **version 1 is implemented and live** — lobby with room codes,
 WebRTC host-authoritative play, bots in the empty seats, two-browser e2e in
 `scripts/online-e2e.mjs`. Not yet: client prediction, host migration, city
-maps online, quick-match, tightened database rules (see below).
+maps online, quick-match.
 
 ## Goal
 
@@ -89,11 +89,13 @@ signal/{code}/...   Trystero's namespace; peers only
   teams; the seed is chosen when the host presses Start and shipped in the
   first snapshot, so everyone spawns the same layout.
 
-Security rules (sketch, all under `auth != null`):
+Security rules (all under `auth != null`; the deployed set is described in
+`docs/DEPLOY.md`):
 
 - `rooms/{code}` create and room-level writes: only `host == auth.uid`.
-- `rooms/{code}/players/{uid}`: only that uid.
-- `signal/{code}`: any signed-in user may write, size-limited.
+- `rooms/{code}/players/{uid}`: only that uid, and no new seat after start.
+- `tokens/{code}/{uid}`: the seat's secret; owner writes, owner and host read.
+- `signal/{code}`: any signed-in user, for the WebRTC handshake.
 - Everything else denied. A scheduled Cloud Function deletes rooms older
   than two hours; it is the first backend code and can wait for version 2.
 
@@ -156,10 +158,9 @@ src/services/firebase.ts  app init and anonymous sign-in
 - **No prediction.** The local car feels ~100–150 ms behind the keys.
 - **Host leaves = match over.** No migration.
 - **Rematch reloads the page** back to the garage.
-- **Rules are open but validated.** Rooms are short-lived and codes are
-  four characters, which is fine for friends. Owner-only writes need the
-  join to stop rewriting the whole room in one transaction; the tightened
-  rule set is drafted in `docs/DEPLOY.md`.
+- **Seats bind to Firebase identity, not to a verified WebRTC peer.** A
+  per-seat token that only the owner and host can read is required in the
+  join message, and a seat binds once; see `docs/DEPLOY.md` for the rules.
 - **STUN only.** Peers behind symmetric NATs on both ends will not connect.
 
 ## Questions for Danny

@@ -216,7 +216,10 @@ newest snapshot, and implements `WorldView` so the renderer, HUD, camera and
 minimap do not know which they are drawing. The desert, the props and the
 spawn layout all derive from the match seed, so every machine builds the
 same world without shipping it. `protocol.ts` is the trust boundary: every
-message from a peer is validated field by field before use.
+message from a peer is validated field by field before use, and a peer only
+gets a seat by presenting that seat's token — a secret the player wrote
+under database rules only they and the host can read — so a transport id,
+which Firebase knows nothing about, can never claim someone else's car.
 
 Three Firebase gotchas are recorded where they bit, worth knowing up front:
 a transaction's first run sees the local cache (null for an unread room), a

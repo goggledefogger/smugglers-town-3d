@@ -163,3 +163,13 @@ describe('decode', () => {
     expect(decode(JSON.stringify({ t: 'x' }))).toBeNull();
   });
 });
+
+describe('join message', () => {
+  it('round-trips a join and rejects one without a valid token', () => {
+    const join = { t: 'j' as const, uid: 'abc123', token: '0123456789abcdef0123456789abcdef' };
+    expect(decode(encode(join))).toEqual(join);
+    expect(decode(JSON.stringify({ t: 'j', uid: 'abc123' }))).toBeNull();
+    expect(decode(JSON.stringify({ t: 'j', uid: 'abc123', token: 'short' }))).toBeNull();
+    expect(decode(JSON.stringify({ t: 'j', uid: '', token: join.token }))).toBeNull();
+  });
+});

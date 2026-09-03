@@ -35,8 +35,8 @@ export interface HelloMsg {
   bases: [[number, number, number], [number, number, number]];
 }
 
-/** Client → host on connect: which lobby seat this peer is. */
-export interface JoinMsg { t: 'j'; uid: string }
+/** Client → host on connect: which lobby seat this peer is, proven by the seat's token. */
+export interface JoinMsg { t: 'j'; uid: string; token: string }
 
 export type NetMsg = InputMsg | SnapshotMsg | EventMsg | HelloMsg | JoinMsg;
 
@@ -165,7 +165,8 @@ function decodeHello(r: Record<string, unknown>): HelloMsg | null {
 
 function decodeJoin(r: Record<string, unknown>): JoinMsg | null {
   if (typeof r.uid !== 'string' || r.uid.length === 0 || r.uid.length > 128) return null;
-  return { t: 'j', uid: r.uid };
+  if (typeof r.token !== 'string' || r.token.length < 16 || r.token.length > 64) return null;
+  return { t: 'j', uid: r.uid, token: r.token };
 }
 
 /** Strict: anything malformed returns null. Peers are a trust boundary. */

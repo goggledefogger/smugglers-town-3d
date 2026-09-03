@@ -16,7 +16,7 @@ import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.t
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { LobbyScreen } from '../ui/screens/LobbyScreen.ts';
 import { firebaseApp, firebaseConfig } from '../services/firebase.ts';
-import { canStart, createLobby, joinLobby, validateName, type Lobby, type LobbyRoom } from './lobby.ts';
+import { canStart, createLobby, joinLobby, validateName, MAX_PLAYERS, type Lobby, type LobbyRoom } from './lobby.ts';
 import { connectTrystero } from './TrysteroTransport.ts';
 import type { Transport } from './Transport.ts';
 import { HostSession } from './HostSession.ts';
@@ -171,8 +171,9 @@ export class OnlineFlow {
   private async runHost(lobby: Lobby, room: LobbyRoom, seed: number): Promise<void> {
     const el = this.deps.lobbyEl;
     el.status = 'Connecting players…';
+    const tokens = await lobby.tokens();
     const transport = await connect(room.code);
-    const host = new HostSession(transport, this.deps.events);
+    const host = new HostSession(transport, this.deps.events, tokens);
     const others = Object.keys(room.players).filter(u => u !== lobby.selfId);
     const missing = await host.waitForPeers(others, PEER_WAIT_MS);
     if (missing.length > 0) el.status = `${missing.length} player(s) did not connect; their seats go to bots`;
@@ -208,7 +209,7 @@ export class OnlineFlow {
       const transport = await connect(room.code);
       // the host learns which seat we are from this; repeat it to every peer
       // that appears, since the host may connect after us
-      const join = encode({ t: 'j', uid: lobby.selfId });
+      const join = encode({ t: 'j', uid: lobby.selfId, token: lobby.token });
       transport.send(join);
       transport.onPeerJoin(() => transport.send(join));
       el.status = 'Waiting for the host…';
@@ -253,6 +254,8 @@ export function seatsFor(room: LobbyRoom, selfId: string, missing: readonly stri
   const seats: Seat[] = Object.entries(room.players)
     .filter(([uid]) => !missing.includes(uid))
     .sort((a, b) => a[1].joinedAt - b[1].joinedAt)
+    // the rules cannot count seats, so the cap is enforced here, by join order
+    .slice(0, MAX_PLAYERS)
     .map(([uid, p]) => ({ name: p.name, team: p.team, vehicle: p.vehicle, control: uid === selfId ? 'local' : uid }));
   for (const team of [0, 1] as const) {
     while (seats.filter(s => s.team === team).length < config.match.teamSize) {
