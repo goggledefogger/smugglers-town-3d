@@ -36,7 +36,14 @@ and Trystero's signalling. `firebase.json` points at `database.rules.json`;
 firebase deploy --only database
 ```
 
-pushes the rules. Every path requires a signed-in user (Anonymous auth is
+pushes the rules. **A change to `database.rules.json` has to be deployed before
+the code that depends on it**, or the writes come back `permission_denied` and
+room creation fails with "could not allocate a room code" — the client retries
+ten codes and every write is refused for the same reason. The room record is
+shape-strict (`$other: false`), so adding one field to a room means adding its
+validator here too.
+
+Every path requires a signed-in user (Anonymous auth is
 enabled on the project; `identity()` signs each browser in and refuses to
 run the lobby without it). Ownership is enforced by the rules:
 

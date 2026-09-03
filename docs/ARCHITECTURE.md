@@ -221,6 +221,17 @@ gets a seat by presenting that seat's token — a secret the player wrote
 under database rules only they and the host can read — so a transport id,
 which Firebase knows nothing about, can never claim someone else's car.
 
+A match plays on the seeded desert or on a real place. A city `MatchMap`
+carries its geocoded centre, not just the search text, so nobody re-geocodes
+and two players cannot land on different Portlands; `decodeMatchMap` is the one
+validator for both the database record and the wire. Because each client
+streams its own city, the start is a barrier: clients report a `ReadyMsg` when
+their world is built and the host holds the clock until everyone has, or 20 s
+passes. The hello also carries `PROTOCOL_VERSION`, because a host on a dev
+server and a friend on the deployed site is the normal case — a mismatch now
+refuses the match and says so instead of silently dropping one player into a
+different world.
+
 Three Firebase gotchas are recorded where they bit, worth knowing up front:
 a transaction's first run sees the local cache (null for an unread room), a
 pre-registered `onDisconnect` write is validated against the rules at
@@ -306,6 +317,27 @@ Known limit: a single heightfield has no second layer, so a bridge deck is
 not drivable — the ground under it is. Colliders are rebuilt every 1.5 s
 while streaming changes tiles; scattered props contribute their own AABBs.
 
+## UI notes
+
+Components style themselves from the token scale in `index.html`'s `:root`
+(`--space-*`, `--radius-*`, `--text-*`, the palette, and derived surfaces).
+Where one value should drive several, they derive: the nav chevron sets
+`--chev-face` and mixes its shaded back and edge from it with `color-mix()`, so
+a state change is one custom property rather than three rules.
+
+`ui/hud/navArrow.ts` holds the nav chevron's orientation and `app/navTarget.ts`
+decides where it points; both are pure and DOM-free, so they unit test in node
+despite serving the HUD. The chevron is a rigid plate lying on a leaned ground
+plane, turning about that plane's normal only — composing the lean *after* the
+yaw turns it into roll, which is what made an earlier version tumble.
+`navTarget` answers "am I carrying?", never "is anyone carrying?", so a rival
+stealing the crate swings the marker onto them.
+
+Keyboard guards go through `isTypingInField()` in `ui/controls.ts`, never
+`document.activeElement` directly: that retargets to the shadow *host*, so a
+field inside a Lit component reads as `<SR-LOBBY>` and every naive guard
+concludes the player is not typing.
+
 ## Render notes
 
 `VehicleView` keeps the world position on its group and rotates the car body
@@ -382,4 +414,10 @@ physics invariants (momentum conservation, auto-righting recovery time,
 angular-velocity caps), gameplay rules (transfer cooldowns, scoring,
 winning), AI state transitions, and store/event plumbing. The render and UI
 layers are thin enough over core that they're exercised by the smoke path
-(dev server + headless console check) rather than unit tests.
+(dev server + headless console check) rather than unit tests — except the pure
+UI logic that has bitten us (`navArrow`, `navTarget`), which is DOM-free
+precisely so it can be tested here.
+
+Multiplayer has its own end-to-end check: `npm run e2e:online` drives two
+headless browsers through a real room against Firebase, and takes `E2E_URL` so
+it can run against the deployed site as well as the dev server.

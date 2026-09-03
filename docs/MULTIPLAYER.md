@@ -1,9 +1,9 @@
 # Internet multiplayer
 
 Status: **version 1 is implemented and live** — lobby with room codes,
-WebRTC host-authoritative play, bots in the empty seats, two-browser e2e in
-`scripts/online-e2e.mjs`. Not yet: client prediction, host migration, city
-maps online, quick-match.
+WebRTC host-authoritative play, bots in the empty seats, real-world locations,
+two-browser e2e in `scripts/online-e2e.mjs`. Not yet: client prediction, host
+migration, quick-match.
 
 ## Goal
 
@@ -74,11 +74,21 @@ rooms/{code}
   host:      uid
   createdAt: serverTimestamp
   phase:     'lobby' | 'playing'
-  map:       { kind: 'desert' | 'city', lat, lng, seed }
+  seed:      number
+  map:       { kind: 'desert' }
+           | { kind: 'city', query, label, lat, lon }
+  keyShared: boolean
   players/{uid}: { name, vehicle, team, ready, joinedAt }
 signal/{code}/...   Trystero's namespace; peers only
 ```
 
+- A city map stores the **geocoded centre**, not just the search text. Every
+  player builds its world from those coordinates, so nobody re-geocodes and two
+  players can never land on different Portlands. `decodeMatchMap` in
+  `protocol.ts` is the single validator for both the room record and the wire.
+- `keyShared` says the host will hand its Maps key to players at start. It
+  lives in the room because a joiner has to know *before readying up* whether
+  it needs a key of its own; the hello arrives far too late for that.
 - Room codes are four letters from an alphabet without look-alikes. Join by
   code is the whole matchmaking story for version 1. Quick-match later is
   "list rooms in `lobby` with an open seat."
@@ -120,6 +130,32 @@ src/services/firebase.ts  app init and anonymous sign-in
 
 `core/` never imports from `net/`. The sim does not know what a peer is.
 
+## Choosing where you play
+
+The host picks a map while setting the room up. Two costs are deliberately
+kept apart:
+
+- **Checking a place** is one geocode plus one Static Maps thumbnail, and
+  nothing else. Picking a location is browsing — you may try five cities
+  before settling — so `previewPlace()` stops there and shows the resolved
+  address and coordinates for confirmation.
+- **Loading the world** is the elevation grid, a nine-image satellite stitch
+  and ~85 building tiles. `relocateTo()` pays that once, at match start, for
+  the place the room actually settled on, with the loader overlay reporting
+  progress to every player at the same time.
+
+Every browser in the match needs a Maps key, because the terrain, imagery and
+tiles are fetched per client — the host cannot relay Google's tree. So the
+host chooses:
+
+- **Share my key with this room** (default): the key rides the hello message,
+  sent per-peer only to seats that already proved their token, never
+  broadcast. Friends join with just the code. Anyone in the room can spend the
+  host's Maps quota, so a leaked code leaks quota.
+- **Off**: `keyShared` is false, and a joiner without a key of its own is
+  shown a key field and cannot ready up until it has one — better than
+  discovering the problem at the countdown.
+
 ## Prerequisites
 
 - [x] Seeded RNG through `VehicleBody`, `DriverBrain`, `SpawnPlanner`, and
@@ -135,10 +171,28 @@ src/services/firebase.ts  app init and anonymous sign-in
       packet are interchangeable
 - [ ] `serialize()` / `apply()` on `VehicleBody` and match state, which is the
       snapshot
-- [ ] The ground is cut from the tiles, and each client streams tiles at
+- [x] The ground is cut from the tiles, and each client streams tiles at
       its own LOD, so the host's heightfield is the physics ground and a
-      client's own is only for its shadows and camera. Decide whether
-      clients skip collider extraction entirely
+      client's own is only for its shadows and camera. Clients still extract
+      colliders; only the host's are consulted by the sim
+
+## Starting together
+
+A city is tens of seconds of streaming, and every player fetches their own, so
+the start is a barrier rather than a moment:
+
+1. The host loads its world and sends the hello, which is what tells each
+   client the seed and roster.
+2. Each client builds its world and replies with a `ReadyMsg`. It does not
+   wait for the hello to *begin* — the room record already names the place and
+   the seed, so a client with a key starts loading as soon as the phase flips,
+   and the two loads overlap instead of running back to back.
+3. The host waits for every connected player, then starts the clock. After
+   20 s it starts anyway and the straggler joins when it finishes; a player who
+   *drops* while loading stops being waited for immediately, because the
+   timeout is for the stuck, not the gone.
+4. A loaded client waits for the host's first snapshot before it enters, so it
+   never sits in an empty world while somebody else finishes.
 
 ## Phases
 
@@ -153,8 +207,9 @@ src/services/firebase.ts  app init and anonymous sign-in
 
 ## What version 1 does not do yet
 
-- **Desert only.** A city needs every player's own Maps key and identical
-  tiles; the seed cannot reproduce Google's tree.
+- **Every browser needs a Maps key for a city**, because terrain, imagery and
+  tiles are fetched per client and the host cannot relay Google's tree. The
+  host can share theirs; see *Choosing where you play*.
 - **No prediction.** The local car feels ~100–150 ms behind the keys.
 - **Host leaves = match over.** No migration.
 - **Rematch reloads the page** back to the garage.

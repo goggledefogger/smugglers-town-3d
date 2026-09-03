@@ -36,9 +36,10 @@ the original, but it changes pacing enough to warrant a round timer (item 2).
 
 ## 1b. Menus
 
-The garage (vehicle pick) exists. Left: a game-setup screen (round length,
-team size, bot difficulty, place presets) ahead of it, a pause menu, and
-options (key bindings, audio). Mid-match `1`–`5` vehicle switching should go
+The garage (vehicle pick) exists, and the online lobby now sets the location
+(desert or any place on Earth, with presets and a cheap check). Left: the rest
+of game setup (round length, team size, bot difficulty) including for single
+player, a pause menu, and options (key bindings, audio). Mid-match `1`–`5` vehicle switching should go
 once setup exists; it is a debug leftover.
 
 ## 2. Round structure — mostly done
@@ -94,11 +95,12 @@ first, no assets needed.
 
 ## 7. Multiplayer — spec written
 
-`docs/MULTIPLAYER.md`: host-authoritative over WebRTC (Trystero), Firebase
-for lobby, signalling and anonymous auth. The seeded RNG and deterministic
-spawn planner are done; the remaining prerequisites (a `Simulation` split out
-of `Game`, an input-source interface, body snapshots) are listed there with
-the phase plan.
+Version 1 is live: host-authoritative over WebRTC (Trystero), Firebase for
+lobby, signalling and anonymous auth, bots in empty seats, and rooms that play
+anywhere on Earth. Left: client prediction, host migration, quick-match, and a
+decision on TURN. The remaining internal prerequisites (a `Simulation` split
+out of `Game`, an input-source interface, body snapshots) are listed in
+`docs/MULTIPLAYER.md` with the phase plan.
 
 ## 8. Tooling and code quality
 

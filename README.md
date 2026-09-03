@@ -12,7 +12,9 @@ imagery, and photorealistic buildings you crash into.
 
 Single player starts from the garage. **Play Online** opens a lobby: create a
 room, share the four-letter code, and friends join from the deployed site; bots
-fill the empty seats. Online matches play on the desert for now.
+fill the empty seats. Rooms play on the desert or anywhere on Earth — the host
+picks a place while setting the room up, and can share their Maps key so
+friends need nothing but the code.
 
 ```bash
 npm install
@@ -55,9 +57,14 @@ drops where you died and you respawn at your base.
 Paste a Google Maps API key in the top bar and search for a place. The key
 stays in your browser's `localStorage` and never reaches the build.
 
-The key needs four APIs enabled: **Maps JavaScript**, **Elevation**,
-**Static Maps**, and **Photorealistic 3D Tiles**. Tiles are best-effort — if
+The key needs five APIs enabled: **Maps JavaScript**, **Geocoding**,
+**Elevation**, **Static Maps**, and **Photorealistic 3D Tiles**. Tiles are best-effort — if
 they fail, you still get real terrain and imagery.
+
+Online rooms go anywhere too: pick the place while creating the room, and the
+host can share their key so friends need nothing but the four-letter code.
+Checking a place costs one lookup — the city itself only loads when the match
+starts, so trying a few before settling is cheap.
 
 Downtowns work best. The tile loader streams finer geometry as you drive
 toward it, and buildings become real collision, so you can wedge a Monster
@@ -68,7 +75,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (160 tests, plain node) |
+| `npm test` | Test suite (187 tests, plain node) |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |
