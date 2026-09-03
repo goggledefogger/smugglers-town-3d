@@ -17,6 +17,9 @@ import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.t
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Transport } from './Transport.ts';
 import { decode, encode, inputToMsg, type BodySnap, type HelloMsg, type SnapshotMsg } from './protocol.ts';
+import { logger } from '../app/log.ts';
+
+const log = logger('client');
 
 const INPUT_HZ = 30;
 /** Render this many sim ticks behind the newest snapshot so there is always a pair to blend. */
@@ -114,6 +117,7 @@ export class ClientSession implements WorldView {
     if (m.t === 's') {
       const last = this.snaps[this.snaps.length - 1];
       if (last && m.tick <= last.tick) return;
+      if (!last) log.info('first snapshot', { tick: m.tick, bodies: m.bodies.length, phase: m.phase });
       this.snaps.push(m);
       if (this.snaps.length > 4) this.snaps.shift();
       // scalar match state needs no blending: the newest is the truth

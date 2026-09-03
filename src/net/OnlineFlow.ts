@@ -15,7 +15,8 @@ import type { WorldView } from '../app/WorldView.ts';
 import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { LobbyScreen } from '../ui/screens/LobbyScreen.ts';
-import { firebaseApp, firebaseConfig } from '../services/firebase.ts';
+import { firebaseApp, firebaseConfig, identity, remoteLogSink } from '../services/firebase.ts';
+import { attachRemoteLog, dumpLogs, logger } from '../app/log.ts';
 import { canStart, createLobby, joinLobby, validateName, MAX_PLAYERS, type Lobby, type LobbyRoom } from './lobby.ts';
 import { connectTrystero } from './TrysteroTransport.ts';
 import type { Transport } from './Transport.ts';
@@ -46,6 +47,7 @@ const PEER_WAIT_MS = 10000;
 /** How long a client waits for the host's hello before giving up. */
 const HELLO_WAIT_MS = 20000;
 const NAME_KEY = 'stt_name';
+const log = logger('online');
 
 export class OnlineFlow {
   private lobby: Lobby | null = null;
@@ -74,6 +76,21 @@ export class OnlineFlow {
       el.hidden = true;
       deps.onLeave();
     });
+    el.addEventListener('lobby-logs', () => {
+      navigator.clipboard.writeText(dumpLogs()).then(
+        () => { el.status = 'Debug log copied; paste it to whoever is looking into it'; },
+        () => { el.status = 'Could not copy; run stt.dump() in the browser console'; }
+      );
+    });
+  }
+
+  private remoteLogs = false;
+
+  /** Ship logs to the database once signed in, buffered entries included. */
+  private enableRemoteLogs(): void {
+    if (this.remoteLogs) return;
+    this.remoteLogs = true;
+    identity().then(uid => attachRemoteLog(remoteLogSink(uid))).catch(err => log.error('remote log unavailable', err));
   }
 
   /** Show the lobby with the garage's vehicle pick. */
@@ -86,6 +103,8 @@ export class OnlineFlow {
     el.busy = false;
     el.room = null;
     el.hidden = false;
+    log.info('lobby opened', { vehicle, ua: navigator.userAgent.slice(0, 80) });
+    this.enableRemoteLogs();
   }
 
   private async create(rawName: string): Promise<void> {
@@ -104,10 +123,12 @@ export class OnlineFlow {
     const el = this.deps.lobbyEl;
     el.busy = true;
     el.status = `${what}…`;
+    log.info(what);
     try {
       this.attach(await work());
       el.status = '';
     } catch (err) {
+      log.error(`${what} failed`, err);
       el.status = describe(err);
     } finally {
       el.busy = false;
@@ -176,6 +197,7 @@ export class OnlineFlow {
     const host = new HostSession(transport, this.deps.events, tokens);
     const others = Object.keys(room.players).filter(u => u !== lobby.selfId);
     const missing = await host.waitForPeers(others, PEER_WAIT_MS);
+    log.info('host peers', { expected: others.length, missing });
     if (missing.length > 0) el.status = `${missing.length} player(s) did not connect; their seats go to bots`;
     const seats = seatsFor(room, lobby.selfId, missing);
     const terrain = this.deps.makeTerrain(seed);
@@ -213,7 +235,9 @@ export class OnlineFlow {
       transport.send(join);
       transport.onPeerJoin(() => transport.send(join));
       el.status = 'Waiting for the host…';
+      log.info('client connected, waiting for hello', { code: room.code });
       const hello = await waitHello(transport, HELLO_WAIT_MS);
+      log.info('hello', { seed: hello.seed, roster: hello.roster.length });
       const terrain = this.deps.makeTerrain(hello.seed);
       const client = new ClientSession(hello, lobby.selfId, transport, this.deps.events, this.deps.store, terrain);
       this.finish(lobby, {
@@ -223,6 +247,7 @@ export class OnlineFlow {
         dispose: () => client.dispose()
       }, terrain);
     } catch (err) {
+      log.error('client start failed', err);
       el.status = describe(err);
       el.busy = false;
       this.starting = false;
@@ -292,7 +317,8 @@ function describe(err: unknown): string {
   switch (msg) {
     case 'not-found': return 'No room with that code';
     case 'full': return 'That room is full';
-    case 'started': return 'That match already started';
+    case 'started': return 'That match already started; ask the host for a new room after it ends';
+    case 'self-host': return 'That is your own room: this browser is signed in as its host. Join from another browser profile or device';
     default: return msg;
   }
 }

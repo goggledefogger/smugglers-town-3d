@@ -91,7 +91,9 @@ Chrome contexts, creates a room in one, joins from the other, readies up,
 starts, drives, and prints both HUDs. It talks to the real Firebase project,
 so it needs network. For a manual check, two browser profiles (not two tabs:
 they share the anonymous sign-in) against the deployed site is the closest
-thing to a friend joining.
+thing to a friend joining. When something goes wrong, the lobby's "copy
+debug log" link and `?debug` on the URL are the first stop; `docs/DEPLOY.md`
+covers reading the remote logs.
 
 ### Adding things
 

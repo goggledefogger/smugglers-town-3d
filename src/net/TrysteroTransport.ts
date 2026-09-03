@@ -1,6 +1,9 @@
 import type { FirebaseApp } from 'firebase/app';
 import { joinRoom, selfId } from '@trystero-p2p/firebase';
 import type { Transport } from './Transport.ts';
+import { logger } from '../app/log.ts';
+
+const log = logger('rtc');
 
 /** Google's public STUN server; free, no account, enough for peers that aren't both behind symmetric NATs. */
 const STUN_URL = 'stun:stun.l.google.com:19302';
@@ -19,6 +22,7 @@ export async function connectTrystero(
     roomCode
   );
 
+  log.info('joined signalling room', { roomCode, selfId });
   const action = room.makeAction<string>('m');
 
   // trystero hands the room a single onMessage/onPeerJoin/onPeerLeave slot each;
@@ -31,9 +35,11 @@ export async function connectTrystero(
     for (const cb of messageCbs) cb(data, peerId);
   };
   room.onPeerJoin = (peerId) => {
+    log.info('peer joined', { peerId });
     for (const cb of joinCbs) cb(peerId);
   };
   room.onPeerLeave = (peerId) => {
+    log.info('peer left', { peerId });
     for (const cb of leaveCbs) cb(peerId);
   };
 

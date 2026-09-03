@@ -15,6 +15,9 @@ import type { GameEvents, GameEventMap } from '../app/events.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { Transport } from './Transport.ts';
 import { decode, encode, inputFromMsg, type EventMsg, type HelloMsg, type SnapshotMsg } from './protocol.ts';
+import { logger } from '../app/log.ts';
+
+const log = logger('host');
 
 const SNAP_HZ = 20;
 const NEUTRAL: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
@@ -47,6 +50,7 @@ export class HostSession {
     this.unsubs.push(transport.onPeerLeave(id => {
       const uid = this.peerUid.get(id);
       if (!uid) return;
+      log.info('peer left', { uid });
       this.peerUid.delete(id);
       this.joined.delete(uid);
       // a dropped player's car coasts to a stop instead of holding its last input
@@ -128,8 +132,15 @@ export class HostSession {
     const m = decode(data);
     if (!m) return;
     if (m.t === 'j') {
-      if (this.tokens[m.uid] !== m.token) return;
-      if (this.peerUid.has(from) || this.joined.has(m.uid)) return;
+      if (this.tokens[m.uid] !== m.token) {
+        log.warn('join refused: bad token', { uid: m.uid, from });
+        return;
+      }
+      if (this.peerUid.has(from) || this.joined.has(m.uid)) {
+        log.warn('join refused: seat or peer already bound', { uid: m.uid, from });
+        return;
+      }
+      log.info('peer seated', { uid: m.uid, from });
       this.peerUid.set(from, m.uid);
       this.joined.add(m.uid);
       if (this.hello) this.transport.send(encode({ t: 'h', ...this.hello }), from);

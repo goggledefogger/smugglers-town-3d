@@ -42,6 +42,8 @@ export class LobbyScreen extends LitElement {
     .back { display:block; width:100%; text-align:center; margin-top:16px; color:var(--muted); font-size:12px;
       background:none; border:none; cursor:pointer; text-decoration:underline; }
     .status { margin-top:14px; font-size:12px; color:var(--hot); text-align:center; }
+    .link { display:block; margin:10px auto 0; background:none; border:none; color:var(--muted); font-size:11px;
+      text-decoration:underline; cursor:pointer; }
 
     /* --- in-room --- */
     .code-big { font-family:'JetBrains Mono',monospace; font-size:clamp(36px,6vw,52px);
@@ -151,16 +153,20 @@ export class LobbyScreen extends LitElement {
     this.fireDetail('lobby-team', { team: next });
   }
 
+  // a click must always answer: a silent early return here read as "nothing
+  // happens" for a player with no saved name
   private createRoom(): void {
     const name = (this.renderRoot.querySelector('#name') as HTMLInputElement).value.trim();
-    if (!name) return;
     this.fireDetail('lobby-create', { name });
   }
 
   private joinRoom(): void {
     const name = (this.renderRoot.querySelector('#name') as HTMLInputElement).value.trim();
-    const code = (this.renderRoot.querySelector('#code') as HTMLInputElement).value.trim();
-    if (!name || code.length !== 4) return;
+    const code = (this.renderRoot.querySelector('#code') as HTMLInputElement).value.trim().toUpperCase();
+    if (code.length !== 4) {
+      this.status = 'Enter the 4-letter room code';
+      return;
+    }
     this.fireDetail('lobby-join', { code, name });
   }
 
@@ -231,6 +237,7 @@ export class LobbyScreen extends LitElement {
         </div>
         <button class="back" @click=${() => this.fire('lobby-back')}>Back</button>
         ${this.status ? html`<div class="status">${this.status}</div>` : ''}
+        <button class="link" @click=${() => this.fire('lobby-logs')}>copy debug log</button>
       </div>
     `;
   }
@@ -267,6 +274,7 @@ export class LobbyScreen extends LitElement {
           </div>
         </div>
         ${this.status ? html`<div class="status">${this.status}</div>` : ''}
+        <button class="link" @click=${() => this.fire('lobby-logs')}>copy debug log</button>
       </div>
     `;
   }

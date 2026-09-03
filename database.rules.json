@@ -73,6 +73,35 @@
         ".read": "auth != null",
         ".write": "auth != null"
       }
+    },
+    "logs": {
+      "$session": {
+        "$id": {
+          ".write": "auth != null && !data.exists()",
+          ".validate": "newData.hasChildren(['t', 'l', 's', 'm', 'u']) && newData.child('u').val() === auth.uid",
+          "t": {
+            ".validate": "newData.isNumber()"
+          },
+          "l": {
+            ".validate": "newData.isString() && newData.val().length <= 5"
+          },
+          "s": {
+            ".validate": "newData.isString() && newData.val().length <= 32"
+          },
+          "m": {
+            ".validate": "newData.isString() && newData.val().length <= 300"
+          },
+          "d": {
+            ".validate": "newData.isString() && newData.val().length <= 1000"
+          },
+          "u": {
+            ".validate": "newData.isString()"
+          },
+          "$other": {
+            ".validate": false
+          }
+        }
+      }
     }
   }
 }

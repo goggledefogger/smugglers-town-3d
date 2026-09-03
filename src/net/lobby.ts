@@ -7,6 +7,9 @@ import {
   type Database
 } from 'firebase/database';
 import { firebaseApp, identity } from '../services/firebase.ts';
+import { logger } from '../app/log.ts';
+
+const log = logger('lobby');
 
 export type Team = 0 | 1;
 
@@ -226,6 +229,7 @@ export async function createLobby(name: string, vehicle: number, map: LobbyRoom[
     if (!result.committed) continue; // code already taken, try another
 
     const token = await claimToken(database, code, selfId);
+    log.info('created', { code, uid: selfId });
     await onDisconnect(roomRef).remove();
     await onDisconnect(ref(database, `rooms/${code}/players/${selfId}`)).remove();
     const lobby = new LobbyImpl(code, selfId, true, database, token);
@@ -238,8 +242,13 @@ export async function createLobby(name: string, vehicle: number, map: LobbyRoom[
 export async function joinLobby(code: string, name: string, vehicle: number): Promise<Lobby> {
   const database = getDatabase(await firebaseApp());
   const selfId = await identity();
-  const room = parseRoom((await get(ref(database, `rooms/${code}`))).val(), code);
+  log.info('join', { code, uid: selfId });
+  const raw: unknown = (await get(ref(database, `rooms/${code}`))).val();
+  const room = parseRoom(raw, code);
+  log.info('room', room ? { phase: room.phase, players: Object.keys(room.players).length, host: room.host } : { raw: raw === null ? null : 'unparseable' });
   if (!room) throw new Error('not-found');
+  // two tabs of one browser share the anonymous sign-in: that is the host trying to join itself
+  if (room.host === selfId) throw new Error('self-host');
   if (room.phase !== 'lobby') throw new Error('started');
   if (!(selfId in room.players) && Object.keys(room.players).length >= MAX_PLAYERS) throw new Error('full');
   // only this seat is written: the rules let a player write nothing else in
@@ -250,9 +259,11 @@ export async function joinLobby(code: string, name: string, vehicle: number): Pr
   const seatRef = ref(database, `rooms/${code}/players/${selfId}`);
   try {
     await set(seatRef, player);
-  } catch {
+  } catch (err) {
+    log.warn('seat write refused', err);
     throw new Error('started');
   }
+  log.info('seated', { code, team: player.team });
   const token = await claimToken(database, code, selfId);
   await onDisconnect(seatRef).remove();
   const lobby = new LobbyImpl(code, selfId, false, database, token);

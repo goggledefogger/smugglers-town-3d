@@ -61,6 +61,27 @@ Shapes are validated field by field; `players` is deliberately not a
 required child of the room, because a host's pre-registered `onDisconnect`
 removal of its own seat is validated while the room is still standing.
 
+### Debugging an online session
+
+Three places to look, cheapest first:
+
+1. **The lobby's "copy debug log" link** puts the browser's log ring (last
+   500 entries, one JSON object per line) on the clipboard; `stt.dump()` in
+   the console does the same. Add `?debug` to the URL for the verbose
+   console.
+2. **Remote logs.** Once a player is signed in, everything at `info` and up
+   (including what was buffered before sign-in) is appended under
+   `logs/<uid-prefix>-<time>/`. Clients can write their own entries and
+   never read any; read them with the CLI:
+
+   ```bash
+   firebase database:get /logs --shallow --account <you>      # sessions
+   firebase database:get /logs/<session> --account <you> | jq
+   firebase database:remove /logs --account <you>             # clear
+   ```
+
+3. `npm run e2e:online` reproduces a full match with two profiles.
+
 ### Firestore (profiles, stats, saved locations)
 
 Documents that are read far more than written. Create the database
