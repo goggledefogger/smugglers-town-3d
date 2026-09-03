@@ -22,8 +22,15 @@ import { logger } from '../app/log.ts';
 const log = logger('client');
 
 const INPUT_HZ = 30;
-/** Render this many sim ticks behind the newest snapshot so there is always a pair to blend. */
-const DELAY_TICKS = 4;
+/** Render this many sim ticks (100 ms) behind the newest snapshot so there is always a pair to blend. */
+const DELAY_TICKS = 6;
+/** Playback speed bends by this much per tick of error, within ±MAX_RATE_ADJUST, to hold that delay. */
+const RATE_GAIN = 0.05;
+const MAX_RATE_ADJUST = 0.15;
+/** Further behind than this is a stall, not jitter: jump rather than race to catch up. */
+const SNAP_TICKS = 30;
+/** Snapshots kept: enough to cover SNAP_TICKS, else a lagging clock renders the oldest one frozen. */
+const KEEP_SNAPS = 14;
 /** A jump larger than this between snapshots is a respawn: cut, don't slide. */
 const TELEPORT_UNITS = 40;
 const _qa = new Quaternion();
@@ -48,6 +55,7 @@ export class ClientSession implements WorldView {
   private readonly snaps: SnapshotMsg[] = [];
   private readonly unsubs: (() => void)[] = [];
   private renderTick = 0;
+  private clockSet = false;
   private seq = 0;
   private inputTimer = 0;
   private hudTimer = 0;
@@ -119,7 +127,7 @@ export class ClientSession implements WorldView {
       if (last && m.tick <= last.tick) return;
       if (!last) log.info('first snapshot', { tick: m.tick, bodies: m.bodies.length, phase: m.phase });
       this.snaps.push(m);
-      if (this.snaps.length > 4) this.snaps.shift();
+      if (this.snaps.length > KEEP_SNAPS) this.snaps.shift();
       // scalar match state needs no blending: the newest is the truth
       this.matchPhase = m.phase;
       this.timeLeftS = m.timeLeftS;
@@ -135,14 +143,28 @@ export class ClientSession implements WorldView {
     }
   }
 
-  /** Blend each puppet between the two snapshots around the render tick. */
+  /**
+   * Blend each puppet between the two snapshots around the render tick.
+   * The render clock runs at sim rate with its speed bent toward holding
+   * DELAY_TICKS behind the newest snapshot. A clock that is merely clamped
+   * stalls on every late packet, falls further behind each time, and then
+   * jumps — which reads as jerking and jamming
+   */
   private interpolate(dt: number): void {
     const n = this.snaps.length;
     if (n === 0) return;
     const newest = this.snaps[n - 1]!;
-    const target = newest.tick - DELAY_TICKS;
-    // free-run the clock at sim rate; snap if it has fallen far behind (a stall)
-    this.renderTick = target - this.renderTick > 20 ? target : Math.min(target, this.renderTick + dt * 60);
+    if (!this.clockSet) {
+      this.clockSet = true;
+      this.renderTick = newest.tick - DELAY_TICKS;
+    }
+    const behind = newest.tick - this.renderTick;
+    if (behind > SNAP_TICKS) {
+      this.renderTick = newest.tick - DELAY_TICKS;
+    } else {
+      const rate = 1 + Math.max(-MAX_RATE_ADJUST, Math.min(MAX_RATE_ADJUST, (behind - DELAY_TICKS) * RATE_GAIN));
+      this.renderTick = Math.min(newest.tick, this.renderTick + dt * 60 * rate);
+    }
     let a = this.snaps[0]!, b = newest;
     for (let i = n - 1; i > 0; i--) {
       if (this.snaps[i - 1]!.tick <= this.renderTick) {
@@ -177,19 +199,29 @@ export class ClientSession implements WorldView {
   }
 
   targetBearing(): number {
+    return this.navMarker()?.yaw ?? 0;
+  }
+
+  navMarker(): { yaw: number; pitch: number; distance: number } | null {
     const player = this.player;
-    if (!player) return 0;
+    if (!player) return null;
     const target = this.st.carrier ? this.st.bases[player.team] : this.st.contrabandPos;
     _tmpV.copy(target).sub(player.body.pos);
+    const dy = _tmpV.y;
     _tmpV.y = 0;
-    if (_tmpV.lengthSq() < 1) return 0;
+    const planar = _tmpV.length();
+    if (planar < 1) return null;
     _tmpV.normalize();
     const fwd = player.body.forward(_tmpFwd);
     fwd.y = 0;
     fwd.normalize();
     const ahead = _tmpV.dot(fwd);
     const right = _tmpV.cross(fwd).y;
-    return Math.atan2(right, ahead);
+    return {
+      yaw: Math.atan2(right, ahead),
+      pitch: Math.atan2(dy, planar),
+      distance: planar
+    };
   }
 
   private pushHud(): void {

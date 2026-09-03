@@ -494,11 +494,18 @@ export class Game {
    * not part of the 10 Hz HUD snapshot.
    */
   targetBearing(): number {
+    return this.navMarker()?.yaw ?? 0;
+  }
+
+  navMarker(): { yaw: number; pitch: number; distance: number } | null {
     const player = this.player;
-    if (!player) return 0;
-    _tmpV.copy(this.playerTarget(player)).sub(player.body.pos);
+    if (!player) return null;
+    const target = this.playerTarget(player);
+    _tmpV.copy(target).sub(player.body.pos);
+    const dy = _tmpV.y;
     _tmpV.y = 0;
-    if (_tmpV.lengthSq() < 1) return 0;
+    const planar = _tmpV.length();
+    if (planar < 1) return null;
     _tmpV.normalize();
     const fwd = player.body.forward(_tmpFwd);
     fwd.y = 0;
@@ -506,7 +513,11 @@ export class Game {
     // ahead first: cross() below overwrites _tmpV with the cross product
     const ahead = _tmpV.dot(fwd);
     const right = _tmpV.cross(fwd).y;
-    return Math.atan2(right, ahead);
+    return {
+      yaw: Math.atan2(right, ahead),
+      pitch: Math.atan2(dy, planar),
+      distance: planar
+    };
   }
 
   private pushHud(): void {

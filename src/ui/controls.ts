@@ -23,10 +23,17 @@ export class KeyboardState {
       if (this.typingInField()) return;
       this.keys.delete(e.code);
     };
+    // a key held while the window loses focus never gets its keyup: without
+    // this a car keeps turning (and online, keeps sending that turn) forever
+    const release = () => this.keys.clear();
     window.addEventListener('keydown', onKeyDown);
     window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', release);
+    document.addEventListener('visibilitychange', release);
     this.disposers.push(() => window.removeEventListener('keydown', onKeyDown));
     this.disposers.push(() => window.removeEventListener('keyup', onKeyUp));
+    this.disposers.push(() => window.removeEventListener('blur', release));
+    this.disposers.push(() => document.removeEventListener('visibilitychange', release));
   }
 
   private typingInField(): boolean {

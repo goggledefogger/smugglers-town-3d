@@ -17,6 +17,13 @@ export interface WorldView {
   readonly terrainProvider: TerrainProvider;
   /** Radians clockwise from straight ahead to the player's current target. */
   targetBearing(): number;
+  /**
+   * Orientation + planar distance to the player's current target, for the 3D
+   * nav chevron. yaw = bearing clockwise from ahead; pitch = elevation
+   * (positive = above the horizon); distance = flat ground distance. Null
+   * when there is no player or target.
+   */
+  navMarker(): { yaw: number; pitch: number; distance: number } | null;
   /** Clear fraction of a segment through the world's buildings; a world without them returns 1. */
   lineOfSight(from: Vector3, to: Vector3): number;
 }

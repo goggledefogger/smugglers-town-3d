@@ -365,7 +365,9 @@ function frame(now: number): void {
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
     const input = keyboard.toVehicleInput();
-    if (online) online.tick(dt, input);
+    // the sessions get real elapsed time: Game clamps its own step, and a
+    // client's playback clock must not run slow just because frames are
+    if (online) online.tick(rawDt, input);
     else game.update(dt, input);
     simTime += dt;
     const player = world.player?.body ?? null;
@@ -390,7 +392,8 @@ function frame(now: number): void {
     const carrierView = carrier ? vehicleViews.find(v => v.actor.body === carrier) : undefined;
     pickups.sync(world.state, simTime, dt, carrierView?.pose ?? null);
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
-    dirArrowEl.setBearing(world.targetBearing());
+    const nav = world.navMarker();
+    if (nav) dirArrowEl.setNav(nav.yaw, nav.pitch, nav.distance);
     minimap.draw(world.state, world.vehicles, world.state.carrier);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);
