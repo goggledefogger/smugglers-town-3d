@@ -159,6 +159,13 @@ chevron sets `--chev-face` and mixes its shaded back and edge from it with
 property. Component-local tokens like that belong on the component's `:host`;
 only genuinely shared scales go in `index.html`.
 
+`index.html`'s `* { box-sizing: border-box }` does **not** cross a shadow
+boundary. Any component that sets an explicit width alongside padding or a
+border needs its own `*, :host { box-sizing: border-box; }`, or the box grows by
+the padding and hangs off the side of a phone. Watch the tagged template too: a
+backtick inside a CSS comment ends the `css` literal and the whole module fails
+to parse.
+
 Sizes come from the scale too, so the HUD survives a phone: corners offset by
 `max(var(--space-lg), env(safe-area-inset-*))`, panels sized in `rem` or
 `clamp()` rather than fixed pixels, and form fields at 16px so iOS does not zoom

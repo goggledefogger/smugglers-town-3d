@@ -61,7 +61,8 @@ for (const vp of VIEWPORTS) {
     const rect = sel => { const e = document.querySelector(sel); if (!e) return null; const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
     const bar = rect('sr-relocate');
     const overlaps = (a, b) => !!a && !!b && a.r > b.l && a.l < b.r && a.b > b.t && a.t < b.b;
-    const barOverBar = ['#hud .hud-tl', '#hud .hud-tr'].some(sel => overlaps(bar, rect(sel)));
+    const barOverBar = ['#hud .hud-tl', '#hud .hud-tr', 'sr-dirarrow'].some(sel => overlaps(bar, rect(sel)));
+    const barRows = bar ? Math.round(bar.b - bar.t) : 0;
     const corners = [...document.querySelectorAll('#hud .hud-corner')].map(e => {
       const b = e.getBoundingClientRect();
       return { name: e.className, x: b.x, y: b.y, right: b.right, bottom: b.bottom, w: b.width, h: b.height };
@@ -69,6 +70,7 @@ for (const vp of VIEWPORTS) {
     return {
       speed: text('sr-speed'),
       barOverBar,
+      barRows,
       objective: text('sr-objective'),
       corners,
       radarSpread: spread,
@@ -86,7 +88,9 @@ for (const vp of VIEWPORTS) {
     c.x < 0 || c.y < 0 || c.right > state.winW + 1 || c.bottom > vp.height + 1 || c.w === 0);
   check(offscreen.length === 0, `no HUD corner off-screen${offscreen.length ? `: ${offscreen.map(c => c.name).join(', ')}` : ''}`);
   check(state.docW <= state.winW, `no horizontal overflow (${state.docW} <= ${state.winW})`);
-  check(!state.barOverBar, 'the relocate bar does not cover a HUD corner');
+  check(!state.barOverBar, 'the relocate bar covers no HUD corner or the nav marker');
+  // wrapping to a second row is what pushes it down onto the marker
+  check(state.barRows < 70, `the relocate bar stays on one row (${state.barRows}px tall)`);
   // a flat fill would mean the terrain relief never rasterised
   check(state.radarSpread > 20, `radar shows terrain relief (luminance spread ${Math.round(state.radarSpread)})`);
   await page.close();

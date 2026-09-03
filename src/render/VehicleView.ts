@@ -75,6 +75,9 @@ export class VehicleView {
     }));
     this.healthBar.scale.set(4, 0.5, 1);
     this.healthBar.position.set(0, 3.4, 0);
+    // not on your own car: the HUD's integrity meter already says this, and the
+    // chase camera puts the bar dead centre of everything you are trying to see
+    this.healthBar.visible = !actor.isPlayer;
     this.group.add(this.healthBar);
     this.team = actor.team;
     this.sync(1 / 60, 1);

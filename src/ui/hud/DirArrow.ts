@@ -50,7 +50,8 @@ export class DirArrow extends HudComponent {
 
       display: block;
       position: absolute;
-      top: 16%;
+      /* 16% of a short window rides up into the relocate bar's dropped row */
+      top: max(16%, 11rem);
       left: 0;
       right: 0;
       height: 0;

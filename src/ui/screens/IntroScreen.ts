@@ -24,6 +24,10 @@ for (const [key] of STAT_ROWS) {
 
 export class IntroScreen extends LitElement {
   static override styles = css`
+    /* the document's universal box-sizing rule does not cross the shadow
+       boundary; .stats sets an explicit width and padding and needs it */
+    *, :host { box-sizing: border-box; }
+
     :host { position:fixed; inset:0; z-index:40; display:grid;
       grid-template-columns:minmax(300px, 430px) 1fr; grid-template-rows:auto 1fr auto;
       background:linear-gradient(90deg, rgba(26,20,16,.97) 0%, rgba(26,20,16,.97) 34%,

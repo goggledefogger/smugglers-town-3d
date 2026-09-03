@@ -19,6 +19,18 @@ export class ScorePanel extends HudComponent {
     .pip { width:10px; height:10px; border-radius:3px; }
     .pip.t0 { background:#3f3; } .pip.t1 { background:#f33; }
     .pip.me { border:2px solid #fff; }
+
+    /* on a phone the full-size panel spans the whole top row, leaving nothing
+       for anything else up there; the pips are the first thing to go, since
+       the scores above them say the same in fewer pixels */
+    @media (max-width: 40rem) {
+      .panel { gap: var(--space-sm); padding: var(--space-xs) var(--space-sm); }
+      .team { min-width: 2.5rem; }
+      .team .name { font-size: var(--text-2xs); letter-spacing: .08em; }
+      .team .val { font-size: 1.15rem; }
+      .clock { font-size: var(--text-md); min-width: 3rem; }
+      .pips { display: none; }
+    }
   `;
 
   override render() {
