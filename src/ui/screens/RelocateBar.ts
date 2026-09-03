@@ -8,7 +8,10 @@ export class RelocateBar extends LitElement {
   static override styles = css`
     :host {
       position: fixed;
-      top: max(var(--space-md), env(safe-area-inset-top));
+      /* always below the HUD's top corners rather than competing with them:
+         at any width where this bar is wide enough to be usable, health on one
+         side and the score on the other leave no room for it on that row */
+      top: calc(max(var(--space-md), env(safe-area-inset-top)) + 4.75rem);
       left: 50%;
       transform: translateX(-50%);
       z-index: 20;
@@ -16,18 +19,12 @@ export class RelocateBar extends LitElement {
       flex-wrap: wrap;
       justify-content: center;
       gap: var(--space-xs);
-      /* stay clear of the HUD's top corners rather than covering the score */
-      max-width: min(38rem, calc(100vw - 22rem));
+      max-width: min(38rem, calc(100vw - var(--space-lg) * 2));
       width: max-content;
     }
     /* too narrow to sit beside the HUD's top corners: drop below them instead
        of covering the score, and take the full width while down there */
-    @media (max-width: 60rem) {
-      :host {
-        max-width: calc(100vw - var(--space-lg) * 2);
-        top: calc(max(var(--space-md), env(safe-area-inset-top)) + 3.25rem);
-      }
-    }
+
     :host([hidden]) { display:none; }
     input { padding:var(--space-sm) var(--space-md); background:rgba(0,0,0,.6);
       border:var(--border) solid var(--line); border-radius:var(--radius-sm); color:var(--ink);

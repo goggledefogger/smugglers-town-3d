@@ -72,7 +72,12 @@ export class KeyboardState {
         : this.isDown('KeyD') || this.isDown('ArrowRight')
           ? -1
           : 0,
-      jump: this.isDown('Space')
+      jump: this.isDown('Space'),
+      // In the air the throttle and brake keys have nothing to drive, so they
+      // become pitch, pull-back-is-nose-up as in any stunt racer. VehicleBody
+      // only reads this while airborne, so the same keys keep their ground job.
+      pitch: (this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0)
+        - (this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0)
     };
   }
 

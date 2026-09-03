@@ -4,7 +4,7 @@
  * to this body, never the reverse.
  *
  * Design notes (ported from the prototype, where these were hard-won):
- * - Floaty gravity (below earth) for hang time.
+ * - Heavy gravity (~2.5x earth at this scale) for snappy, weighty landings.
  * - Air control is damped and capped so a spin settles instead of growing.
  * - Ground auto-righting uses the axis upW × worldUp; the opposite order
  *   amplifies tilt toward a flip and wedges at perfect inversion.
@@ -59,12 +59,45 @@ const REVERSE_FRACTION = 0.35;
  * terrain in the air state, where steering barely works
  */
 const GROUND_SNAP = 2.5;
+/** Closing speed onto the ground, relative to the ground's own motion, that counts as a fall. */
+const HARD_LANDING_V = 4;
+/**
+ * Landings up to this closing speed cost nothing; only the excess hurts. A
+ * jump that reliably wrecks you is a jump you stop taking, which would be a
+ * shame given the whole map is hills. Measured on the procedural desert, a
+ * hop lands at 0-4 and the worst run-of-play landing at ~12, so ordinary
+ * jumping is free and only a genuine drop — off a building, off a butte —
+ * costs integrity. Tune by driving, not by reading: this is a feel number.
+ */
+const SAFE_LANDING_V = 12;
+/** Above this the landing is a crash, not a landing, and the car tumbles. */
+const TUMBLE_V = 22;
 /** Suspension: the ride height eases toward the ground at this rate (1/s)... */
 const RIDE_RATE = 15;
 /** ...within this much travel either side of it; beyond that it is clamped. */
 const RIDE_TRAVEL = 0.6;
 /** Ground steering keeps working this long after leaving the ground ("coyote time"). */
 const STEER_GRACE_S = 0.2;
+/**
+ * How fast the tracked ground-climb rate follows the terrain (1/s). Fast
+ * enough to catch a ramp in a few frames, slow enough that noise in the
+ * heightfield does not read as a launch.
+ */
+const CLIMB_SMOOTH = 25;
+/** Ceiling on the climb rate a ramp can impart, so a cliff edge cannot fling the car. */
+const MAX_CLIMB = 34;
+/** The car must have been climbing at least this fast for a crest to launch it. */
+const LAUNCH_MIN_CLIMB = 1.5;
+/** ...and be outrunning the ground by this much as the slope levels off. */
+const LAUNCH_SEPARATION = 0.5;
+/**
+ * How fast the remembered climb fades (units/s per second). A launch uses the
+ * climb the car had at the lip, not the one left a few frames later once the
+ * ground has gone level and the smoothed rate has decayed.
+ */
+const CLIMB_PEAK_DECAY = 55;
+/** Once launched, the suspension keeps its hands off for this long. */
+const LAUNCH_LOCK_S = 0.18;
 
 export class VehicleBody {
   private static nextId = 1;
@@ -94,6 +127,14 @@ export class VehicleBody {
    */
   graceS = 0;
   private airTime = 0;
+  /** Rate the ground under the car is rising, smoothed; the car's own climb. */
+  private climbRate = 0;
+  /** Ride height last step, for that rate. NaN until the first step or a teleport. */
+  private prevTarget = NaN;
+  /** Suspension stays off this long after a launch so a crest cannot re-glue the car. */
+  private launchLockS = 0;
+  /** The climb rate to launch with, held briefly so a lip does not lose it. */
+  private climbPeak = 0;
 
   private readonly _fwd = new Vector3();
   private readonly _right = new Vector3();
@@ -138,8 +179,22 @@ export class VehicleBody {
     const right = this._right.set(1, 0, 0).applyQuaternion(this.quat);
     const up = this._up.set(0, 1, 0).applyQuaternion(this.quat);
     const gh = this.groundUnder(ground);
-    // grounded = inside the suspension band, not launching, not falling hard
-    this.onGround = this.pos.y < gh + this.cfg.groundClearance + GROUND_SNAP && this.vel.y < 2 && this.vel.y >= -4;
+    if (this.launchLockS > 0) this.launchLockS = Math.max(0, this.launchLockS - dt);
+    // Grounded = within the suspension's reach, not mid-launch, not falling
+    // hard. Vertical speed is deliberately not part of this: climbing a ramp at
+    // speed produces a large upward velocity, and that is the opposite of being
+    // in the air.
+    // "Falling hard" is measured against the ground the car is following, not
+    // against the world. Descending a slope at 20 units/s is not a fall; the
+    // car is simply keeping up with the hill.
+    // Rising relative to the ground means the wheels have left it, however
+    // close it still is. Measured against the ground's own motion: climbing a
+    // ramp at 12 units/s is not rising away from anything.
+    const rising = this.vel.y - this.climbRate;
+    this.onGround = this.launchLockS === 0
+      && this.pos.y < gh + this.cfg.groundClearance + GROUND_SNAP
+      && rising < LAUNCH_SEPARATION
+      && rising >= -HARD_LANDING_V;
     this.airTime = this.onGround ? 0 : this.airTime + dt;
 
     if (this.onGround) {
@@ -199,6 +254,9 @@ export class VehicleBody {
     if (input.jump && !this.jumpHeld) {
       this.vel.y += this.cfg.jumpBoost * 14;
       this.onGround = false;
+      // without the lock the next frame finds the car still inside the
+      // suspension band and snaps the jump straight back out of it
+      this.launchLockS = LAUNCH_LOCK_S;
     }
   }
 
@@ -307,31 +365,62 @@ export class VehicleBody {
     const gh = this.groundUnder(ground);
     this.groundY = gh;
     const target = gh + this.cfg.groundClearance;
-    if (this.vel.y < -4 && this.pos.y < target) {
-      // hard landing
+
+    // How fast the ground under the car is rising or falling, which for a car
+    // following it IS the car's vertical speed. Tracked even while airborne so
+    // a landing does not inherit a stale rate.
+    const rawClimb = Number.isFinite(this.prevTarget) ? (target - this.prevTarget) / dt : 0;
+    this.prevTarget = target;
+    // Following a surface, the vertical component can never exceed the speed
+    // along it, so a respawn across the map — which moves the ground under the
+    // car instantly while it is barely moving — cannot read as a ramp.
+    const reach = Math.min(MAX_CLIMB, Math.hypot(this.vel.x, this.vel.z));
+    const follow = 1 - Math.exp(-dt * CLIMB_SMOOTH);
+    this.climbRate += (MathUtils.clamp(rawClimb, -reach, reach) - this.climbRate) * follow;
+    this.climbPeak = Math.max(this.climbRate, this.climbPeak - CLIMB_PEAK_DECAY * dt);
+
+    // A car that was climbing and is now outrunning the ground has crested:
+    // the slope levelled off under it and its momentum carries on upward. That
+    // is the whole of a ramp jump, no button involved. The climb requirement is
+    // what separates a real crest from the first frames of any descent, where
+    // the tracked rate is still catching up with a slope the car is merely
+    // driving down.
+    if (this.onGround && this.climbPeak > LAUNCH_MIN_CLIMB
+        && this.vel.y > this.climbRate + LAUNCH_SEPARATION) {
+      this.onGround = false;
+      this.launchLockS = LAUNCH_LOCK_S;
+      this.vel.y = Math.max(this.vel.y, this.climbPeak);
+    }
+    const closing = this.vel.y - this.climbRate;
+    if (closing < -HARD_LANDING_V && this.pos.y < target) {
+      // hard landing: how fast the car met the ground, not how fast it fell
       this.pos.y = target;
-      const impact = -this.vel.y;
+      const impact = -closing;
       if (this.graceS > 0) {
         // the drop-in at spawn: settle, no damage, no tumble
         this.vel.y = 0;
         return this.keepInBounds();
       }
-      this.damage = Math.min(1, this.damage + impact * 0.004 / this.stats.durability);
+      const excess = Math.max(0, impact - SAFE_LANDING_V);
+      this.damage = Math.min(1, this.damage + excess * 0.004 / this.stats.durability);
       this.vel.y = impact * 0.18;
       // tumble on very hard landings — biased to pitch (forward flip)
-      if (impact > 18) {
+      if (impact > TUMBLE_V) {
         const dir = this.rng() < 0.5 ? 1 : -1;
         this.angVel.x += dir * Math.min(impact, 30) * 0.04;
         this.angVel.z += (this.rng() - 0.5) * Math.min(impact, 30) * 0.015;
       }
-    } else if (this.vel.y < 2 && this.vel.y >= -4 && this.pos.y < target + GROUND_SNAP) {
+    } else if (this.onGround && this.pos.y < target + GROUND_SNAP) {
       // grounded: suspension eases the body toward the ride height so bumps
       // and grid kinks don't jolt it; the travel clamp keeps climbs and
       // descents honest. Jumps (climbing) and hard falls (which must reach
       // the landing branch above) skip this
       this.pos.y += (target - this.pos.y) * (1 - Math.exp(-dt * RIDE_RATE));
       this.pos.y = MathUtils.clamp(this.pos.y, target - RIDE_TRAVEL, target + RIDE_TRAVEL);
-      this.vel.y = 0;
+      // the car's vertical speed is the ground's, not zero. Zeroing it here is
+      // what made a ramp a shrug: the climb was thrown away every frame, so a
+      // crest had nothing to launch with
+      this.vel.y = this.climbRate;
     }
     this.keepInBounds();
   }

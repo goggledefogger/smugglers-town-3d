@@ -117,6 +117,27 @@ stays wrecked until `Game.wreck` drops its crate and respawns it. Physics
 tuning enters through `app/config.physics` (plus the field size); the
 `DEFAULT_PHYSICS` in the module exists for tests.
 
+### Getting air
+
+A car that follows the ground has the ground's vertical speed, so the ride
+height is not simply pinned: `VehicleBody` tracks the rate the terrain under it
+is rising and gives the car that as its vertical velocity. Zeroing it — which
+is what the code used to do — threw the climb away every frame, so cresting a
+hill had nothing to launch with and the suspension spring dragged the car down
+the far side.
+
+A crest is then just the car outrunning the ground: it was climbing, the slope
+levels off, and its momentum carries on upward. That launches it, keeping the
+climb it had at the lip, with the suspension held off briefly so the same
+crest cannot immediately re-glue it. "Falling hard" is likewise measured
+against the ground's own motion — descending a slope at 20 units/s is keeping
+up with a hill, not falling.
+
+Measured on the procedural desert, the fix turned ~670 meaningless
+ground/air flickers per run into ~25 real launches with several times the
+height. Landing damage was rebalanced to match, since jumps that reliably wreck
+you are jumps nobody takes.
+
 ### `core/physics/collision.ts`
 Collision shapes, kept separate from render meshes and deliberately simple.
 A vehicle's collider is a compound of spheres in body space: `sphereCollider`

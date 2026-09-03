@@ -28,6 +28,7 @@ Pick a ride in the garage, then drive.
 | `W` `S` or `↑` `↓` | Accelerate, brake, reverse |
 | `A` `D` or `←` `→` | Steer |
 | `Space` | Jump |
+| `W` `S` in the air | Pitch the nose down / up |
 | `R` | Reset your car nearby |
 | `C` | Camera: chase, wide, hood |
 | `1`–`5` | Change vehicle mid-match |
@@ -52,6 +53,12 @@ map and will slide off a corner if you ask too much of it.
 The radar in the corner shades the terrain, because the direction arrow is a
 bearing and nothing more — it will happily point you through a butte. Reading
 the ground for a line around one is the game.
+
+Hills are the point. Drive up one and over the lip and the car keeps the climb
+it had, so a crest launches you — no button involved, and the faster and
+steeper the run-up the further you go. In the air the throttle and brake keys
+pitch the nose instead, which is how you land on your wheels, and rams and
+contraband steals work mid-flight.
 
 Landings, walls, and rams all cost integrity. At zero you wreck: the crate
 drops where you died and you respawn at your base.
