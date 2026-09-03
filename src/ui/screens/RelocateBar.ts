@@ -6,17 +6,40 @@ import { html, css, LitElement } from 'lit';
  */
 export class RelocateBar extends LitElement {
   static override styles = css`
-    :host { position:fixed; top:12px; left:50%; transform:translateX(-50%); z-index:20;
-      display:flex; gap:6px; align-items:center; }
+    :host {
+      position: fixed;
+      top: max(var(--space-md), env(safe-area-inset-top));
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: var(--space-xs);
+      /* stay clear of the HUD's top corners rather than covering the score */
+      max-width: min(38rem, calc(100vw - 22rem));
+      width: max-content;
+    }
+    /* too narrow to sit beside the HUD's top corners: drop below them instead
+       of covering the score, and take the full width while down there */
+    @media (max-width: 60rem) {
+      :host {
+        max-width: calc(100vw - var(--space-lg) * 2);
+        top: calc(max(var(--space-md), env(safe-area-inset-top)) + 3.25rem);
+      }
+    }
     :host([hidden]) { display:none; }
-    input { padding:8px 10px; background:rgba(0,0,0,.6); border:2px solid var(--line);
-      border-radius:6px; color:var(--ink); font-family:inherit; font-size:13px; outline:none; }
+    input { padding:var(--space-sm) var(--space-md); background:rgba(0,0,0,.6);
+      border:var(--border) solid var(--line); border-radius:var(--radius-sm); color:var(--ink);
+      font-family:inherit; font-size:16px; outline:none; min-width:0; }
     input:focus { border-color:var(--accent); }
     input::placeholder { color:var(--muted); }
-    #key { width:180px; font-size:12px; }
-    #q { width:260px; }
-    button { padding:8px 14px; background:var(--panel2); color:var(--ink); border:2px solid var(--line);
-      border-radius:6px; font-family:inherit; font-weight:600; cursor:pointer; }
+    /* 16px keeps iOS from zooming the page when a field takes focus */
+    #key { flex:1 1 9rem; min-width:7rem; }
+    #q { flex:2 1 14rem; min-width:8rem; }
+    button { padding:var(--space-sm) var(--space-lg); background:var(--panel2); color:var(--ink);
+      border:var(--border) solid var(--line); border-radius:var(--radius-sm); font-family:inherit;
+      font-weight:600; cursor:pointer; min-height:2.75rem; flex:0 0 auto; }
     button:hover { border-color:var(--accent); color:var(--accent); }
     button:disabled { opacity:.5; cursor:wait; }
     .status { position:absolute; top:calc(100% + 6px); left:0; right:0; font-size:11px;

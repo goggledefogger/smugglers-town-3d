@@ -152,6 +152,12 @@ chevron sets `--chev-face` and mixes its shaded back and edge from it with
 property. Component-local tokens like that belong on the component's `:host`;
 only genuinely shared scales go in `index.html`.
 
+Sizes come from the scale too, so the HUD survives a phone: corners offset by
+`max(var(--space-lg), env(safe-area-inset-*))`, panels sized in `rem` or
+`clamp()` rather than fixed pixels, and form fields at 16px so iOS does not zoom
+the page when one takes focus. There are no touch controls and the game is not
+playable on a phone, but nothing should overflow or hide under a notch.
+
 ## Comments
 
 Comment the *why*, not the *what*. This codebase has a few places where the

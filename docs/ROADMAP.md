@@ -84,7 +84,9 @@ bots follow waypoints around buildings and props. Left:
 
 - Gamepad via the Gamepad API (analog steer/throttle, triggers) merged into
   `KeyboardState.toVehicleInput`.
-- Touch controls and a responsive HUD for phones/tablets.
+- Touch controls. The HUD is responsive already — safe-area insets, a radar
+  and corners that scale, no overflow down to 390 px — but there is no way to
+  steer without a keyboard, so a phone can watch and not play.
 - Rebindable keys.
 
 ## 6. Audio
