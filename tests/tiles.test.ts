@@ -3,7 +3,9 @@ import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4 } from '
 import {
   boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
-import { buildingCollidersFrom, rasterizeTile, tileGroundOffset } from '../src/services/tiles/tileColliders.ts';
+import {
+  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate
+} from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
@@ -93,57 +95,97 @@ describe('glbPlacement', () => {
   });
 });
 
+describe('groundEstimate', () => {
+  const n = 40;
+  const rampOf = (): Float32Array => {
+    const a = new Float32Array(n * n);
+    for (let j = 0; j < n; j++) for (let i = 0; i < n; i++) a[j * n + i] = i * 0.5;
+    return a;
+  };
+
+  it('leaves a slope untouched, so hillsides are not buildings', () => {
+    const ramp = rampOf();
+    const ground = groundEstimate(ramp, n, 3);
+    for (let j = 5; j < n - 5; j++) {
+      for (let i = 5; i < n - 5; i++) {
+        expect(ground[j * n + i]).toBeCloseTo(ramp[j * n + i]!, 6);
+      }
+    }
+  });
+
+  it('erases anything narrower than the window, so towers stand above it', () => {
+    const top = rampOf();
+    for (let j = 18; j <= 20; j++) for (let i = 18; i <= 20; i++) top[j * n + i]! += 20;
+    const ground = groundEstimate(top, n, 3);
+    expect(top[19 * n + 19]! - ground[19 * n + 19]!).toBeCloseTo(20, 6);
+    expect(top[19 * n + 5]! - ground[19 * n + 5]!).toBeCloseTo(0, 6);
+  });
+
+  it('reports no ground where no tile covers the window', () => {
+    const empty = new Float32Array(n * n).fill(-Infinity);
+    expect(groundEstimate(empty, n, 3)[20 * n + 20]).toBe(-Infinity);
+  });
+});
+
 describe('buildingCollidersFrom', () => {
-  // 60-unit field, flat at 0: 10 m cells → 40 cells, cell 20 starts at x = 0
-  const flat = new Heightfield(60, 1, new Float32Array([0, 0, 0, 0]));
-  function tri(a: number[], b: number[], c: number[]): Mesh {
+  // 300-unit field so the 9-unit opening radius is small next to the world,
+  // as it is in a real match (840 units)
+  const SIZE = 300;
+  const flat = new Heightfield(SIZE, 1, new Float32Array([0, 0, 0, 0]));
+
+  /** Two triangles covering the field with a linear surface y = a + b·x. */
+  function slab(a: number, b: number): Mesh {
+    const h = SIZE / 2;
+    const y = (x: number): number => a + b * x;
     const geo = new BufferGeometry();
-    geo.setAttribute('position', new BufferAttribute(new Float32Array([...a, ...b, ...c]), 3));
+    geo.setAttribute('position', new BufferAttribute(new Float32Array([
+      -h, y(-h), -h, h, y(h), -h, -h, y(-h), h,
+      h, y(h), -h, h, y(h), h, -h, y(-h), h
+    ]), 3));
     return new Mesh(geo);
   }
 
-  /** axis-aligned horizontal quad at height y */
-  function quad(x0: number, z0: number, x1: number, z1: number, y: number): Mesh[] {
-    return [tri([x0, y, z0], [x1, y, z0], [x1, y, z1]), tri([x0, y, z0], [x1, y, z1], [x0, y, z1])];
+  /** Flat roof patch spanning [x0,x1]×[z0,z1] at height y. */
+  function roof(x0: number, z0: number, x1: number, z1: number, y: number): Mesh {
+    const geo = new BufferGeometry();
+    geo.setAttribute('position', new BufferAttribute(new Float32Array([
+      x0, y, z0, x1, y, z0, x0, y, z1,
+      x1, y, z0, x1, y, z1, x0, y, z1
+    ]), 3));
+    return new Mesh(geo);
   }
 
-  it('turns a wall into an AABB column at its top vertex and ignores ground-level ones', () => {
+  it('boxes a building standing on flat ground', () => {
     const g = new Group();
-    g.add(tri([0, 0, 0], [3, 0, 0], [1.5, 50, 0]));
-    g.add(tri([-20, 1, -20], [-10, 1, -20], [-15, 1, -10]));
+    g.add(slab(0, 0));
+    g.add(roof(-6, -6, 6, 6, 9)); // 9 units up = 60 real m
     const boxes = buildingCollidersFrom(g, flat);
-    expect(boxes).toHaveLength(1);
-    const b = boxes[0]!;
-    expect(b.max.y).toBeCloseTo(50, 5);
-    expect(b.min.x).toBeCloseTo(1.5, 5);
-    expect(b.max.x).toBeCloseTo(3, 5);
-    expect(b.min.z).toBeCloseTo(0, 5);
-    expect(b.max.z).toBeCloseTo(1.5, 5);
-  });
-
-  it('catches a low deck edge by local relief and merges its rows into one box', () => {
-    const g = new Group();
-    // 2 units up: under the terrain-rise threshold, but 2 above the ground beside it
-    for (const m of quad(0, 0, 6, 6, 2)) g.add(m);
-    for (const m of quad(-4, 0, 0, 6, 0)) g.add(m);
-    const boxes = buildingCollidersFrom(g, flat);
-    expect(boxes).toHaveLength(1);
-    const b = boxes[0]!;
-    expect(b.max.y).toBeCloseTo(2, 5);
-    expect(b.min.x).toBeCloseTo(0, 5);
-    // only the deck column adjacent to ground sees the relief: the edge, not the interior
-    expect(b.max.x).toBeCloseTo(1.5, 5);
-    expect(b.min.z).toBeCloseTo(0, 5);
-    expect(b.max.z).toBeCloseTo(7.5, 5);
+    expect(boxes.length).toBeGreaterThan(0);
+    const top = Math.max(...boxes.map(b => b.max.y));
+    expect(top).toBeCloseTo(9, 5);
+    // and every box sits over the roof's footprint, not out on the open ground
+    for (const b of boxes) {
+      expect(b.min.x).toBeGreaterThan(-12);
+      expect(b.max.x).toBeLessThan(12);
+    }
   });
 
   it('does not flag a steep hillside as a building', () => {
-    // 40 % slope rising along +x, terrain and tile agree
-    const hill = new Heightfield(60, 1, new Float32Array([0, 24, 0, 24]));
     const g = new Group();
-    g.add(tri([-30, 0, -30], [30, 24, -30], [-30, 0, 30]));
-    g.add(tri([30, 24, -30], [30, 24, 30], [-30, 0, 30]));
-    expect(buildingCollidersFrom(g, hill)).toHaveLength(0);
+    g.add(slab(0, 0.4)); // 40 % grade across the whole field
+    expect(buildingCollidersFrom(g, flat)).toHaveLength(0);
+  });
+
+  it('finds a building on a hillside, not the hill itself', () => {
+    const g = new Group();
+    g.add(slab(0, 0.4));
+    g.add(roof(-6, -6, 6, 6, 0.4 * 0 + 9)); // 9 units above the slope at x≈0
+    const boxes = buildingCollidersFrom(g, flat);
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const b of boxes) {
+      expect(b.min.x).toBeGreaterThan(-12);
+      expect(b.max.x).toBeLessThan(12);
+    }
   });
 });
 

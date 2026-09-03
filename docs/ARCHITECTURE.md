@@ -74,8 +74,11 @@ stay near true scale.
 
 ### `core/physics/VehicleBody.ts`
 Arcade physics: floaty gravity, ground drive with lateral grip, damped air
-control, auto-righting, hard-landing tumbles, world bounds, and building AABB
-resolution. The two quaternion gotchas preserved from the prototype (each is
+control, auto-righting, hard-landing tumbles, world bounds, and contact with
+the world's box colliders through the vehicle's own collision shape (see
+`core/physics/collision.ts`). A fresh spawn has two seconds of grace in which
+a landing costs no integrity and never tumbles, because cars drop in from
+above. The two quaternion gotchas preserved from the prototype (each is
 unit-tested):
 
 - Auto-righting axis is `upW × worldUp` — the opposite order amplifies tilt
@@ -108,7 +111,34 @@ stays wrecked until `Game.wreck` drops its crate and respawns it. Physics
 tuning enters through `app/config.physics` (plus the field size); the
 `DEFAULT_PHYSICS` in the module exists for tests.
 
-### `core/ai/DriverBrain.ts` and `core/ai/NavGrid.ts`
+### `core/physics/collision.ts`
+Collision shapes, kept separate from render meshes and deliberately simple.
+A vehicle's collider is a compound of spheres in body space: `sphereCollider`
+for one at the origin, `capsuleCollider` for two along the length, which
+gives a car a nose and a tail without oriented-box math. Each roster entry
+carries its own, so a Monster Truck is physically bigger than a Buggy and
+touches sooner. `sphereVsAabb` is the one primitive against world boxes (the
+inside case exits by the nearest face; the deepest face drives a car
+through a building), `compoundVsCompound` the one between vehicles. World
+boxes carry a `kind` (`building` | `prop`) so the resolver can treat layers
+differently later without touching the shapes.
+
+### `core/spawn/SpawnPlanner.ts` and `core/world/OpenSpace.ts`
+Every placement — match spawns, respawns, both bases, the contraband — goes
+through one component, and it handles human and bot drivers identically.
+It never places anything by probing a few candidate points: it asks an
+`OpenSpace` for real clearance. `NavGrid` implements `OpenSpace` with a
+multi-source BFS distance-to-wall map (`clearanceAt`, `findOpen` spirals out
+to the nearest point with enough room, `mostOpen` finds the roomiest place
+near an ask). The starting grid is a ring on the most open ground near the
+field centre, teams on opposite arcs, every slot nudged to open ground; that
+is what a downtown like San Francisco needs, where there is no clearing at
+the centre and a probe-based planner fell through to a point inside a block.
+Cars are released `dropHeight` above the ground. All choices come from an
+injected `Rng` (`core/rng.ts`, mulberry32), so a seed reproduces a layout on
+any machine — the first prerequisite in `docs/MULTIPLAYER.md`.
+
+### `core/ai/DriverBrain.ts` and `core/world/NavGrid.ts`
 Bots steer toward a waypoint supplied by a `RouteFn` when the game has one,
 else straight at the target. `NavGrid` is a 20 m occupancy grid rebuilt from
 the same colliders physics uses (cell centers within a car's half-width of a
@@ -124,14 +154,13 @@ A match runs countdown → playing → (suddenDeath) → gameover. During the
 countdown cars settle but nobody drives and the banner counts 3-2-1-go. The
 clock (`config.match.roundS`) only runs while playing; at zero the leader
 wins, a tie goes to sudden death where the next delivery wins. Win-at-five
-applies throughout. `GameDeps.round` overrides the timings for tests. Spawns use the most open spot
-near the field center (`Game.findOpenCenter`) and contraband / drop-zone
-placement requires clear ground around the point, so a downtown start never
-wedges anyone between towers.
+applies throughout. `GameDeps.round` overrides the timings for tests. Placement is the
+`SpawnPlanner`'s job (above); `Game` only asks it where things go.
 
 ### `core/physics/vehicleCollisions.ts`
-Pairwise sphere collisions: mass-weighted separation, elastic impulse
-exchange, spin-out for light vehicles hit hard by heavy ones. The
+Pairwise contact between each vehicle's compound collider: mass-weighted
+separation along the deepest contact, elastic impulse exchange, spin-out
+for light vehicles hit hard by heavy ones. The
 ram-to-steal rule itself lives in `MatchRules.onRam` via callback — physics
 just reports contacts.
 
@@ -277,8 +306,13 @@ Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
 ## Extension points
 
 - **New vehicle type** — append to `VEHICLE_TYPES` in
-  `core/physics/vehicleStats.ts`. Physics, AI, and HUD pick it up
-  automatically.
+  `core/physics/vehicleStats.ts`, collider included. Physics, AI, and HUD
+  pick it up automatically.
+- **Finer collision** — more spheres in a roster entry's collider (wheels,
+  a bumper) need no new code. A new shape kind or a per-layer rule (soft
+  props, trigger volumes) goes in `core/physics/collision.ts`.
+- **Spawn tuning** — `SpawnConfig` in `core/spawn/SpawnPlanner.ts`: ring
+  size, clearances, drop height, base offset.
 - **New AI behavior** — add a state in `DriverBrain`'s state machine. The
   brain only produces a `VehicleInput`; no other layer changes.
 - **New terrain source** — implement `TerrainProvider` (e.g. an offline

@@ -4,12 +4,23 @@
  * A Google tile is one merged mesh (ground + buildings + trees), so per-mesh
  * bounds say nothing about buildings. Each tile is rasterized once: every
  * triangle's height is stamped into a 10 m height grid over its footprint.
- * Compositing the rasters gives the photogrammetry "roof" surface; a cell is
- * a building when that surface rises well above the elevation-grid terrain
- * (tall buildings, roof interiors included) OR above the lowest neighbouring
- * cell (ramps, low buildings, poles — things the coarse elevation grid can't
- * see). Building cells merge into AABBs: runs along X, then identical runs
- * stack across rows.
+ * Compositing the rasters gives the photogrammetry surface (a DSM).
+ *
+ * Ground level is then estimated from that surface alone, by morphological
+ * opening — a min filter followed by a max filter at a radius wider than a
+ * city block. Opening is exact on a slope (min then max of a linear ramp
+ * returns the ramp), so hills survive it, while anything narrower than the
+ * window is erased. A cell is a building when the surface stands
+ * `BUILDING_RISE_M` above that estimate.
+ *
+ * It deliberately does NOT compare against the elevation-grid terrain. That
+ * grid is 87 m samples smoothed with a bicubic, which is fine over flat
+ * downtowns and badly wrong on hills: in San Francisco the smoothing error
+ * alone exceeded the threshold, so whole hillsides became invisible walls
+ * and the map filled with collision nobody could see.
+ *
+ * Building cells merge into AABBs: runs along X, then identical runs stack
+ * across rows.
  */
 import { Vector3, Box3, type Object3D, type Mesh } from 'three';
 import { WORLD_M_PER_M } from '../../core/geo/ecef.ts';
@@ -18,14 +29,14 @@ import type { Heightfield } from '../../core/heightfield.ts';
 
 /** 1.5 units = 10 m cells. */
 const CELL = 1.5;
-/** Real meters above the elevation-grid terrain that make a cell a building. */
-const RISE_ABOVE_TERRAIN_M = 18;
 /**
- * Real meters above the lowest neighbouring cell that make a cell a building.
- * A 1-cell window keeps hillsides out: over 10 m a 60 % slope is still under 6 m.
+ * Opening radius in cells (6 = 60 m, a 120 m window). Wider than a city
+ * block so buildings are erased from the ground estimate; narrow enough that
+ * only a sharp hill crest gets shaved, and then by well under the threshold.
  */
-const LOCAL_RELIEF_M = 6;
-const LOCAL_K = 1;
+const GROUND_K = 6;
+/** Real meters above the estimated ground that make a cell a building. */
+const BUILDING_RISE_M = 8;
 
 export interface Grid {
   readonly cell: number;
@@ -120,31 +131,60 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
   return { i0, j0, w, h, top };
 }
 
-/** Separable min filter with radius k; empty (-Infinity) cells are ignored. */
-function minFilter(src: Float32Array, n: number, k: number): Float32Array {
+/**
+ * Separable sliding-window extreme with radius k, O(cells) via a monotonic
+ * deque — the window is 120 m wide, so a naive scan would be 13× the work.
+ * Cells holding the `skip` sentinel take no part and come back as `skip`
+ * when the whole window is empty.
+ */
+function windowExtreme(src: Float32Array, n: number, k: number, min: boolean, skip: number): Float32Array {
   const tmp = new Float32Array(n * n);
   const out = new Float32Array(n * n);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      let m = Infinity;
-      for (let d = Math.max(0, i - k); d <= Math.min(n - 1, i + k); d++) {
-        const v = src[j * n + d]!;
-        if (v !== -Infinity && v < m) m = v;
+  const deque = new Int32Array(n);
+  const beats = (a: number, b: number): boolean => (min ? a <= b : a >= b);
+  const pass = (from: Float32Array, to: Float32Array, byRow: boolean): void => {
+    for (let a = 0; a < n; a++) {
+      const at = (b: number): number => from[byRow ? a * n + b : b * n + a]!;
+      let head = 0, tail = 0;
+      for (let b = 0; b < n + k; b++) {
+        if (b < n && at(b) !== skip) {
+          while (tail > head && beats(at(b), at(deque[tail - 1]!))) tail--;
+          deque[tail++] = b;
+        }
+        const c = b - k;
+        if (c < 0) continue;
+        while (tail > head && deque[head]! < c - k) head++;
+        const v = tail > head ? at(deque[head]!) : skip;
+        if (byRow) to[a * n + c] = v;
+        else to[c * n + a] = v;
       }
-      tmp[j * n + i] = m;
     }
-  }
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      let m = Infinity;
-      for (let d = Math.max(0, j - k); d <= Math.min(n - 1, j + k); d++) {
-        const v = tmp[d * n + i]!;
-        if (v < m) m = v;
-      }
-      out[j * n + i] = m;
-    }
-  }
+  };
+  pass(src, tmp, true);
+  pass(tmp, out, false);
   return out;
+}
+
+const NO_DATA = -Infinity;
+
+/**
+ * Ground level under the photogrammetry surface: a morphological opening
+ * (min then max) at `GROUND_K`. Cells with no tile coverage stay NO_DATA,
+ * and so do cells whose whole window is uncovered — a missing collider is
+ * far cheaper than a false one.
+ */
+export function groundEstimate(top: Float32Array, n: number, k = GROUND_K): Float32Array {
+  const mins = windowExtreme(top, n, k, true, NO_DATA);
+  const ground = windowExtreme(mins, n, k, false, NO_DATA);
+  // the window is truncated at the border, which biases the estimate low on
+  // the uphill edge of any slope and paints a wall there; that strip is
+  // inside the physics bounce zone, so simply declare no ground in it
+  for (let j = 0; j < n; j++) {
+    for (let i = 0; i < n; i++) {
+      if (i < k || j < k || i >= n - k || j >= n - k) ground[j * n + i] = NO_DATA;
+    }
+  }
+  return ground;
 }
 
 /** Max over all tile rasters on the full grid; -Infinity where no tile has data. */
@@ -180,14 +220,14 @@ export function tileGroundOffset(
   coreHalfUnits = 200
 ): number | null {
   const { n, cell } = grid;
-  const local = minFilter(compositeTops(rasters, n), n, LOCAL_K);
+  const ground = groundEstimate(compositeTops(rasters, n), n);
   const c0 = Math.max(0, Math.floor(n / 2 - coreHalfUnits / cell));
   const c1 = Math.min(n - 1, Math.ceil(n / 2 + coreHalfUnits / cell));
   const diffs: number[] = [];
   for (let j = c0; j <= c1; j++) {
     for (let i = c0; i <= c1; i++) {
       const c = j * n + i;
-      if (local[c] !== Infinity) diffs.push(local[c]! - terrainTop[c]!);
+      if (ground[c] !== NO_DATA) diffs.push(ground[c]! - terrainTop[c]!);
     }
   }
   if (diffs.length < 100) return null;
@@ -203,12 +243,12 @@ export function collidersFromRasters(
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
-  const local = minFilter(top, n, LOCAL_K);
-  const rise = RISE_ABOVE_TERRAIN_M * WORLD_M_PER_M * reliefBoost;
-  const relief = LOCAL_RELIEF_M * WORLD_M_PER_M * reliefBoost;
+  const ground = groundEstimate(top, n);
+  const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
-    return t !== -Infinity && (t - terrainTop[c]! >= rise || t - local[c]! >= relief);
+    const g = ground[c]!;
+    return t !== NO_DATA && g !== NO_DATA && t - g >= rise;
   };
 
   const out: BuildingCollider[] = [];
@@ -226,7 +266,10 @@ export function collidersFromRasters(
           lo = Infinity;
         }
         hi = Math.max(hi, top[c]!);
-        lo = Math.min(lo, terrainTop[c]!);
+        // the box floor follows the estimated ground, which tracks a hill far
+        // better than the smoothed elevation grid; fall back to it when a
+        // cell has no tile coverage nearby
+        lo = Math.min(lo, ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!);
         continue;
       }
       if (start < 0) continue;

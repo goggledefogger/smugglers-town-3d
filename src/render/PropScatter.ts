@@ -45,7 +45,8 @@ export class PropScatter {
       rocks.setMatrixAt(i, _m.compose(_p.set(x, y + s * 1.2, z), _q, _s.set(s, s * 0.8, s)));
       this.colliders.push({
         min: new Vector3(x - 1.8 * s, y, z - 1.8 * s),
-        max: new Vector3(x + 1.8 * s, y + 2.8 * s, z + 1.8 * s)
+        max: new Vector3(x + 1.8 * s, y + 2.8 * s, z + 1.8 * s),
+        kind: 'prop'
       });
     }
     this.add(rocks);
@@ -62,7 +63,8 @@ export class PropScatter {
         cacti.setMatrixAt(i, _m.compose(_p.set(x, y + 2, z), _q, _s.set(1, sy, 1)));
         this.colliders.push({
           min: new Vector3(x - 0.6, y, z - 0.6),
-          max: new Vector3(x + 0.6, y + 2 + 2.1 * sy, z + 0.6)
+          max: new Vector3(x + 0.6, y + 2 + 2.1 * sy, z + 0.6),
+          kind: 'prop'
         });
       }
       this.add(cacti);

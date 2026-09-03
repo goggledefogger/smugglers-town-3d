@@ -7,16 +7,18 @@
  */
 import { Vector3 } from 'three';
 import type { BuildingCollider } from '../physics/VehicleBody.ts';
+import type { OpenSpace, Vec2 } from './OpenSpace.ts';
 
 /** Half a car width: keeps routes from hugging walls without closing 20 m streets. */
 const MARGIN = 1.0;
 const UNREACHED = 0xffff;
 
-export class NavGrid {
+export class NavGrid implements OpenSpace {
   readonly n: number;
   private readonly half: number;
   private readonly blocked: Uint8Array;
   private blockedCount = 0;
+  private clearanceCells: Uint16Array | null = null;
 
   constructor(size: number, readonly cell = 3) {
     this.n = Math.ceil(size / cell);
@@ -48,6 +50,7 @@ export class NavGrid {
   rebuild(colliders: readonly BuildingCollider[]): void {
     this.blocked.fill(0);
     this.blockedCount = 0;
+    this.clearanceCells = null;
     for (const c of colliders) {
       const x0 = c.min.x - MARGIN, x1 = c.max.x + MARGIN;
       const z0 = c.min.z - MARGIN, z1 = c.max.z + MARGIN;
@@ -65,6 +68,111 @@ export class NavGrid {
         }
       }
     }
+  }
+
+  // --- OpenSpace ---
+
+  /**
+   * Chebyshev distance in cells from every cell to the nearest blocked cell,
+   * treating the world edge as blocked. One multi-source BFS, cached until
+   * the next rebuild; every spawn and placement query reads it.
+   */
+  private clearance(): Uint16Array {
+    if (this.clearanceCells) return this.clearanceCells;
+    const n = this.n;
+    const dist = new Uint16Array(n * n).fill(0xffff);
+    const queue = new Int32Array(n * n);
+    let head = 0, tail = 0;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const c = j * n + i;
+        if (this.blocked[c] === 1 || i === 0 || j === 0 || i === n - 1 || j === n - 1) {
+          dist[c] = 0;
+          queue[tail++] = c;
+        }
+      }
+    }
+    while (head < tail) {
+      const c = queue[head++]!;
+      const d = dist[c]! + 1;
+      const i = c % n, j = (c - i) / n;
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          if (di === 0 && dj === 0) continue;
+          const ni = i + di, nj = j + dj;
+          if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+          const nc = nj * n + ni;
+          if (dist[nc]! <= d) continue;
+          dist[nc] = d;
+          queue[tail++] = nc;
+        }
+      }
+    }
+    this.clearanceCells = dist;
+    return dist;
+  }
+
+  clearanceAt(x: number, z: number): number {
+    const c = this.cellOf(z) * this.n + this.cellOf(x);
+    return this.clearance()[c]! * this.cell;
+  }
+
+  findOpen(x: number, z: number, need: number): Vec2 | null {
+    const dist = this.clearance();
+    const n = this.n;
+    const needCells = Math.ceil(need / this.cell);
+    const i0 = this.cellOf(x), j0 = this.cellOf(z);
+    if (dist[j0 * n + i0]! >= needCells) return { x, z };
+    for (let r = 1; r < n; r++) {
+      let best = -1;
+      let bestD = Infinity;
+      for (let dj = -r; dj <= r; dj++) {
+        for (let di = -r; di <= r; di++) {
+          if (Math.max(Math.abs(di), Math.abs(dj)) !== r) continue;
+          const i = i0 + di, j = j0 + dj;
+          if (i < 0 || j < 0 || i >= n || j >= n) continue;
+          const c = j * n + i;
+          if (dist[c]! < needCells) continue;
+          const d = di * di + dj * dj;
+          if (d < bestD) {
+            bestD = d;
+            best = c;
+          }
+        }
+      }
+      if (best >= 0) return this.pointAt(best);
+    }
+    return null;
+  }
+
+  mostOpen(x: number, z: number, need: number): Vec2 | null {
+    const dist = this.clearance();
+    const n = this.n;
+    let max = 0;
+    for (let c = 0; c < n * n; c++) if (dist[c]! !== 0xffff && dist[c]! > max) max = dist[c]!;
+    if (max === 0) return null;
+    // take `need` when the world offers it, otherwise the roomiest there is
+    const target = Math.min(max, Math.ceil(need / this.cell));
+    let best = -1;
+    let bestD = Infinity;
+    for (let j = 0; j < n; j++) {
+      for (let i = 0; i < n; i++) {
+        const c = j * n + i;
+        if (dist[c]! < target) continue;
+        const dx = this.centerOf(i) - x, dz = this.centerOf(j) - z;
+        const d = dx * dx + dz * dz;
+        if (d < bestD) {
+          bestD = d;
+          best = c;
+        }
+      }
+    }
+    return best < 0 ? null : this.pointAt(best);
+  }
+
+  private pointAt(c: number): Vec2 {
+    const i = c % this.n;
+    return { x: this.centerOf(i), z: this.centerOf((c - i) / this.n) };
   }
 
   /** BFS distance in cells from the target (nearest free cell if it is blocked). */

@@ -23,12 +23,15 @@ describe('Game round structure', () => {
     const ticks: number[] = [];
     events.on('match:countdown', ({ n }) => ticks.push(n));
     const player = game.player!.body;
+    // cars are dropping in during the countdown, so judge driving by
+    // horizontal speed, not the fall
+    const groundSpeed = (): number => Math.hypot(player.vel.x, player.vel.z);
     for (let t = 0; t < 0.5; t += 0.02) game.update(0.02, { ...NEUTRAL, throttle: 1 });
     expect(game.matchPhase).toBe('countdown');
-    expect(player.speed).toBeLessThan(0.5);
+    expect(groundSpeed()).toBeLessThan(0.5);
     for (let t = 0; t < 1.5; t += 0.02) game.update(0.02, { ...NEUTRAL, throttle: 1 });
     expect(game.matchPhase).toBe('playing');
-    expect(player.speed).toBeGreaterThan(5);
+    expect(groundSpeed()).toBeGreaterThan(5);
     expect(ticks).toEqual([1, 0]);
   });
 

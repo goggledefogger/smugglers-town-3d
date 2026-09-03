@@ -22,11 +22,7 @@ export const config = {
     scoreGoal: 5,
     deliveryRadius: 22,
     contrabandRadius: 4.5,
-    transferCooldownS: 0.6,
-    spawnClearance: 40
-  },
-  ram: {
-    ramRadius: 4.2
+    transferCooldownS: 0.6
   },
   ai: {
     reevaluateS: 0.5,

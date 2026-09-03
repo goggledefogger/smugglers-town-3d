@@ -1,21 +1,16 @@
 /**
  * Vehicle-vs-vehicle collisions: positional separation, impulse exchange, and
- * the ram-to-steal rule that transfers contraband to an attacker on contact.
+ * the ram-to-steal hook that lets gameplay transfer contraband on contact.
+ *
+ * Contact comes from each vehicle's own collider (collision.ts), so a
+ * Monster Truck touches sooner than a Buggy and a nose hits before a flank.
  */
 import { Vector3 } from 'three';
 import type { VehicleBody } from './VehicleBody.ts';
+import { compoundVsCompound } from './collision.ts';
+import type { Rng } from '../rng.ts';
 
-export interface RamConfig {
-  /** Contact distance at which vehicles touch (scaled by carScale). */
-  readonly ramRadius: number;
-  /** Seconds after a transfer before another can occur. */
-  readonly transferCooldownS: number;
-}
-
-export const DEFAULT_RAM_CONFIG: RamConfig = {
-  ramRadius: 4.2,
-  transferCooldownS: 0.6
-};
+const _n = new Vector3();
 
 /**
  * Resolve one frame of vehicle-vs-vehicle contact. `onRam` fires for every
@@ -24,19 +19,20 @@ export const DEFAULT_RAM_CONFIG: RamConfig = {
  */
 export function resolveVehicleCollisions(
   vehicles: readonly VehicleBody[],
-  cfg: RamConfig = DEFAULT_RAM_CONFIG,
-  carScale = 1,
-  onRam: (a: VehicleBody, b: VehicleBody) => void
+  onRam: (a: VehicleBody, b: VehicleBody) => void,
+  rng: Rng = Math.random
 ): void {
-  const RAM = cfg.ramRadius * carScale;
   for (let i = 0; i < vehicles.length; i++) {
     for (let j = i + 1; j < vehicles.length; j++) {
       const a = vehicles[i]!;
       const b = vehicles[j]!;
-      const d = a.pos.distanceTo(b.pos);
-      if (d >= RAM || d < 0.01) continue;
-      const n = b.pos.clone().sub(a.pos).divideScalar(d);
-      const overlap = RAM - d;
+      const overlap = compoundVsCompound(
+        a.pos, a.quat, a.stats.collider,
+        b.pos, b.quat, b.stats.collider,
+        _n
+      );
+      if (overlap <= 0) continue;
+      const n = _n;
       const ma = a.stats.mass, mb = b.stats.mass, tot = ma + mb;
       a.pos.addScaledVector(n, -overlap * mb / tot);
       b.pos.addScaledVector(n, overlap * ma / tot);
@@ -50,13 +46,9 @@ export function resolveVehicleCollisions(
         const light = ma < mb ? a : b;
         const heavy = ma < mb ? b : a;
         if (light.stats.mass < heavy.stats.mass * 0.8) {
-          light.angVel.add(
-            new Vector3(
-              (Math.random() - 0.5) * 4,
-              (Math.random() - 0.5) * 2,
-              (Math.random() - 0.5) * 4
-            )
-          );
+          light.angVel.x += (rng() - 0.5) * 4;
+          light.angVel.y += (rng() - 0.5) * 2;
+          light.angVel.z += (rng() - 0.5) * 4;
           light.damage = Math.min(1, light.damage + rel * 0.01 / light.stats.durability);
         }
       }

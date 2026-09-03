@@ -3,19 +3,29 @@ import { MatchRules, DEFAULT_SCORING } from '../src/core/gameplay/MatchRules.ts'
 import { VehicleBody } from '../src/core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../src/core/physics/vehicleStats.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
+import { SpawnPlanner, DEFAULT_SPAWN } from '../src/core/spawn/SpawnPlanner.ts';
+import type { OpenSpace } from '../src/core/world/OpenSpace.ts';
 
 const FLAT = new Heightfield(840, 1, new Float32Array([0, 0, 0, 0]));
 
 function makeMatch(bodies: VehicleBody[], teams: ReadonlyMap<number, 0 | 1>): MatchRules {
-  const m = new MatchRules(DEFAULT_SCORING, bodies, teams, FLAT, 420);
+  const m = new MatchRules(DEFAULT_SCORING, bodies, teams, FLAT, new SpawnPlanner(DEFAULT_SPAWN));
   m.placeBases();
   m.spawnContraband();
   return m;
 }
 
 describe('MatchRules', () => {
-  it('never spawns contraband or a base inside a building', () => {
-    const m = new MatchRules(DEFAULT_SCORING, [], new Map(), FLAT, 420, (x) => x > 0);
+  it('never spawns contraband or a base where there is no room', () => {
+    // everything at x > 0 is solid; the planner must keep west of the line
+    const westOnly: OpenSpace = {
+      clearanceAt: (x) => (x > 0 ? 0 : 50),
+      findOpen: (x, z) => (x > 0 ? { x: -x, z } : { x, z }),
+      mostOpen: (x, z) => (x > 0 ? { x: -x, z } : { x, z })
+    };
+    const m = new MatchRules(
+      DEFAULT_SCORING, [], new Map(), FLAT, new SpawnPlanner(DEFAULT_SPAWN, westOnly)
+    );
     for (let i = 0; i < 25; i++) {
       m.placeBases();
       m.spawnContraband();
@@ -32,22 +42,22 @@ describe('MatchRules', () => {
     const b1 = m.state.bases[1].clone();
     expect(b0.distanceTo(b1)).toBeGreaterThan(420);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     a.pos.copy(m.state.bases[0]);
-    m.checkDelivery(1);
+    m.checkDelivery();
     expect(m.state.scores[0]).toBe(1);
     expect(m.state.bases[0].equals(b0)).toBe(true);
     expect(m.state.bases[1].equals(b1)).toBe(true);
     // the fresh contraband is nowhere near either base
-    expect(m.state.contrabandPos.distanceTo(b0)).toBeGreaterThan(DEFAULT_SCORING.spawnClearance);
-    expect(m.state.contrabandPos.distanceTo(b1)).toBeGreaterThan(DEFAULT_SCORING.spawnClearance);
+    expect(m.state.contrabandPos.distanceTo(b0)).toBeGreaterThan(DEFAULT_SPAWN.itemMinDist);
+    expect(m.state.contrabandPos.distanceTo(b1)).toBeGreaterThan(DEFAULT_SPAWN.itemMinDist);
   });
 
   it('drops the crate where a wrecked carrier died and respawns near its base', () => {
     const a = new VehicleBody(VEHICLE_TYPES[2]!);
     const m = makeMatch([a], new Map([[a.id, 0 as const]]));
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     a.pos.set(50, 1, 50);
     m.dropFrom(a);
     expect(m.state.carrier).toBeNull();
@@ -62,9 +72,9 @@ describe('MatchRules', () => {
     const a = new VehicleBody(VEHICLE_TYPES[2]!);
     const m = makeMatch([a], new Map([[a.id, 0 as const]]));
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     a.pos.copy(m.state.bases[1]);
-    m.checkDelivery(1);
+    m.checkDelivery();
     expect(m.state.scores[0]).toBe(0);
     expect(m.state.carrier).toBe(a);
   });
@@ -74,7 +84,7 @@ describe('MatchRules', () => {
     const teams = new Map([[a.id, 0 as const]]);
     const m = makeMatch([a], teams);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     expect(m.state.carrier).toBe(a);
     const evts = m.drainEvents();
     expect(evts[0]?.type).toBe('pickup');
@@ -86,10 +96,10 @@ describe('MatchRules', () => {
     const teams = new Map([[a.id, 0 as const], [b.id, 1 as const]]);
     const m = makeMatch([a, b], teams);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     expect(m.state.carrier).toBe(a);
     b.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     expect(m.state.carrier).toBe(a);
   });
 
@@ -99,7 +109,7 @@ describe('MatchRules', () => {
     const teams = new Map([[a.id, 0 as const], [b.id, 1 as const]]);
     const m = makeMatch([a, b], teams);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     expect(m.state.carrier).toBe(a);
     // enemy b rams carrier a — transfer to attacker
     m.onRam(a, b, 10);
@@ -118,7 +128,7 @@ describe('MatchRules', () => {
     const teams = new Map([[a.id, 0 as const], [b.id, 0 as const]]);
     const m = makeMatch([a, b], teams);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     m.onRam(a, b, 10);
     expect(m.state.carrier).toBe(b);
     expect(m.drainEvents().some(e => e.type === 'steal')).toBe(true);
@@ -129,9 +139,9 @@ describe('MatchRules', () => {
     const teams = new Map([[a.id, 0 as const]]);
     const m = makeMatch([a], teams);
     a.pos.copy(m.state.contrabandPos);
-    m.checkPickup(1);
+    m.checkPickup();
     a.pos.copy(m.state.bases[0]);
-    m.checkDelivery(1);
+    m.checkDelivery();
     expect(m.state.scores[0]).toBe(1);
     const evts = m.drainEvents();
     expect(evts.some(e => e.type === 'deliver')).toBe(true);
@@ -144,9 +154,9 @@ describe('MatchRules', () => {
     const m = makeMatch([a], teams);
     for (let i = 0; i < DEFAULT_SCORING.scoreGoal; i++) {
       a.pos.copy(m.state.contrabandPos);
-      m.checkPickup(1);
+      m.checkPickup();
       a.pos.copy(m.state.bases[0]);
-      m.checkDelivery(1);
+      m.checkDelivery();
     }
     expect(m.state.winner).toBe(0);
     expect(m.state.scores[0]).toBe(DEFAULT_SCORING.scoreGoal);

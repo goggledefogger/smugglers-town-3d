@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
-import { NavGrid } from '../src/core/ai/NavGrid.ts';
+import { NavGrid } from '../src/core/world/NavGrid.ts';
 import type { BuildingCollider } from '../src/core/physics/VehicleBody.ts';
 
 function box(x0: number, z0: number, x1: number, z1: number): BuildingCollider {

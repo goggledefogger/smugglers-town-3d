@@ -7,6 +7,7 @@ import { Vector3, MathUtils } from 'three';
 import type { VehicleInput } from '../physics/vehicleStats.ts';
 import type { VehicleBody } from '../physics/VehicleBody.ts';
 import type { MatchState } from '../gameplay/MatchRules.ts';
+import type { Rng } from '../rng.ts';
 
 type AiState = 'seek' | 'chase' | 'deliver';
 
@@ -53,7 +54,8 @@ export class DriverBrain {
 
   constructor(
     private readonly cfg: DriverConfig,
-    private readonly teamOf: (v: VehicleBody) => number
+    private readonly teamOf: (v: VehicleBody) => number,
+    private readonly rng: Rng = Math.random
   ) {}
 
   think(dt: number, self: VehicleBody, match: MatchState, route: RouteFn | null = null): void {
@@ -67,7 +69,7 @@ export class DriverBrain {
     }
     this.timer -= dt;
     if (this.timer <= 0) {
-      this.timer = this.cfg.reevaluateS * (1 + Math.random());
+      this.timer = this.cfg.reevaluateS * (1 + this.rng());
       if (!match.carrier) {
         this.state = 'seek';
       } else if (this.teamOf(match.carrier) !== this.teamOf(self)) {
@@ -76,7 +78,7 @@ export class DriverBrain {
         this.state = 'deliver';
       } else {
         // ally carries — support: head to our base or re-seek
-        this.state = Math.random() < 0.6 ? 'deliver' : 'seek';
+        this.state = this.rng() < 0.6 ? 'deliver' : 'seek';
       }
     }
     this.steerToward(self, match, route);
@@ -85,7 +87,7 @@ export class DriverBrain {
     if (this.stuckS > STUCK_S) {
       this.stuckS = 0;
       this.unstickS = UNSTICK_S;
-      this.unstickSteer = Math.random() < 0.5 ? -1 : 1;
+      this.unstickSteer = this.rng() < 0.5 ? -1 : 1;
     }
   }
 
@@ -133,7 +135,7 @@ export class DriverBrain {
       this.throttle = 1;
       this.brake = 0;
     }
-    if (self.onGround && Math.random() < 0.003) this.jump = true;
+    if (self.onGround && this.rng() < 0.003) this.jump = true;
   }
 
   input(): VehicleInput {

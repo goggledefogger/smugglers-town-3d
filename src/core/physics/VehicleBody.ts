@@ -12,11 +12,15 @@
 import { Quaternion, Vector3, MathUtils } from 'three';
 import type { Heightfield } from '../heightfield.ts';
 import type { VehicleInput, VehicleStats } from './vehicleStats.ts';
+import type { Rng } from '../rng.ts';
+import { sphereVsAabb, type Contact, type CollisionLayer } from './collision.ts';
 
-/** A single collidable building AABB in world space. */
+/** A single collidable box in world space (a building, a prop). */
 export interface BuildingCollider {
   readonly min: Vector3;
   readonly max: Vector3;
+  /** What it is; the resolver treats every kind the same for now. */
+  readonly kind?: CollisionLayer;
 }
 
 export interface VehiclePhysicsConfig {
@@ -84,6 +88,11 @@ export class VehicleBody {
   /** Pose before the last step; views interpolate between it and the current pose. */
   readonly prevPos = new Vector3();
   readonly prevQuat = new Quaternion();
+  /**
+   * Seconds of spawn grace left. Cars drop in from above, and that first
+   * landing should not cost integrity or flip anyone; set by the spawner.
+   */
+  graceS = 0;
   private airTime = 0;
 
   private readonly _fwd = new Vector3();
@@ -91,8 +100,14 @@ export class VehicleBody {
   private readonly _up = new Vector3();
   private readonly _q = new Quaternion();
   private readonly _axis = new Vector3();
+  private readonly _sphere = new Vector3();
+  private readonly _contact: Contact = { nx: 0, ny: 0, nz: 0, push: 0 };
 
-  constructor(stats: VehicleStats, cfg: VehiclePhysicsConfig = DEFAULT_PHYSICS) {
+  constructor(
+    stats: VehicleStats,
+    cfg: VehiclePhysicsConfig = DEFAULT_PHYSICS,
+    private readonly rng: Rng = Math.random
+  ) {
     this.id = VehicleBody.nextId++;
     this.stats = stats;
     this.cfg = cfg;
@@ -113,8 +128,7 @@ export class VehicleBody {
     dt: number,
     input: VehicleInput,
     ground: Heightfield,
-    buildings: readonly BuildingCollider[],
-    carScale = 1
+    buildings: readonly BuildingCollider[]
   ): void {
     this.snapPrev();
     const fwd = this.forward(this._fwd);
@@ -136,10 +150,11 @@ export class VehicleBody {
     this.jumpHeld = input.jump;
     this.steer = input.steer;
     this.brake = input.brake;
+    if (this.graceS > 0) this.graceS = Math.max(0, this.graceS - dt);
 
     this.integrateAngular(dt);
     this.integratePosition(dt, ground);
-    this.resolveBuildings(buildings, carScale);
+    this.resolveBuildings(buildings);
     // integrity heals slowly; a wreck (damage 1) stays a wreck until the game handles it
     if (this.damage < 1) this.damage = Math.max(0, this.damage - 0.02 * dt);
     this.speed = this.vel.length();
@@ -293,13 +308,18 @@ export class VehicleBody {
       // hard landing
       this.pos.y = target;
       const impact = -this.vel.y;
+      if (this.graceS > 0) {
+        // the drop-in at spawn: settle, no damage, no tumble
+        this.vel.y = 0;
+        return this.keepInBounds();
+      }
       this.damage = Math.min(1, this.damage + impact * 0.004 / this.stats.durability);
       this.vel.y = impact * 0.18;
       // tumble on very hard landings — biased to pitch (forward flip)
       if (impact > 18) {
-        const dir = Math.random() < 0.5 ? 1 : -1;
+        const dir = this.rng() < 0.5 ? 1 : -1;
         this.angVel.x += dir * Math.min(impact, 30) * 0.04;
-        this.angVel.z += (Math.random() - 0.5) * Math.min(impact, 30) * 0.015;
+        this.angVel.z += (this.rng() - 0.5) * Math.min(impact, 30) * 0.015;
       }
     } else if (this.vel.y < 2 && this.vel.y >= -4 && this.pos.y < target + GROUND_SNAP) {
       // grounded: suspension eases the body toward the ride height so bumps
@@ -310,7 +330,11 @@ export class VehicleBody {
       this.pos.y = MathUtils.clamp(this.pos.y, target - RIDE_TRAVEL, target + RIDE_TRAVEL);
       this.vel.y = 0;
     }
-    // world bounds — bounce back
+    this.keepInBounds();
+  }
+
+  /** World bounds — bounce back. */
+  private keepInBounds(): void {
     const B = this.cfg.worldHalf - 8;
     if (Math.abs(this.pos.x) > B) {
       this.pos.x = Math.sign(this.pos.x) * B;
@@ -322,59 +346,36 @@ export class VehicleBody {
     }
   }
 
-  private resolveBuildings(buildings: readonly BuildingCollider[], carScale: number): void {
-    const r = 2.2 * carScale;
-    for (const c of buildings) {
-      const cx = MathUtils.clamp(this.pos.x, c.min.x, c.max.x);
-      const cy = MathUtils.clamp(this.pos.y, c.min.y, c.max.y);
-      const cz = MathUtils.clamp(this.pos.z, c.min.z, c.max.z);
-      const dx = this.pos.x - cx;
-      const dy = this.pos.y - cy;
-      const dz = this.pos.z - cz;
-      const d2 = dx * dx + dy * dy + dz * dz;
-      if (d2 >= r * r) continue;
-      const d = Math.sqrt(d2);
-      let nx: number;
-      let ny: number;
-      let nz: number;
-      if (d > 1e-4) {
-        nx = dx / d;
-        ny = dy / d;
-        nz = dz / d;
-      } else {
-        // center inside the box — push out along the smallest axis overlap
-        const ox = r - Math.min(Math.abs(this.pos.x - c.min.x), Math.abs(this.pos.x - c.max.x));
-        const oy = r - Math.min(Math.abs(this.pos.y - c.min.y), Math.abs(this.pos.y - c.max.y));
-        const oz = r - Math.min(Math.abs(this.pos.z - c.min.z), Math.abs(this.pos.z - c.max.z));
-        if (ox <= oy && ox <= oz) {
-          nx = Math.sign(this.pos.x - (c.min.x + c.max.x) / 2) || 1;
-          ny = 0;
-          nz = 0;
-        } else if (oy <= oz) {
-          nx = 0;
-          ny = Math.sign(this.pos.y - (c.min.y + c.max.y) / 2) || 1;
-          nz = 0;
-        } else {
-          nx = 0;
-          ny = 0;
-          nz = Math.sign(this.pos.z - (c.min.z + c.max.z) / 2) || 1;
-        }
-      }
-      const push = r - Math.max(d, 1e-4) + 0.05;
-      this.pos.x += nx * push;
-      this.pos.y += ny * push;
-      this.pos.z += nz * push;
-      const vn = this.vel.x * nx + this.vel.y * ny + this.vel.z * nz;
-      if (vn < 0) {
-        this.vel.x -= 1.3 * vn * nx;
-        this.vel.y -= 1.3 * vn * ny;
-        this.vel.z -= 1.3 * vn * nz;
-        const impact = Math.abs(vn);
+  /**
+   * Each sphere of the body's collider against every box nearby. A contact
+   * moves the whole body (and the sphere with it, so the next box sees where
+   * it really is) and reflects the normal velocity with a little extra kick.
+   */
+  private resolveBuildings(buildings: readonly BuildingCollider[]): void {
+    const hit = this._contact;
+    for (const s of this.stats.collider.spheres) {
+      const c = this._sphere.set(s.x, s.y, s.z).applyQuaternion(this.quat).add(this.pos);
+      for (const b of buildings) {
+        if (!sphereVsAabb(c.x, c.y, c.z, s.r, b.min, b.max, hit)) continue;
+        const push = hit.push + 0.05;
+        this.pos.x += hit.nx * push;
+        this.pos.y += hit.ny * push;
+        this.pos.z += hit.nz * push;
+        c.x += hit.nx * push;
+        c.y += hit.ny * push;
+        c.z += hit.nz * push;
+        const vn = this.vel.x * hit.nx + this.vel.y * hit.ny + this.vel.z * hit.nz;
+        if (vn >= 0) continue;
+        this.vel.x -= 1.3 * vn * hit.nx;
+        this.vel.y -= 1.3 * vn * hit.ny;
+        this.vel.z -= 1.3 * vn * hit.nz;
+        const impact = -vn;
         if (impact > 6) {
           this.damage = Math.min(1, this.damage + impact * 0.01 / this.stats.durability);
-          this.angVel.y += (Math.random() - 0.5) * impact * 0.04;
+          this.angVel.y += (this.rng() - 0.5) * impact * 0.04;
         }
       }
     }
   }
+
 }

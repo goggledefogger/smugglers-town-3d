@@ -92,21 +92,19 @@ Engine pitch from speed, ram and landing impacts, pickup/steal/deliver
 stingers, a proximity cue near your base. Web Audio with procedural sounds
 first, no assets needed.
 
-## 7. Multiplayer
+## 7. Multiplayer — spec written
 
-The fixed-step, DOM-free core is the right shape for lockstep over WebRTC
-data channels with input delay. Prerequisites: a seeded RNG injected into
-core (`Math.random` is used by AI, spawns, and the landing tumble), and no
-per-client state in `core/`.
+`docs/MULTIPLAYER.md`: host-authoritative over WebRTC (Trystero), Firebase
+for lobby, signalling and anonymous auth. The seeded RNG and deterministic
+spawn planner are done; the remaining prerequisites (a `Simulation` split out
+of `Game`, an input-source interface, body snapshots) are listed there with
+the phase plan.
 
 ## 8. Tooling and code quality
 
 - ESLint with typescript-eslint; `npm run lint`.
 - CI: typecheck, tests, build, and a no-key Playwright smoke run on the
   desert (the scripts in this session's notes are a starting point).
-- Injectable RNG in core (see 7), which also makes gameplay tests
-  deterministic.
-- Remove the `carScale` parameter threaded through core; it is always 1.
 - A per-frame HUD channel like the direction arrow's for speed and integrity,
   so they don't tick at 10 Hz.
 

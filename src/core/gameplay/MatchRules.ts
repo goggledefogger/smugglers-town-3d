@@ -6,6 +6,8 @@
 import { Vector3 } from 'three';
 import type { Heightfield } from '../heightfield.ts';
 import type { VehicleBody } from '../physics/VehicleBody.ts';
+import { SpawnPlanner, DEFAULT_SPAWN, type SpawnPoint } from '../spawn/SpawnPlanner.ts';
+import type { Vec2 } from '../world/OpenSpace.ts';
 
 export type TeamId = 0 | 1;
 
@@ -14,15 +16,13 @@ export interface ScoringConfig {
   readonly deliveryRadius: number;
   readonly contrabandRadius: number;
   readonly transferCooldownS: number;
-  readonly spawnClearance: number;
 }
 
 export const DEFAULT_SCORING: ScoringConfig = {
   scoreGoal: 5,
   deliveryRadius: 22,
   contrabandRadius: 4.5,
-  transferCooldownS: 0.6,
-  spawnClearance: 40
+  transferCooldownS: 0.6
 };
 
 export type MatchEvent =
@@ -55,9 +55,8 @@ export class MatchRules {
     private readonly vehicles: readonly VehicleBody[],
     private readonly teams: ReadonlyMap<number, TeamId>,
     private readonly ground: Heightfield,
-    private readonly mapHalf: number,
-    /** True when any building lies within r of (x, z) — no spawning there. */
-    private readonly blocked: (x: number, z: number, r: number) => boolean = () => false
+    /** Decides every position; see core/spawn/SpawnPlanner. */
+    private readonly spawn: SpawnPlanner = new SpawnPlanner(DEFAULT_SPAWN)
   ) {}
 
   get state(): MatchState {
@@ -71,50 +70,24 @@ export class MatchRules {
   }
 
   /**
-   * Random point at least minDist from every vehicle and both bases, with
-   * clearR of open ground around it, for contraband placement.
-   */
-  private randomClearPoint(minDist: number, clearR: number, spread = 1.6): Vector3 {
-    let x = 0, z = 0;
-    for (let tries = 0; tries < 40; tries++) {
-      x = (Math.random() - 0.5) * this.mapHalf * spread;
-      z = (Math.random() - 0.5) * this.mapHalf * spread;
-      const far = !this.blocked(x, z, clearR)
-        && this.vehicles.every(v => Math.hypot(x - v.pos.x, z - v.pos.z) > minDist)
-        && ([0, 1] as const).every(t => Math.hypot(x - this.bases[t].x, z - this.bases[t].z) > minDist);
-      if (far) break;
-    }
-    return new Vector3(x, 0, z);
-  }
-
-  /** Nearest clear spot to (x, z) in a widening jitter, else anywhere clear. */
-  private clearPointNear(x: number, z: number, clearR: number): { x: number; z: number } {
-    for (let tries = 0; tries < 40; tries++) {
-      const jitter = tries * 6;
-      const px = x + (Math.random() - 0.5) * jitter;
-      const pz = z + (Math.random() - 0.5) * jitter;
-      if (!this.blocked(px, pz, clearR)) return { x: px, z: pz };
-    }
-    const p = this.randomClearPoint(0, clearR, 1.7);
-    return { x: p.x, z: p.z };
-  }
-
-  /**
    * Put the two bases on opposite sides of the field, each on clear ground.
    * Called once per match; bases never move within it.
    */
   placeBases(): void {
-    const ang = Math.random() * Math.PI * 2;
-    const r = this.mapHalf * 0.65;
+    const placed = this.spawn.bases();
     for (const team of [0, 1] as const) {
-      const a = ang + team * Math.PI;
-      const p = this.clearPointNear(Math.cos(a) * r, Math.sin(a) * r, this.cfg.deliveryRadius * 0.6);
+      const p = placed[team];
       this.bases[team].set(p.x, this.ground.sample(p.x, p.z), p.z);
     }
   }
 
   spawnContraband(): void {
-    const p = this.randomClearPoint(this.cfg.spawnClearance, 5);
+    const avoid: Vec2[] = [
+      ...this.vehicles.map(v => ({ x: v.pos.x, z: v.pos.z })),
+      { x: this.bases[0].x, z: this.bases[0].z },
+      { x: this.bases[1].x, z: this.bases[1].z }
+    ];
+    const p = this.spawn.item(avoid);
     this.contrabandPos.set(p.x, this.ground.sample(p.x, p.z) + 3, p.z);
     this.carrier = null;
   }
@@ -133,10 +106,8 @@ export class MatchRules {
   }
 
   /** Clear ground a little in from a team's base, for respawning a wrecked car. */
-  respawnPoint(team: TeamId): { x: number; z: number } {
-    const b = this.bases[team];
-    const len = Math.hypot(b.x, b.z) || 1;
-    return this.clearPointNear(b.x - (b.x / len) * 40, b.z - (b.z / len) * 40, 6);
+  respawnPoint(team: TeamId): SpawnPoint {
+    return this.spawn.respawn(this.bases[team]);
   }
 
   /**
@@ -156,9 +127,9 @@ export class MatchRules {
     this.events.push({ type: 'steal', attacker, victim });
   }
 
-  checkPickup(carScale: number): void {
+  checkPickup(): void {
     if (this.carrier) return;
-    const R = this.cfg.contrabandRadius * carScale;
+    const R = this.cfg.contrabandRadius;
     for (const v of this.vehicles) {
       if (v.pos.distanceTo(this.contrabandPos) < R) {
         this.carrier = v;
@@ -169,12 +140,12 @@ export class MatchRules {
   }
 
   /** Scores only at the carrier's own base; the enemy base is just scenery. */
-  checkDelivery(carScale: number): void {
+  checkDelivery(): void {
     const carrier = this.carrier;
     if (!carrier) return;
     const team = this.teams.get(carrier.id);
     if (team === undefined) return;
-    if (carrier.pos.distanceTo(this.bases[team]) >= this.cfg.deliveryRadius * carScale) return;
+    if (carrier.pos.distanceTo(this.bases[team]) >= this.cfg.deliveryRadius) return;
     this.scores[team] = (this.scores[team] ?? 0) + 1;
     this.carrier = null;
     this.events.push({ type: 'deliver', team, carrier });

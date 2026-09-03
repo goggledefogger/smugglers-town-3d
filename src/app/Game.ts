@@ -16,7 +16,9 @@ import { VEHICLE_TYPES } from '../core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../core/physics/vehicleCollisions.ts';
 import { MatchRules } from '../core/gameplay/MatchRules.ts';
 import { DriverBrain, type RouteFn } from '../core/ai/DriverBrain.ts';
-import { NavGrid, type FlowField } from '../core/ai/NavGrid.ts';
+import { NavGrid, type FlowField } from '../core/world/NavGrid.ts';
+import { SpawnPlanner, DEFAULT_SPAWN } from '../core/spawn/SpawnPlanner.ts';
+import { mulberry32, type Rng } from '../core/rng.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { GameEvents } from './events.ts';
@@ -41,6 +43,8 @@ export interface GameDeps {
   readonly store: Store<HudSnapshot>;
   /** Defaults to config.match; tests shorten it. */
   readonly round?: RoundConfig;
+  /** Match seed: the same seed and world give the same layout everywhere. */
+  readonly seed?: number;
 }
 
 export type MatchPhase = 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
@@ -51,6 +55,8 @@ const UP = new Vector3(0, 1, 0);
 /** Broadphase cell for building colliders; a car only tests the 3×3 cells around it. */
 const BROAD_CELL = 40;
 const cellKey = (i: number, j: number): number => (i + 2048) * 4096 + (j + 2048);
+/** Landing damage and tumbles are off for this long after a spawn or respawn. */
+const SPAWN_GRACE_S = 2;
 /** The one place physics tuning enters the sim: app/config, with the field size folded in. */
 const PHYSICS: VehiclePhysicsConfig = { ...config.physics, worldHalf: config.world.mapHalf };
 
@@ -84,6 +90,8 @@ export class Game {
   private timeLeftS = 0;
   private finalMinuteShown = false;
   private readonly nav = new NavGrid(config.world.mapHalf * 2);
+  private readonly rng: Rng;
+  private readonly spawn: SpawnPlanner;
   private readonly fields = new Map<string, CachedField>();
   private readonly _wp = new Vector3();
   /** Roster index the player drives at the next spawn (garage choice); persists across rematches. */
@@ -94,9 +102,13 @@ export class Game {
     private readonly deps: GameDeps
   ) {
     this.round = deps.round ?? config.match;
-    this.match = new MatchRules(
-      config.scoring, this.bodies, this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
+    this.rng = mulberry32(deps.seed ?? (Math.random() * 2 ** 32) >>> 0);
+    // the nav grid is the world's occupancy: the AI routes on it and the
+    // spawner measures open ground with it
+    this.spawn = new SpawnPlanner(
+      { ...DEFAULT_SPAWN, mapHalf: config.world.mapHalf }, this.nav, this.rng
     );
+    this.match = new MatchRules(config.scoring, this.bodies, this.teams, terrain.heightfield, this.spawn);
   }
 
   /** True when any building collider comes within r of (x, z). */
@@ -119,27 +131,10 @@ export class Game {
     return e.field.waypoint(from.x, from.z, 3, this._wp);
   };
 
-  /**
-   * Most open spot near the field center: the first candidate (nearest the
-   * center first) clear at the largest radius that any candidate satisfies.
-   * Dropping the whole spawn ring there is what keeps a downtown start from
-   * wedging cars between towers.
-   */
-  private findOpenCenter(): { x: number; z: number } {
-    for (const r of [40, 28, 18, 12, 8]) {
-      for (const [x, z] of SPAWN_CANDIDATES) {
-        if (!this.blockedWithin(x, z, r)) return { x, z };
-      }
-    }
-    return { x: 0, z: 0 };
-  }
-
   /** Full reset for a new match (new terrain or rematch). Set colliders first so spawns avoid them. */
   reset(terrain: TerrainProvider): void {
     this.terrain = terrain;
-    this.match = new MatchRules(
-      config.scoring, this.bodies, this.teams, terrain.heightfield, config.world.mapHalf, this.blockedWithin
-    );
+    this.match = new MatchRules(config.scoring, this.bodies, this.teams, terrain.heightfield, this.spawn);
     this.winner = null;
     this.timeS = 0;
     this.accumulator = 0;
@@ -162,23 +157,19 @@ export class Game {
   private spawnAllVehicles(): void {
     const total = config.match.teamSize * 2;
     const hf = this.terrain.heightfield;
-    const center = this.findOpenCenter();
+    const teamOf = (i: number): 0 | 1 => (i < config.match.teamSize ? 0 : 1);
+    // one planner call for every driver, human and AI alike
+    const points = this.spawn.matchSpawns(total, teamOf);
     for (let i = 0; i < total; i++) {
-      const team = i < config.match.teamSize ? 0 : 1;
+      const team = teamOf(i);
       const isPlayer = i === 0;
-      const typeIdx = isPlayer ? this.playerType : pickVehicleType();
-      const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS);
-      const ang = (i / total) * Math.PI * 2;
-      // ring around the open spot; walk outward along the ray if a slot is still blocked
-      let x = 0, z = 0;
-      for (let tries = 0; tries < 12; tries++) {
-        const r = 20 + i * 2 + tries * 8;
-        x = center.x + Math.cos(ang) * r;
-        z = center.z + Math.sin(ang) * r;
-        if (!this.blockedWithin(x, z, 4)) break;
-      }
-      body.pos.set(x, hf.sample(x, z) + 3, z);
-      body.quat.setFromAxisAngle(UP, -ang + Math.PI / 2);
+      const typeIdx = isPlayer ? this.playerType : this.pickVehicleType();
+      const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS, this.rng);
+      const at = points[i]!;
+      // released above the ground: the drop settles during the countdown
+      body.pos.set(at.x, hf.sample(at.x, at.z) + this.spawn.dropHeight, at.z);
+      body.quat.setFromAxisAngle(UP, at.yaw);
+      body.graceS = SPAWN_GRACE_S;
       body.snapPrev();
       this.teams.set(body.id, team);
       this.bodies.push(body);
@@ -187,9 +178,19 @@ export class Game {
         team,
         isPlayer,
         label: isPlayer ? 'YOU' : VEHICLE_TYPES[typeIdx]!.name,
-        brain: isPlayer ? null : new DriverBrain(config.ai, v => this.teams.get(v.id) ?? 0)
+        brain: isPlayer ? null : new DriverBrain(config.ai, v => this.teams.get(v.id) ?? 0, this.rng)
       });
     }
+  }
+
+  /** Bot vehicle mix, drawn from the match seed. */
+  private pickVehicleType(): number {
+    const r = this.rng();
+    if (r < 0.3) return 2;
+    if (r < 0.5) return 3;
+    if (r < 0.7) return 1;
+    if (r < 0.85) return 0;
+    return 4;
   }
 
   get player(): VehicleActor | undefined {
@@ -313,17 +314,12 @@ export class Game {
       }
       actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos));
     }
-    resolveVehicleCollisions(
-      this.bodies,
-      { ramRadius: config.ram.ramRadius, transferCooldownS: config.scoring.transferCooldownS },
-      1,
-      (a, b) => this.match.onRam(a, b, this.timeS)
-    );
+    resolveVehicleCollisions(this.bodies, (a, b) => this.match.onRam(a, b, this.timeS), this.rng);
     for (const actor of this.vehicles) {
       if (actor.body.damage >= 1) this.wreck(actor);
     }
-    this.match.checkPickup(1);
-    this.match.checkDelivery(1);
+    this.match.checkPickup();
+    this.match.checkDelivery();
     this.processMatchEvents();
   }
 
@@ -372,11 +368,12 @@ export class Game {
     const body = actor.body;
     this.match.dropFrom(body);
     const p = this.match.respawnPoint(actor.team);
-    body.pos.set(p.x, this.terrain.heightfield.sample(p.x, p.z) + 3, p.z);
+    body.pos.set(p.x, this.terrain.heightfield.sample(p.x, p.z) + this.spawn.dropHeight, p.z);
     body.vel.set(0, 0, 0);
     body.angVel.set(0, 0, 0);
-    body.quat.setFromAxisAngle(UP, Math.atan2(p.x, p.z)); // face the field center
+    body.quat.setFromAxisAngle(UP, p.yaw);
     body.damage = 0;
+    body.graceS = SPAWN_GRACE_S;
     body.snapPrev();
     this.deps.events.emit('vehicle:wrecked', { vehicleId: body.id });
   }
@@ -457,20 +454,5 @@ export class Game {
   }
 }
 
-function pickVehicleType(): number {
-  const r = Math.random();
-  if (r < 0.3) return 2;
-  if (r < 0.5) return 3;
-  if (r < 0.7) return 1;
-  if (r < 0.85) return 0;
-  return 4;
-}
-
 const NEUTRAL_INPUT: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
 
-/** 30-unit grid within ±210 of the field center, nearest first. */
-const SPAWN_CANDIDATES: readonly (readonly [number, number])[] = (() => {
-  const pts: [number, number][] = [];
-  for (let x = -210; x <= 210; x += 30) for (let z = -210; z <= 210; z += 30) pts.push([x, z]);
-  return pts.sort((a, b) => Math.hypot(a[0], a[1]) - Math.hypot(b[0], b[1]));
-})();
