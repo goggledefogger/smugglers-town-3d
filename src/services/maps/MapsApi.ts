@@ -6,7 +6,6 @@
  * the browser blocks them with a generic "Failed to fetch".
  */
 import type { ElevationGrid } from '../../core/terrain/RealTerrain.ts';
-import { tileCache } from '../tiles/TileCache.ts';
 
 declare global {
   interface Window {
@@ -118,38 +117,13 @@ export async function fetchSatellite(
   canvas.height = tilePx * GRID;
   const ctx = canvas.getContext('2d')!;
 
-  const loadImg = async (url: string): Promise<HTMLImageElement> => {
-    let blobUrl = '';
-    const cached = await tileCache.getBuffer(url);
-    if (cached) {
-      blobUrl = URL.createObjectURL(new Blob([cached]));
-    } else {
-      try {
-        const res = await fetch(url);
-        if (res.ok) {
-          const buf = await res.arrayBuffer();
-          await tileCache.putBuffer(url, buf, 'image/jpeg');
-          blobUrl = URL.createObjectURL(new Blob([buf]));
-        }
-      } catch {
-        // Fall back to direct image URL if fetch throws (e.g. CORS edge case)
-      }
-    }
-
-    return new Promise<HTMLImageElement>((res, rej) => {
-      const img = new Image();
-      img.crossOrigin = 'anonymous';
-      img.onload = () => {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
-        res(img);
-      };
-      img.onerror = () => {
-        if (blobUrl) URL.revokeObjectURL(blobUrl);
-        rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
-      };
-      img.src = blobUrl || url;
-    });
-  };
+  const loadImg = (url: string): Promise<HTMLImageElement> => new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => res(img);
+    img.onerror = () => rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+    img.src = url;
+  });
 
   // fetch tiles row by row (limits concurrency)
   for (let r = 0; r < GRID; r++) {

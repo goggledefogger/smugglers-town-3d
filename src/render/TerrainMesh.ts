@@ -4,7 +4,7 @@
  * as an sRGB texture with mipmaps + anisotropy for crisp detail.
  */
 import {
-  Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, Texture,
+  Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, CanvasTexture,
   SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter, Color,
   type BufferAttribute as BufferAttributeT
 } from 'three';
@@ -31,7 +31,7 @@ export class TerrainMesh {
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
       }
-      const tex = new Texture(provider.satelliteCanvas);
+      const tex = new CanvasTexture(provider.satelliteCanvas);
       tex.colorSpace = SRGBColorSpace;
       tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
       tex.minFilter = LinearMipmapLinearFilter;

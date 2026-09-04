@@ -181,7 +181,7 @@ log.info('boot', {
 prepareTerrain(desertTerrain);
 minimapEl.setTerrain(desertTerrain.heightfield, config.world.mapHalf);
 hudEl.hidden = true;
-relocateBarEl.hidden = true;
+relocateBarEl.hidden = false;
 pickups.setVisible(false);
 
 // ---- input ----
@@ -466,6 +466,7 @@ function frame(now: number): void {
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);
+    if (tiles) tiles.update(renderer.camera.position, now);
   }
   renderer.render();
   requestAnimationFrame(frame);

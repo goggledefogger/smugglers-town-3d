@@ -38,17 +38,17 @@ describe('boxDistanceM', () => {
 
 describe('allowedErrorM', () => {
   it('grows with distance between the clamps for DEFAULT_LOD', () => {
-    expect(allowedErrorM(0, DEFAULT_LOD)).toBe(20);
-    expect(allowedErrorM(1000, DEFAULT_LOD)).toBe(50);
-    expect(allowedErrorM(5000, DEFAULT_LOD)).toBe(70);
+    expect(allowedErrorM(0, DEFAULT_LOD)).toBe(10);
+    expect(allowedErrorM(900, DEFAULT_LOD)).toBe(30);
+    expect(allowedErrorM(3000, DEFAULT_LOD)).toBe(60);
   });
 
-  it('allows high-resolution ~3.5m error near the vehicle for STREAM_LOD', () => {
-    expect(allowedErrorM(0, STREAM_LOD)).toBe(3.5);
-    expect(allowedErrorM(100, STREAM_LOD)).toBe(3.5);
-    expect(allowedErrorM(280, STREAM_LOD)).toBe(8);
-    expect(allowedErrorM(560, STREAM_LOD)).toBe(16);
-    expect(allowedErrorM(3000, STREAM_LOD)).toBe(70);
+  it('allows high-resolution ~1.5m error near the vehicle for STREAM_LOD', () => {
+    expect(allowedErrorM(0, STREAM_LOD)).toBe(1.5);
+    expect(allowedErrorM(60, STREAM_LOD)).toBe(1.5);
+    expect(allowedErrorM(180, STREAM_LOD)).toBe(3.0);
+    expect(allowedErrorM(480, STREAM_LOD)).toBe(8.0);
+    expect(allowedErrorM(3000, STREAM_LOD)).toBe(40);
   });
 });
 

@@ -59,28 +59,27 @@ export interface LodPolicy {
 
 /**
  * Initial load, relative to the match center. Google's levels carry errors
- * of 16.05, 32.1, 64.2 m (525957 m halved per level), so the clamps sit just
- * above them. 16 m tiles within 640 m, 32 m out to 1.3 km, 64 m beyond:
- * ~85 tiles, ~20 MB for a downtown.
+ * of 16.05, 32.1, 64.2 m (525957 m halved per level). We accept 8–16m tiles
+ * near center so the initial load is already crisp without blocky slabs.
  */
-export const DEFAULT_LOD: LodPolicy = { minErrorM: 20, maxErrorM: 70, errorPerMeter: 1 / 20 };
-/** Streaming, relative to the player: 3.5 m tiles within 120 m, 8 m to 280 m, 16 m to 560 m, 32 m to 1.1 km. */
-export const STREAM_LOD: LodPolicy = { minErrorM: 3.5, maxErrorM: 70, errorPerMeter: 1 / 35 };
+export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMeter: 1 / 30 };
+/** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
+export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 };
 
 /** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
 /** Initial-load cap; the closest win. */
-const MAX_INITIAL_TILES = 150;
+const MAX_INITIAL_TILES = 180;
 /**
  * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
-const MAX_TILES = 280;
+const MAX_TILES = 350;
 /** Tiles beyond this distance (well outside the 700m fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 1800;
+const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
-/** Before play, tiles this close (real m) to the start are refined to the streaming LOD... */
-const CORE_RADIUS_M = 250;
+/** Before play, tiles within visible range of the start are refined to the streaming LOD. */
+const CORE_RADIUS_M = 650;
 /** ...in rounds of this many refinements. */
 const CORE_REFINE_BATCH = 8;
 const TILE_BASE = 'https://tile.googleapis.com';
@@ -391,7 +390,7 @@ export class TileStreamer {
    * put cars where buildings turn out to be once the fine tiles arrive.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    for (let round = 0; round < 8 && this.tiles.length < MAX_TILES; round++) {
+    for (let round = 0; round < 12 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
           && (t.node.geometricError ?? 0) > allowedErrorM(nodeDistM(t.node, this.ecef0), this.lod))
