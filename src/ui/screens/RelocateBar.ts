@@ -1,4 +1,5 @@
 import { html, css, LitElement } from 'lit';
+import { TEST_SCENARIOS, getScenario } from '../../core/geo/testScenarios.ts';
 
 /**
  * Relocate controls: Google Maps API key + place search.
@@ -88,7 +89,25 @@ export class RelocateBar extends LitElement {
       border:var(--border) solid var(--line); border-radius:var(--radius-sm); font-family:inherit;
       font-weight:600; cursor:pointer; min-height:2.75rem; flex:0 0 auto; }
     button:hover { border-color:var(--accent); color:var(--accent); }
-    button:disabled { opacity:.5; cursor:wait; }
+    #scenario {
+      padding: var(--space-sm) var(--space-sm);
+      background: rgba(20, 16, 12, 0.9);
+      border: var(--border) solid var(--line);
+      border-radius: var(--radius-sm);
+      color: var(--ink);
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      outline: none;
+      cursor: pointer;
+      flex: 0 0 auto;
+      max-width: 15rem;
+    }
+    #scenario:focus, #scenario:hover { border-color: var(--accent); color: var(--accent); }
+    #scenario option, #scenario optgroup {
+      background: #1a1410;
+      color: #f4ead8;
+    }
     .status { position:absolute; top:calc(100% + 6px); left:0; right:0; font-size:11px;
       color:var(--hot); text-align:center; pointer-events:none; }
   `;
@@ -112,24 +131,71 @@ export class RelocateBar extends LitElement {
 
   onSearch?: (query: string, key: string) => void;
 
-  private submit(): void {
-    const q = (this.renderRoot.querySelector('#q') as HTMLInputElement).value.trim();
-    const key = (this.renderRoot.querySelector('#key') as HTMLInputElement).value.trim();
+  submit(): void {
+    const qEl = this.renderRoot.querySelector('#q') as HTMLInputElement | null;
+    const keyEl = this.renderRoot.querySelector('#key') as HTMLInputElement | null;
+    const q = qEl?.value.trim() ?? '';
+    const key = keyEl?.value.trim() || localStorage.getItem('gmap_key') || '';
     if (key.startsWith('4/')) {
       this.status = 'Key starts with "4/" — this is an OAuth authorization code, not a Google API Key (starts with AIzaSy).';
+      return;
+    }
+    if (!key) {
+      this.status = 'Paste a Google Maps API key first (starts with AIzaSy).';
       return;
     }
     if (q && this.onSearch) this.onSearch(q, key);
   }
 
+  selectScenario(id: string): void {
+    if (!id) return;
+    const s = getScenario(id);
+    if (!s) return;
+    const qInput = this.renderRoot.querySelector('#q') as HTMLInputElement | null;
+    if (qInput) qInput.value = `${s.lat}, ${s.lon}`;
+    this.status = `[Test GPS] ${s.name}: ${s.testFocus}`;
+    const keyEl = this.renderRoot.querySelector('#key') as HTMLInputElement | null;
+    const key = keyEl?.value.trim() || localStorage.getItem('gmap_key') || '';
+    if (key) {
+      this.submit();
+    }
+  }
+
+  setQuery(query: string): void {
+    const qInput = this.renderRoot.querySelector('#q') as HTMLInputElement | null;
+    if (qInput) qInput.value = query;
+  }
+
   override render() {
+    // Group scenarios by category
+    const categories = [
+      { key: 'bridge_water', label: '🌉 Bridges & Water' },
+      { key: 'dense_city', label: '🏙️ Dense 3D Cities' },
+      { key: 'open_ground', label: '🏜️ Open Ground (2D Satellite)' },
+      { key: 'steep_slope', label: '⛰️ Steep Slopes & Hills' },
+      { key: 'coast_interface', label: '🌊 Shoreline & Interfaces' }
+    ] as const;
+
     return html`
       <button class="toggle" aria-expanded=${this.open ? 'true' : 'false'}
         @click=${() => { this.open = !this.open; }}>${this.open ? 'CLOSE' : 'GO SOMEWHERE REAL'}</button>
       <div class="fields">
+        <select id="scenario" @change=${(e: Event) => {
+          this.selectScenario((e.target as HTMLSelectElement).value);
+          (e.target as HTMLSelectElement).value = '';
+        }}>
+          <option value="">🎯 Test Scenarios (GPS Benchmarks)…</option>
+          ${categories.map(cat => html`
+            <optgroup label=${cat.label}>
+              ${TEST_SCENARIOS.filter(s => s.category === cat.key).map(s => html`
+                <option value=${s.id}>${s.name}</option>
+              `)}
+            </optgroup>
+          `)}
+        </select>
         <input id="key" type="password" placeholder="Google API key (optional)"
           @change=${(e: Event) => localStorage.setItem('gmap_key', (e.target as HTMLInputElement).value.trim())} />
-        <input id="q" type="text" placeholder="Search any place on Earth…"
+        <input id="q" type="text" placeholder="Search any place or GPS lat, lon…"
           @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.submit(); }} />
         <button ?disabled=${this.busy} @click=${() => this.submit()}>RELOCATE</button>
       </div>
