@@ -66,7 +66,7 @@ export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMe
 /** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
 export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 };
 
-/** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
+/** The field is 5600 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
 /** Initial-load cap; the closest win. */
 const MAX_INITIAL_TILES = 150;
@@ -75,13 +75,13 @@ const MAX_INITIAL_TILES = 150;
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
 const MAX_TILES = 350;
-/** Tiles beyond this distance (well outside the 5000m fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 5000;
+/** Tiles beyond this distance (into the fog horizon) can be evicted under budget pressure. */
+const FOG_HORIZON_M = 2500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 350;
+const CORE_RADIUS_M = 650;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 4;
+const CORE_REFINE_BATCH = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)

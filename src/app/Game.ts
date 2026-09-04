@@ -105,7 +105,7 @@ export class Game {
   private lastCountdownN = -1;
   private timeLeftS = 0;
   private finalMinuteShown = false;
-  private readonly nav = new NavGrid(config.world.mapHalf * 2);
+  private readonly nav = new NavGrid(config.world.mapHalf * 2, 6);
   private readonly rng: Rng;
   private readonly spawn: SpawnPlanner;
   private readonly fields = new Map<string, CachedField>();
@@ -147,6 +147,13 @@ export class Game {
     let e = this.fields.get(key);
     const moved = e ? Math.hypot(e.x - to.x, e.z - to.z) : Infinity;
     if (!e || moved > this.nav.cell * 4 || (moved > 0 && this.timeS - e.at > 0.5)) {
+      if (this.fields.size > 16) {
+        for (const [k, old] of this.fields) {
+          if (this.timeS - old.at > 5.0 || this.fields.size > 16) {
+            this.fields.delete(k);
+          }
+        }
+      }
       e = { field: this.nav.flowField(to.x, to.z), x: to.x, z: to.z, at: this.timeS };
       this.fields.set(key, e);
     }

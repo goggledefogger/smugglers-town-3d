@@ -199,37 +199,30 @@ export class GroundStreamer {
   ): Promise<void> {
     const url = satelliteUrl(lat, lon, this.apiKey, this.zoom, 640, 640, 2);
 
+    let buf: ArrayBuffer | null = await tileCache.getBuffer(url);
+    if (!buf) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+        if (res.ok) {
+          buf = await res.arrayBuffer();
+          await tileCache.putBuffer(url, buf, 'image/jpeg');
+        }
+      } catch (err) {
+        log.debug('patch fetch error', err);
+        return;
+      }
+    }
+
+    if (this.disposed || !buf) return;
+    if (typeof Image === 'undefined') return;
+
     let img: HTMLImageElement | null = null;
-    const cachedBuf = await tileCache.getBuffer(url);
-
-    if (cachedBuf) {
-      img = await this.decodeBlob(new Blob([cachedBuf]));
-    } else {
-      if (typeof Image === 'undefined') return;
-
-      img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.crossOrigin = 'anonymous';
-        const timer = setTimeout(() => {
-          image.src = '';
-          reject(new Error('patch fetch timeout'));
-        }, 8000);
-        image.onload = () => {
-          clearTimeout(timer);
-          resolve(image);
-        };
-        image.onerror = () => {
-          clearTimeout(timer);
-          reject(new Error('patch image error'));
-        };
-        image.src = url;
-      });
-
-      // Cache asynchronously
-      fetch(url)
-        .then(r => r.ok ? r.arrayBuffer() : null)
-        .then(buf => { if (buf) void tileCache.putBuffer(url, buf, 'image/jpeg'); })
-        .catch(() => {});
+    try {
+      img = await this.decodeBlob(new Blob([buf]));
+    } catch {
+      return;
     }
 
     if (this.disposed || !img) return;
