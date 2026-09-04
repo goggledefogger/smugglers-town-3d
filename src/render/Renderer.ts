@@ -74,10 +74,10 @@ export class GameRenderer {
    */
   adapt(dt: number, nowMs: number): void {
     this.frameAvg += (Math.min(dt, 0.1) - this.frameAvg) * 0.05;
-    if (nowMs - this.lastAdjustMs < 2000) return;
+    if (nowMs - this.lastAdjustMs < 1000) return;
     let next = this.scale;
-    if (this.frameAvg > 1 / 45 && this.scale > 0.5) next = Math.max(0.5, this.scale - 0.125);
-    else if (this.frameAvg < 1 / 58 && this.scale < 1) next = Math.min(1, this.scale + 0.125);
+    if (this.frameAvg > 1 / 40 && this.scale > 0.75) next = Math.max(0.75, this.scale - 0.1);
+    else if (this.frameAvg < 1 / 52 && this.scale < 1) next = Math.min(1, this.scale + 0.15);
     if (next === this.scale) return;
     this.scale = next;
     this.lastAdjustMs = nowMs;

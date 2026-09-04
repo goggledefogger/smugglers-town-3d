@@ -79,9 +79,9 @@ const MAX_TILES = 350;
 const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 350;
+const CORE_RADIUS_M = 500;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 4;
+const CORE_REFINE_BATCH = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
@@ -501,8 +501,8 @@ export class TileStreamer {
    * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    const CORE_TARGET_ERROR_M = 10;
-    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = this.lod.minErrorM;
+    for (let round = 0; round < 6 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
           && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
