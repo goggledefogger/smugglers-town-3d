@@ -79,6 +79,9 @@ export class KeyboardSource implements InputSource {
     }
   }
 
+  /** No-op: keyboard edges fire from the `keydown` listener, not a poll. */
+  poll(): void { /* keyboard has no per-frame scan; events drive edges */ }
+
   vehicleInput(): VehicleInput {
     const out: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0 };
     let accelDown = false, brakeDown = false;

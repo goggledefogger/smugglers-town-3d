@@ -12,6 +12,7 @@ class FakeSource implements InputSource {
   set(v: Partial<VehicleInput>): void { this.v = { ...this.v, ...v }; }
   queueUi(...a: UiAction[]): void { this.ui.push(...a); }
   queueHot(...h: Hotkey[]): void { this.hot.push(...h); }
+  poll(): void { /* FakeSource feeds edges via queue, not a scan */ }
   vehicleInput(): VehicleInput { return { ...this.v }; }
   drainUiActions(): UiAction[] { return this.ui.splice(0); }
   drainHotkeys(): Hotkey[] { return this.hot.splice(0); }

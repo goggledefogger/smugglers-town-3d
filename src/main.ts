@@ -414,6 +414,10 @@ function frame(now: number): void {
   const dt = Math.min(rawDt, config.loop.maxFrameDt);
   last = now;
   renderer.adapt(rawDt, now);
+  // poll every source each frame so gamepad edges fire on menus too — the
+  // gamepad has no keydown event, so its edge scan must run even when nothing
+  // is driving (vehicleInput is only called while playing, below)
+  input.poll();
   // UI actions and hotkeys drain every frame, menus open or not; each screen
   // registers a handler that returns true if it consumed the action
   for (const action of input.drainUiActions()) {

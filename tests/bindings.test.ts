@@ -68,6 +68,31 @@ describe('Bindings', () => {
     expect(reloaded.table('keyboard').accelerate).toEqual(DEFAULTS_KEYBOARD.accelerate);
   });
 
+  it('rejects an un-versioned save (stale layout from before schema versioning)', () => {
+    // a save from the pre-redesign code: no `v` field, and A (index 0) mapped
+    // to jump. It must NOT survive — the corrected default has A→accelerate.
+    const stale = {
+      keyboard: structuredClone(DEFAULTS_KEYBOARD),
+      gamepad: { ...structuredClone(DEFAULTS_GAMEPAD), jump: [{ kind: 'button' as const, index: 0 }] }
+    };
+    localStorage.setItem('stt.bindings', JSON.stringify(stale));
+    const reloaded = new Bindings();
+    // defaults win: A accelerates, Y (3) jumps
+    expect(reloaded.table('gamepad').accelerate).toEqual(DEFAULTS_GAMEPAD.accelerate);
+    expect(reloaded.table('gamepad').jump).toEqual([{ kind: 'button', index: 3 }]);
+  });
+
+  it('rejects a save with the wrong schema version', () => {
+    const future = {
+      v: 999,
+      keyboard: structuredClone(DEFAULTS_KEYBOARD),
+      gamepad: { ...structuredClone(DEFAULTS_GAMEPAD), jump: [{ kind: 'button' as const, index: 0 }] }
+    };
+    localStorage.setItem('stt.bindings', JSON.stringify(future));
+    const reloaded = new Bindings();
+    expect(reloaded.table('gamepad').jump).toEqual(DEFAULTS_GAMEPAD.jump);
+  });
+
   it('notifies onChange listeners on rebind and reset', () => {
     let calls = 0;
     const off = b.onChange(() => { calls++; });

@@ -5,8 +5,12 @@
  * sim and screens never branch on "which device is active."
  *
  * Three output kinds, deliberately split:
- *  - `vehicleInput()` is analog and polled each frame — throttle, steer,
- *    pitch are continuous. The sim reads it at 60 Hz.
+ *  - `poll()` runs every frame, menus or gameplay, and is where the gamepad
+ *    detects its discrete down-edges (a gamepad has no keydown event). It feeds
+ *    the two edge buffers below.
+ *  - `vehicleInput()` is analog and polled each frame while driving — throttle,
+ *    steer, pitch are continuous. The sim reads it at 60 Hz. Menus never call
+ *    it, which is why gamepad edge detection cannot live here.
  *  - `drainUiActions()` is discrete and edge-triggered — a confirm is one
  *    event the moment the button crosses down, not 60 per second while held.
  *    Menus read it on each frame they are open.
@@ -53,7 +57,14 @@ export const EDGE_ACTIONS: ReadonlySet<LogicalAction> = new Set([
  * contribute, so a resting gamepad never overrides an active keyboard.
  */
 export interface InputSource {
-  /** Continuous driving input, polled each frame. */
+  /**
+   * Per-frame edge scan, run every frame whether or not the sim is driving.
+   * Gamepad edges (UI nav, hotkeys) are detected here, not in `vehicleInput` —
+   * menus never call `vehicleInput`, so an edge scan that lived there would
+   * never run while a menu is open and the gamepad would be dead in menus.
+   */
+  poll(): void;
+  /** Continuous driving input, polled each frame while a match is running. */
   vehicleInput(): VehicleInput;
   /** Discrete UI edges accumulated since the last drain; drains the buffer. */
   drainUiActions(): UiAction[];

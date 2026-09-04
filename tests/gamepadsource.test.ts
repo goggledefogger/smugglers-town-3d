@@ -102,29 +102,41 @@ describe('GamepadSource', () => {
   it('dpad-up fires a uiUp edge once, not while held', () => {
     const up = { value: 1, pressed: true };
     padAt({ buttons: withButton(12, up) });
-    g.vehicleInput();  // poll detects the down-edge
+    g.poll();  // poll detects the down-edge
     expect(g.drainUiActions()).toEqual(['up']);
     // still held: no repeat
-    g.vehicleInput();
+    g.poll();
     expect(g.drainUiActions()).toEqual([]);
     // release and re-press: fires again
     padAt({});
-    g.vehicleInput();
+    g.poll();
     padAt({ buttons: withButton(12, up) });
-    g.vehicleInput();
+    g.poll();
     expect(g.drainUiActions()).toEqual(['up']);
   });
 
   it('A fires a confirm edge for menus', () => {
     padAt({ buttons: withButton(0, { value: 1, pressed: true }) });
-    g.vehicleInput();
+    g.poll();
     expect(g.drainUiActions()).toContain('confirm');
   });
 
   it('a resting pad produces no UI edges', () => {
     padAt({});
-    g.vehicleInput();
+    g.poll();
     expect(g.drainUiActions()).toEqual([]);
+  });
+
+  it('fires UI edges from poll() even when vehicleInput is never called (menus)', () => {
+    // the bug this guards against: menus never poll vehicleInput, so an edge
+    // scan that lived in vehicleInput would never run while a menu is open
+    padAt({ buttons: withButton(0, { value: 1, pressed: true }) });
+    g.poll();
+    expect(g.drainUiActions()).toContain('confirm');
+    // and the analog driving state is untouched — poll doesn't read it
+    padAt({ axes: [0.7, 0, 0, 0] });
+    g.poll();
+    expect(g.drainUiActions()).toEqual(['right']);
   });
 
   it('respects a rebind: if jump is rebound to button 1, button 1 jumps', () => {

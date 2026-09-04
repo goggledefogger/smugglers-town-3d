@@ -39,6 +39,11 @@ export class InputManager {
     return mgr;
   }
 
+  /** Per-frame edge scan on every source — run every frame, menus or gameplay. */
+  poll(): void {
+    for (const s of this.sources) s.poll();
+  }
+
   /** Merged driving input. Per-channel: any source pushing wins, 0 if none. */
   vehicleInput(): VehicleInput {
     let throttle = 0, brake = 0, steer = 0, jump = false, pitch = 0;

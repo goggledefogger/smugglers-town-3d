@@ -85,6 +85,13 @@ const DEFAULTS_GAMEPAD: BindingTable = {
 };
 
 const STORAGE_KEY = 'stt.bindings';
+/**
+ * Bump when the default table or the saved shape changes. A saved blob whose
+ * `v` doesn't match is rejected and the defaults load — so a stale save from
+ * an older default (e.g. the pre-redesign layout that mapped A→jump) can't
+ * override the corrected defaults. Forward-compatible: bumping re-invalidates.
+ */
+const SCHEMA_VERSION = 1;
 
 export interface SavedBindings {
   readonly keyboard: BindingTable;
@@ -140,7 +147,10 @@ export class Bindings {
     const raw = localStorage.getItem(STORAGE_KEY);
     if (!raw) return fallback;
     try {
-      const parsed = JSON.parse(raw) as Partial<SavedBindings>;
+      const parsed = JSON.parse(raw) as { v?: number; keyboard?: BindingTable; gamepad?: BindingTable };
+      // reject any save from a different schema version — its indices may belong
+      // to an older default (e.g. A→jump) we've since corrected
+      if (parsed.v !== SCHEMA_VERSION) return fallback;
       // shallow-validate: only accept if every action is present in each table
       if (parsed.keyboard && parsed.gamepad
           && ALL_ACTIONS.every(a => Array.isArray(parsed.keyboard![a]))
@@ -153,7 +163,11 @@ export class Bindings {
 
   private save(): void {
     if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ keyboard: this.keyboard, gamepad: this.gamepad }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({
+      v: SCHEMA_VERSION,
+      keyboard: this.keyboard,
+      gamepad: this.gamepad
+    }));
   }
 }
 

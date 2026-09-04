@@ -5,6 +5,11 @@
  * and the edge scan both run off that poll, in the same frame the keyboard
  * is read.
  *
+ * The edge scan lives in `poll()`, not `vehicleInput()`, because menus never
+ * call `vehicleInput` (nothing is driving) — a gamepad confirm pressed on the
+ * garage screen would never be detected if the scan waited for a driving
+ * frame. `poll()` runs every frame; `vehicleInput()` only while driving.
+ *
  * Bindings resolve standard-mapping indices to `LogicalAction`s. A trigger
  * bound to `accelerate` contributes its analog `.value` (0..1) as partial
  * throttle; a face button bound to `accelerate` contributes 1 when pressed.
@@ -65,32 +70,47 @@ export class GamepadSource implements InputSource {
     return null;
   }
 
+  /**
+   * Per-frame edge scan — runs every frame, menus or gameplay. Detects the
+   * down-edge of any gamepad control bound to a UI action or hotkey and
+   * pushes it into the buffers `drainUiActions`/`drainHotkeys` drain. The
+   * driving analog state is NOT read here; `vehicleInput` does that, and
+   * only while a match is running.
+   */
+  poll(): void {
+    const pad = this.snapshot();
+    if (!pad) return;
+    const edges: LogicalAction[] = [];
+    for (const action of Object.keys(this.table) as LogicalAction[]) {
+      if (!UI_OF[action] && !HOTKEY_OF[action]) continue;  // driving actions have no edge
+      for (const b of this.table[action]) {
+        const v = this.bindingValue(pad, b);
+        // a binding is "on" only when pushed in its own direction: bindingValue
+        // sign-adjusts axes, so a stick pushed the opposite way reads negative
+        // and must NOT count as on (else one push fires both left and right)
+        const on = v.kind === 'analog' ? v.value > UI_STICK_DEADZONE : v.pressed;
+        const key = edgeKey(b);
+        if (on && !this.axisHeld.get(key)) { this.axisHeld.set(key, true); edges.push(action); }
+        else if (!on && this.axisHeld.get(key)) { this.axisHeld.set(key, false); }
+      }
+    }
+    for (const e of edges) {
+      const ui = UI_OF[e];
+      if (ui) this.pendingUi.push(ui);
+      else { const h = HOTKEY_OF[e]; if (h) this.pendingHot.push(h); }
+    }
+  }
+
   vehicleInput(): VehicleInput {
     const pad = this.snapshot();
     if (!pad) return REST;
     const out: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0 };
-    const edges: { action: LogicalAction; on: boolean }[] = [];
     for (const action of Object.keys(this.table) as LogicalAction[]) {
       for (const b of this.table[action]) {
         const v = this.bindingValue(pad, b);
-        if (v.kind === 'analog') {
-          applyAnalog(out, action, v.value);
-        } else if (v.pressed) {
-          applyDigital(out, action);
-        }
-        // track edges for UI/hotkey actions bound to buttons/axes
-        if (UI_OF[action] || HOTKEY_OF[action]) {
-          const on = v.kind === 'analog' ? Math.abs(v.value) > UI_STICK_DEADZONE : v.pressed;
-          const key = edgeKey(b);
-          if (on && !this.axisHeld.get(key)) { this.axisHeld.set(key, true); edges.push({ action, on: true }); }
-          else if (!on && this.axisHeld.get(key)) { this.axisHeld.set(key, false); }
-        }
+        if (v.kind === 'analog') applyAnalog(out, action, v.value);
+        else if (v.pressed) applyDigital(out, action);
       }
-    }
-    for (const e of edges) {
-      const ui = UI_OF[e.action];
-      if (ui) this.pendingUi.push(ui);
-      else { const h = HOTKEY_OF[e.action]; if (h) this.pendingHot.push(h); }
     }
     // fold -0 (from Math.min(0, -value) on a centred axis) to +0, so a resting
     // pad matches the keyboard's 0 exactly — toEqual sees -0 !== 0
@@ -101,7 +121,6 @@ export class GamepadSource implements InputSource {
       jump: out.jump,
       pitch: out.pitch || 0
     };
-    return out;
   }
 
   /** Read one binding's current state from a pad snapshot. */
