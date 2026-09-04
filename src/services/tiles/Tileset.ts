@@ -20,7 +20,7 @@
  *   ~5k triangles, 100–450 KB.
  */
 import {
-  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter, Raycaster,
+  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -86,10 +86,6 @@ const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
 const GLTF_TO_ECEF = new Matrix4().makeRotationX(Math.PI / 2);
-const _rayOrigin = new Vector3();
-const _rayDir = new Vector3(0, -1, 0);
-const _raycaster = new Raycaster();
-const _faceNormal = new Vector3();
 
 function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
@@ -367,6 +363,7 @@ export class TileStreamer {
     this.reliefBoost = terrain.reliefBoost;
     this.placement = glbPlacement(origin, ecef0, terrain.reliefBoost);
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
+    this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
   }
 
   get tileCount(): number {
@@ -428,59 +425,73 @@ export class TileStreamer {
     return false;
   }
 
-  private deckGrid: Float32Array | null = null;
+  private deckGrid: Float32Array;
 
   /**
-   * Downward raycast against loaded 3D tile meshes to find elevated drivable surfaces
-   * (e.g. bridge decks, overpasses) above the base heightfield.
+   * O(1) mathematical lookup of elevated drivable surfaces (e.g. bridge decks, overpasses, ramps)
+   * sampled bilinearly from the classified deck grid. Zero raycasts, zero allocations.
    */
   surfaceElevation(x: number, z: number, currentY: number, groundY: number, maxDrop = 4.0): number | null {
+    if (!this.deckGrid) return null;
     const half = this.grid.half;
     const cell = this.grid.cell;
-    const i = Math.floor((x + half) / cell);
-    const j = Math.floor((z + half) / cell);
-    if (i < 0 || i >= this.grid.n || j < 0 || j >= this.grid.n) return null;
+    const n = this.grid.n;
 
-    const c = j * this.grid.n + i;
-    // O(1) Fast Reject: if this cell does not contain an elevated deck or ramp corridor, return null immediately
-    if (this.deckGrid && this.deckGrid[c] === NO_DATA) return null;
+    // Fractional coordinates relative to cell centers
+    const u = (x + half) / cell - 0.5;
+    const v = (z + half) / cell - 0.5;
+    const i0 = Math.floor(u);
+    const j0 = Math.floor(v);
+    const i1 = i0 + 1;
+    const j1 = j0 + 1;
 
-    _rayOrigin.set(x, currentY + 1.5, z);
-    _raycaster.set(_rayOrigin, _rayDir);
-    _raycaster.near = 0.05;
-    _raycaster.far = maxDrop + 1.5;
-
-    let bestY: number | null = null;
-    let closestDist = Infinity;
-
-    for (const t of this.tiles) {
-      const r = t.raster;
-      if (!r) continue;
-      if (i < r.i0 || i > r.i0 + r.w || j < r.j0 || j > r.j0 + r.h) continue;
-
-      const hits = _raycaster.intersectObjects(t.group.children, true);
-      for (const h of hits) {
-        if (h.face && h.face.normal) {
-          _faceNormal.copy(h.face.normal).transformDirection(h.object.matrixWorld);
-          // Roadway deck surface normal must be upward-facing (>= 0.70 rejects 45° trusses and wall framework)
-          if (_faceNormal.y < 0.70) continue;
-        }
-        if (h.point.y <= groundY + 1.2) continue;
-
-        if (h.distance < closestDist) {
-          closestDist = h.distance;
-          bestY = h.point.y + TILE_GROUND_GAP;
-        }
-      }
+    if (i0 < 0 || i1 >= n || j0 < 0 || j1 >= n) {
+      const i = Math.floor((x + half) / cell);
+      const j = Math.floor((z + half) / cell);
+      if (i < 0 || i >= n || j < 0 || j >= n) return null;
+      const h = this.deckGrid[j * n + i]!;
+      if (h === NO_DATA) return null;
+      const deckH = h + TILE_GROUND_GAP;
+      return Math.abs(currentY - deckH) <= maxDrop && deckH > groundY + 1.2 ? deckH : null;
     }
-    // If raycast didn't hit but cell is a known drivable deck/ramp, fall back to deckGrid height
-    if (bestY === null && this.deckGrid && this.deckGrid[c] !== NO_DATA) {
-      const deckH = this.deckGrid[c]! + TILE_GROUND_GAP;
-      if (Math.abs(currentY - deckH) <= maxDrop) {
-        bestY = deckH;
-      }
+
+    const c00 = j0 * n + i0;
+    const c10 = j0 * n + i1;
+    const c01 = j1 * n + i0;
+    const c11 = j1 * n + i1;
+
+    const h00 = this.deckGrid[c00]!;
+    const h10 = this.deckGrid[c10]!;
+    const h01 = this.deckGrid[c01]!;
+    const h11 = this.deckGrid[c11]!;
+
+    // If none of the 4 corners have deck data, this is not a deck or ramp
+    if (h00 === NO_DATA && h10 === NO_DATA && h01 === NO_DATA && h11 === NO_DATA) {
+      return null;
     }
-    return bestY;
+
+    const tx = u - i0;
+    const tz = v - j0;
+
+    let deckH: number;
+    if (h00 !== NO_DATA && h10 !== NO_DATA && h01 !== NO_DATA && h11 !== NO_DATA) {
+      const a = h00 + (h10 - h00) * tx;
+      const b = h01 + (h11 - h01) * tx;
+      deckH = (a + (b - a) * tz) + TILE_GROUND_GAP;
+    } else {
+      // Edge of deck/ramp: average available valid samples weighted by distance
+      let sum = 0, weight = 0;
+      if (h00 !== NO_DATA) { const w = (1 - tx) * (1 - tz); sum += h00 * w; weight += w; }
+      if (h10 !== NO_DATA) { const w = tx * (1 - tz); sum += h10 * w; weight += w; }
+      if (h01 !== NO_DATA) { const w = (1 - tx) * tz; sum += h01 * w; weight += w; }
+      if (h11 !== NO_DATA) { const w = tx * tz; sum += h11 * w; weight += w; }
+      if (weight < 1e-4) return null;
+      deckH = (sum / weight) + TILE_GROUND_GAP;
+    }
+
+    if (Math.abs(currentY - deckH) > maxDrop) return null;
+    if (deckH <= groundY + 1.2) return null;
+    return deckH;
   }
 
   /**

@@ -139,11 +139,7 @@ function rebuildViews(): void {
   }
   vehicleViews.length = 0;
   for (const actor of world.vehicles) {
-    const view = new VehicleView(
-      actor,
-      () => world.terrainProvider.heightfield,
-      (x, z, cy, gy) => tiles?.surfaceElevation(x, z, cy, gy) ?? null
-    );
+    const view = new VehicleView(actor, () => world.terrainProvider.heightfield);
     vehicleViews.push(view);
     renderer.scene.add(view.group);
   }
