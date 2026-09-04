@@ -1,8 +1,8 @@
 import { html, css, LitElement, type TemplateResult } from 'lit';
 import { VEHICLE_TYPES } from '../../core/physics/vehicleStats.ts';
-import { isTypingInField } from '../controls.ts';
 import type { LobbyRoom, LobbyPlayer, Team } from '../../net/lobby.ts';
 import { MAX_PLACE_LEN, type MatchMap } from '../../net/protocol.ts';
+import type { UiAction } from '../../input/types.ts';
 
 const TEAM_NAME: Record<Team, string> = { 0: 'Your Crew', 1: 'Rivals' };
 
@@ -112,6 +112,11 @@ export class LobbyScreen extends LitElement {
     }
     button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
     button:disabled { opacity: .5; cursor: not-allowed; }
+    /* gamepad focus ring, moved by the InputManager */
+    button[data-focused], .vcard[data-focused], .map-card[data-focused] {
+      border-color: var(--accent) !important;
+      box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+    }
     button.primary {
       background: var(--accent);
       color: var(--bg);
@@ -400,22 +405,38 @@ export class LobbyScreen extends LitElement {
     this.defaultKey = '';
   }
 
-  private readonly onKey = (e: KeyboardEvent): void => {
-    if (isTypingInField()) return;
-    if (!e.code.startsWith('Digit')) return;
-    const n = Number(e.code.slice(5));
-    if (n < 1 || n > VEHICLE_TYPES.length) return;
-    this.pickVehicle(n - 1);
-    e.preventDefault();
-  };
+  /** Focus index across [data-focusable] in DOM order. */
+  private focusIdx = 0;
+
+  /** Handle a UI action from the InputManager. Returns true if consumed. */
+  handleUiAction(action: UiAction): boolean {
+    if (action === 'confirm') { this.activateFocus(); return true; }
+    if (action === 'back') { this.fire('lobby-back'); return true; }
+    if (action === 'up' || action === 'left' || action === 'down' || action === 'right') {
+      const els = [...this.renderRoot.querySelectorAll('[data-focusable]')] as HTMLElement[];
+      if (els.length === 0) return false;
+      const dir = (action === 'up' || action === 'left') ? -1 : 1;
+      this.focusIdx = ((this.focusIdx + dir) % els.length + els.length) % els.length;
+      els.forEach((el, i) => { if (i === this.focusIdx) el.setAttribute('data-focused', ''); else el.removeAttribute('data-focused'); });
+      return true;
+    }
+    return false;
+  }
+
+  /** Activate the focused element, or the first primary action if none focused. */
+  private activateFocus(): void {
+    const els = [...this.renderRoot.querySelectorAll('[data-focusable]')] as HTMLElement[];
+    if (els.length === 0) return;
+    const el = els[this.focusIdx] ?? els[0]!;
+    if (el instanceof HTMLButtonElement) el.click();
+    else (el as HTMLElement & { click?: () => void }).click?.();
+  }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener('keydown', this.onKey);
   }
 
   override disconnectedCallback(): void {
-    window.removeEventListener('keydown', this.onKey);
     super.disconnectedCallback();
   }
 
@@ -623,7 +644,7 @@ export class LobbyScreen extends LitElement {
         ${this.mapKind === 'city' ? this.renderCitySetup() : ''}
 
         <div class="row">
-          <button class="primary" ?disabled=${this.busy} @click=${() => this.createRoom()}>CREATE ROOM</button>
+          <button class="primary" data-focusable ?disabled=${this.busy} @click=${() => this.createRoom()}>CREATE ROOM</button>
         </div>
 
         <label for="code">Room code</label>
@@ -631,9 +652,9 @@ export class LobbyScreen extends LitElement {
           @input=${(e: Event) => { const el = e.target as HTMLInputElement; el.value = el.value.toUpperCase(); }}
           @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.joinRoom(); }} />
         <div class="row">
-          <button ?disabled=${this.busy} @click=${() => this.joinRoom()}>JOIN</button>
+          <button data-focusable ?disabled=${this.busy} @click=${() => this.joinRoom()}>JOIN</button>
         </div>
-        <button class="back" @click=${() => this.fire('lobby-back')}>Back</button>
+        <button class="back" data-focusable @click=${() => this.fire('lobby-back')}>Back</button>
         ${this.status ? html`<div class="status">${this.status}</div>` : ''}
         <button class="link" @click=${() => this.fire('lobby-logs')}>copy debug log</button>
       </div>
@@ -683,20 +704,20 @@ export class LobbyScreen extends LitElement {
             <label>Your vehicle</label>
             ${this.renderPicker()}
             <div class="row tight">
-              <button class="${this.self?.ready ? 'ready-on' : ''}" ?disabled=${this.busy || blocked}
+              <button class="${this.self?.ready ? 'ready-on' : ''}" data-focusable ?disabled=${this.busy || blocked}
                 @click=${() => this.toggleReady()}>
                 ${this.self?.ready ? 'CANCEL READY' : 'READY UP'}
               </button>
-              <button ?disabled=${this.busy} @click=${() => this.switchTeam()}>SWITCH TEAM</button>
+              <button data-focusable ?disabled=${this.busy} @click=${() => this.switchTeam()}>SWITCH TEAM</button>
             </div>
             ${isHost
               ? html`
-                  <button class="primary start" ?disabled=${this.busy || !this.canStart} @click=${() => this.fire('lobby-start')}>START MATCH</button>
+                  <button class="primary start" data-focusable ?disabled=${this.busy || !this.canStart} @click=${() => this.fire('lobby-start')}>START MATCH</button>
                   ${!this.canStart ? html`<div class="hint">waiting for everyone to ready up</div>` : ''}
                   ${city ? html`<div class="hint">${city.label} loads for everyone when you start</div>` : ''}
                 `
               : html`<div class="hint">waiting for host to start</div>`}
-            <button ?disabled=${this.busy} @click=${() => this.fire('lobby-leave')}>LEAVE</button>
+            <button data-focusable ?disabled=${this.busy} @click=${() => this.fire('lobby-leave')}>LEAVE</button>
           </div>
         </div>
         ${this.status ? html`<div class="status">${this.status}</div>` : ''}

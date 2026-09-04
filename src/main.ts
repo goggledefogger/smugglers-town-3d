@@ -27,7 +27,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
-import { KeyboardState, isTypingInField } from './ui/controls.ts';
+import { InputManager } from './input/InputManager.ts';
+import type { UiAction } from './input/types.ts';
 import { logger } from './app/log.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
@@ -180,19 +181,14 @@ hudEl.hidden = true;
 relocateBarEl.hidden = true;
 pickups.setVisible(false);
 
-// ---- keyboard + hotkeys ----
-const keyboard = new KeyboardState();
+// ---- input ----
+// One InputManager owns the keyboard and gamepad sources and merges them.
+// Driving input is polled each frame; UI actions and hotkeys are edge-triggered
+// and drained into whatever screen is active (or the gameplay hotkeys).
+const input = new InputManager();
 
-window.addEventListener('keydown', (e) => {
-  if (isTypingInField()) return;
-  if (introEl.isConnected) return; // the garage owns the keys until the match starts
-  if (e.code === 'KeyR') resetPlayer();
-  if (e.code === 'KeyC') cameraRig.cycleMode();
-  if (e.code.startsWith('Digit')) {
-    const n = Number(e.code.slice(5));
-    if (n >= 1 && n <= 5) switchVehicle(n - 1);
-  }
-});
+/** The active UI screen's handler, or null while in gameplay. Set by screens. */
+let uiHandler: ((action: UiAction) => boolean) | null = null;
 
 /** Drop the player on a nearby spot clear of buildings. */
 function resetPlayer(): void {
@@ -209,12 +205,6 @@ function resetPlayer(): void {
   p.angVel.set(0, 0, 0);
   p.quat.identity();
   p.snapPrev();
-}
-
-function switchVehicle(n: number): void {
-  if (online) return;
-  game.switchPlayerVehicle(n);
-  rebuildViews();
 }
 
 // ---- events → UI ----
@@ -251,6 +241,7 @@ events.on('match:win', ({ team }) => {
     endEl.hidden = false;
     endEl.winner = team;
     endEl.scores = { ...world.state.scores };
+    uiHandler = (a) => endEl.handleUiAction(a);
   }, 1500);
 });
 events.on('location:changed', ({ label }) => {
@@ -259,12 +250,17 @@ events.on('location:changed', ({ label }) => {
 
 // ---- screens wiring ----
 introEl.onSelect = (type) => showroom.setType(type);
+// the intro owns UI actions while it is on screen; the frame loop drains
+// InputManager actions into whatever uiHandler is set
+uiHandler = (a) => introEl.handleUiAction(a);
+
 introEl.onStart = (type) => {
   showroom.dispose();
   log.info('match start', { mode: 'single', vehicle: type, terrain: game.terrainProvider.label });
   game.playerType = type;
   startMatch(game.terrainProvider);
   introEl.remove();
+  uiHandler = null;  // gameplay: no screen, driving input takes over
   hudEl.hidden = false;
   relocateBarEl.hidden = false;
   pickups.setVisible(true);
@@ -326,14 +322,18 @@ async function openOnline(type: number): Promise<void> {
         if (terrain.isReal) events.emit('location:changed', { label: terrain.label, isReal: true });
         showroom.dispose();
         introEl.remove();
+        uiHandler = null;  // gameplay: driving input takes over
         rebuildViews();
         hudEl.hidden = false;
         relocateBarEl.hidden = true;
         pickups.setVisible(true);
       },
-      onLeave: () => undefined
+      onLeave: () => { uiHandler = null; }
     });
   }
+  // the lobby screen owns UI actions while it is visible
+  const lobbyEl = document.querySelector('sr-lobby') as LobbyScreen;
+  uiHandler = (a) => lobbyEl.handleUiAction(a);
   onlineFlow.open(type);
 }
 
@@ -345,6 +345,7 @@ endEl.onRematch = () => {
   }
   endEl.hidden = true;
   endEl.winner = null;
+  uiHandler = null;  // back to gameplay
   // rematch on whatever terrain is loaded; a relocation's tiles stay in place
   startMatch(game.terrainProvider);
 };
@@ -400,13 +401,25 @@ function frame(now: number): void {
   const dt = Math.min(rawDt, config.loop.maxFrameDt);
   last = now;
   renderer.adapt(rawDt, now);
+  // UI actions and hotkeys drain every frame, menus open or not; each screen
+  // registers a handler that returns true if it consumed the action
+  for (const action of input.drainUiActions()) {
+    if (uiHandler) {
+      if (uiHandler(action)) continue;
+    }
+    // unhandled UI action while no screen is open: treat pause/back specially
+  }
+  for (const hot of input.drainHotkeys()) {
+    if (hot === 'camera') cameraRig.cycleMode();
+    if (hot === 'reset') resetPlayer();
+  }
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
-    const input = keyboard.toVehicleInput();
+    const drive = input.vehicleInput();
     // the sessions get real elapsed time: Game clamps its own step, and a
     // client's playback clock must not run slow just because frames are
-    if (online) online.tick(rawDt, input);
-    else game.update(dt, input);
+    if (online) online.tick(rawDt, drive);
+    else game.update(dt, drive);
     simTime += dt;
     const player = world.player?.body ?? null;
     if (tiles && player) {

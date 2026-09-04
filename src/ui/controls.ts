@@ -1,13 +1,8 @@
 /**
- * Keyboard state for player input. Keys pressed while typing in a text
- * field are ignored — text inputs own those keys until focus leaves them,
- * so Space/WASD never leak into the game while someone is searching.
- */
-import type { VehicleInput } from '../core/physics/vehicleStats.ts';
-import { activeGamepad, readGamepad } from './gamepad.ts';
-
-/**
- * The focused element, reached through shadow roots.
+ * The focused element, reached through shadow roots, and a guard that says
+ * whether the player is typing in a text field. Both are used by the input
+ * sources (KeyboardSource) so game hotkeys keep their hands off while
+ * someone is typing a room code or a place name.
  *
  * `document.activeElement` retargets to the shadow HOST, so a field inside a
  * Lit component reads as <SR-LOBBY>, never <INPUT>. Every "is the player
@@ -27,83 +22,4 @@ export function isTypingInField(): boolean {
   if (!el) return false;
   const tag = el.tagName;
   return tag === 'INPUT' || tag === 'TEXTAREA' || (el instanceof HTMLElement && el.isContentEditable);
-}
-
-const GAME_KEYS = new Set([
-  'ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'
-]);
-
-export class KeyboardState {
-  private readonly keys = new Set<string>();
-  private readonly disposers: (() => void)[] = [];
-
-  constructor() {
-    const onKeyDown = (e: KeyboardEvent) => {
-      if (isTypingInField()) return;
-      this.keys.add(e.code);
-      if (GAME_KEYS.has(e.code)) e.preventDefault();
-    };
-    const onKeyUp = (e: KeyboardEvent) => {
-      if (isTypingInField()) return;
-      this.keys.delete(e.code);
-    };
-    // a key held while the window loses focus never gets its keyup: without
-    // this a car keeps turning (and online, keeps sending that turn) forever
-    const release = () => this.keys.clear();
-    window.addEventListener('keydown', onKeyDown);
-    window.addEventListener('keyup', onKeyUp);
-    window.addEventListener('blur', release);
-    document.addEventListener('visibilitychange', release);
-    this.disposers.push(() => window.removeEventListener('keydown', onKeyDown));
-    this.disposers.push(() => window.removeEventListener('keyup', onKeyUp));
-    this.disposers.push(() => window.removeEventListener('blur', release));
-    this.disposers.push(() => document.removeEventListener('visibilitychange', release));
-  }
-
-  isDown(code: string): boolean {
-    return this.keys.has(code);
-  }
-
-  toVehicleInput(): VehicleInput {
-    // keyboard is the baseline; a gamepad overrides a channel only when its
-    // stick/trigger is actually off-centre, so a resting pad never steals
-    // input from the keyboard
-    const k = this.keyboardInput();
-    const pad = activeGamepad();
-    if (!pad) return k;
-    const g = readGamepad(pad);
-    const gp = g.pitch ?? 0;
-    const padActive = g.throttle > 0 || g.brake > 0 || g.steer !== 0 || g.jump || gp !== 0;
-    if (!padActive) return k;
-    return {
-      throttle: g.throttle > 0 ? g.throttle : k.throttle,
-      brake: g.brake > 0 ? g.brake : k.brake,
-      steer: g.steer !== 0 ? g.steer : k.steer,
-      jump: g.jump || k.jump,
-      pitch: gp !== 0 ? gp : (k.pitch ?? 0)
-    };
-  }
-
-  private keyboardInput(): VehicleInput {
-    return {
-      throttle: this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0,
-      brake: this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0,
-      steer: this.isDown('KeyA') || this.isDown('ArrowLeft')
-        ? 1
-        : this.isDown('KeyD') || this.isDown('ArrowRight')
-          ? -1
-          : 0,
-      jump: this.isDown('Space'),
-      // In the air the throttle and brake keys have nothing to drive, so they
-      // become pitch, pull-back-is-nose-up as in any stunt racer. VehicleBody
-      // only reads this while airborne, so the same keys keep their ground job.
-      pitch: (this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0)
-        - (this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0)
-    };
-  }
-
-  dispose(): void {
-    for (const d of this.disposers) d();
-    this.keys.clear();
-  }
 }

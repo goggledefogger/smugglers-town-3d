@@ -1,12 +1,12 @@
 import { html, css, LitElement } from 'lit';
 import { VEHICLE_TYPES, type VehicleStats } from '../../core/physics/vehicleStats.ts';
-import { isTypingInField } from '../controls.ts';
 
 /**
  * The garage: title, the roster to pick from, stats for the pick, and the
  * way into the game. The right half is see-through so the Showroom's 3D
  * preview of the selected vehicle shows behind it. Arrow keys or 1-5
- * select, Enter (or the button) starts.
+ * select, Enter (or the button) starts. A gamepad navigates the same way:
+ * dpad/stick moves the focus ring, A starts, B opens online.
  */
 const STAT_ROWS: readonly (readonly [keyof VehicleStats & string, string])[] = [
   ['accel', 'Acceleration'],
@@ -43,6 +43,12 @@ export class IntroScreen extends LitElement {
       border:2px solid var(--line); border-radius:10px; cursor:pointer; outline:none; transition:border-color .12s, transform .12s; }
     .card:hover { border-color:var(--sand); }
     .card.sel { border-color:var(--accent); background:rgba(64,42,28,.95); transform:translateX(6px); }
+    /* gamepad focus ring: the InputManager moves data-focused between cards
+       and buttons; keyboard hover and mouse click still work alongside it */
+    .card[data-focused], button[data-focused] {
+      border-color:var(--accent) !important;
+      box-shadow:0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent);
+    }
     .swatch { width:14px; height:14px; border-radius:4px; flex:none; }
     .name { font-family:'Russo One',sans-serif; font-size:15px; flex:1; }
     .key { font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--muted); background:var(--panel2);
@@ -87,32 +93,48 @@ export class IntroScreen extends LitElement {
   onOnline?: (typeIdx: number) => void;
   onSelect?: (typeIdx: number) => void;
 
-  private readonly onKey = (e: KeyboardEvent): void => {
-    if (isTypingInField()) return;
-    if (e.code === 'ArrowDown' || e.code === 'ArrowRight') this.select(this.selected + 1);
-    else if (e.code === 'ArrowUp' || e.code === 'ArrowLeft') this.select(this.selected - 1);
-    else if (e.code.startsWith('Digit')) {
-      const n = Number(e.code.slice(5));
-      if (n >= 1 && n <= VEHICLE_TYPES.length) this.select(n - 1);
-    } else if (e.code === 'Enter') this.onStart?.(this.selected);
-    else return;
-    e.preventDefault();
-  };
+  /** Focus index across all data-focusable elements: vehicle cards then buttons. */
+  private focusIdx = 0;
+
+  /** Handle a UI action from the InputManager. Returns true if consumed. */
+  handleUiAction(action: 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'tab' | 'pause'): boolean {
+    const count = VEHICLE_TYPES.length + 2; // cards + PLAY ONLINE + START ENGINE
+    if (action === 'up' || action === 'left') { this.moveFocus(this.focusIdx - 1, count); return true; }
+    if (action === 'down' || action === 'right') { this.moveFocus(this.focusIdx + 1, count); return true; }
+    if (action === 'confirm') { this.activateFocus(); return true; }
+    return false;
+  }
+
+  private moveFocus(idx: number, count: number): void {
+    const n = ((idx % count) + count) % count;
+    this.focusIdx = n;
+    if (n < VEHICLE_TYPES.length) this.select(n);
+    this.updateFocus();
+  }
+
+  private activateFocus(): void {
+    if (this.focusIdx < VEHICLE_TYPES.length) this.onStart?.(this.focusIdx);
+    else if (this.focusIdx === VEHICLE_TYPES.length) this.onOnline?.(this.selected);
+    else this.onStart?.(this.selected);
+  }
+
+  /** Repaint the data-focused attribute onto the current focus target. */
+  private updateFocus(): void {
+    this.renderRoot.querySelectorAll('[data-focusable]').forEach((el, i) => {
+      if (i === this.focusIdx) el.setAttribute('data-focused', '');
+      else el.removeAttribute('data-focused');
+    });
+  }
 
   constructor() {
     super();
     this.selected = 2;
+    this.focusIdx = 2;
   }
 
   override connectedCallback(): void {
     super.connectedCallback();
-    window.addEventListener('keydown', this.onKey);
-    queueMicrotask(() => this.onSelect?.(this.selected));
-  }
-
-  override disconnectedCallback(): void {
-    window.removeEventListener('keydown', this.onKey);
-    super.disconnectedCallback();
+    queueMicrotask(() => { this.onSelect?.(this.selected); this.updateFocus(); });
   }
 
   private select(idx: number): void {
@@ -134,6 +156,7 @@ export class IntroScreen extends LitElement {
         <div class="label">Pick your ride</div>
         ${VEHICLE_TYPES.map((t, i) => html`
           <div class="card ${i === this.selected ? 'sel' : ''}" role="button" tabindex="0"
+            data-focusable
             @click=${() => this.select(i)} @dblclick=${() => this.onStart?.(i)}>
             <span class="swatch" style="background:${hex(t.color)}"></span>
             <span class="name">${t.name}</span>
@@ -162,8 +185,8 @@ export class IntroScreen extends LitElement {
           <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>↑</kbd><kbd>↓</kbd> or <kbd>1-5</kbd> pick · <kbd>Enter</kbd> start
         </div>
         <span class="actions">
-          <button class="online" @click=${() => this.onOnline?.(this.selected)}>PLAY ONLINE</button>
-          <button class="play" @click=${() => this.onStart?.(this.selected)}>START ENGINE</button>
+          <button class="online" data-focusable @click=${() => this.onOnline?.(this.selected)}>PLAY ONLINE</button>
+          <button class="play" data-focusable @click=${() => this.onStart?.(this.selected)}>START ENGINE</button>
         </span>
       </footer>
     `;

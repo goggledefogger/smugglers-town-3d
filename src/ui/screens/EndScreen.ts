@@ -16,6 +16,7 @@ export class EndScreen extends LitElement {
       font-family:'Russo One',sans-serif; font-size:18px; border:none; border-radius:10px; cursor:pointer;
       box-shadow:0 6px 0 #b0390f; }
     .rematch:hover { transform:translateY(-2px); }
+    .rematch[data-focused] { box-shadow:0 6px 0 #b0390f, 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
   `;
 
   static override properties = {
@@ -33,12 +34,24 @@ export class EndScreen extends LitElement {
 
   onRematch?: () => void;
 
+  /** Handle a UI action: confirm rematches, back does too. */
+  handleUiAction(action: 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'tab' | 'pause'): boolean {
+    if (action === 'confirm' || action === 'back') { this.onRematch?.(); return true; }
+    return false;
+  }
+
+  override updated(): void {
+    // the rematch button is the only focusable; mark it on first render
+    const btn = this.renderRoot.querySelector('.rematch');
+    if (btn) btn.setAttribute('data-focused', '');
+  }
+
   override render() {
     const won = this.winner === 0;
     return html`
       <h2 class="${won ? 'win' : 'lose'}">${won ? 'YOUR CREW WINS' : 'RIVALS WIN'}</h2>
       <p>Final score ${this.scores[0] ?? 0} — ${this.scores[1] ?? 0}</p>
-      <button class="rematch" @click=${() => this.onRematch?.()}>REMATCH</button>
+      <button class="rematch" data-focusable @click=${() => this.onRematch?.()}>REMATCH</button>
     `;
   }
 }
