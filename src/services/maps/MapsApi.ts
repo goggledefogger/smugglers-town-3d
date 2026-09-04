@@ -156,8 +156,9 @@ export async function fetchSatellite(
   const tilePx = TILE * scale;
   const spanDeg = 0.05;
   const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const spanLonDeg = spanDeg / cosLat;
   const dlat = spanDeg / 2;
-  const dlon = spanDeg / 2 / cosLat;
+  const dlon = spanLonDeg / 2;
   const canvas = document.createElement('canvas');
   canvas.width = tilePx * GRID;
   canvas.height = tilePx * GRID;
@@ -186,7 +187,7 @@ export async function fetchSatellite(
     const rowPromises: Promise<HTMLImageElement>[] = [];
     for (let c = 0; c < GRID; c++) {
       const la = lat + dlat - (r / (GRID - 1)) * spanDeg;
-      const lo = lon - dlon + (c / (GRID - 1)) * spanDeg * 2 * cosLat;
+      const lo = lon - dlon + (c / (GRID - 1)) * spanLonDeg;
       rowPromises.push(loadImg(satelliteUrl(la, lo, apiKey, zoom, TILE, TILE, scale)));
     }
     const imgs = await Promise.all(rowPromises);

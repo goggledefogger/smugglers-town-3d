@@ -18,4 +18,6 @@ export interface TerrainProvider {
   readonly reliefBoost: number;
   /** Real altitude (m) that maps to world y = 0; the datum streamed tiles are placed against. */
   readonly datumAltM: number;
+  /** Real-world geographic center for satellite texture alignment. */
+  readonly center?: { lat: number; lon: number };
 }
