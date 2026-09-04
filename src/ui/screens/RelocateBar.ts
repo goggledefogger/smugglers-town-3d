@@ -24,7 +24,11 @@ export class RelocateBar extends LitElement {
       transform: translateX(-50%);
       z-index: 20;
       display: flex;
-      flex-wrap: wrap;
+      /* nowrap on the inline row: width:max-content on a *wrapping* flex
+         container resolves narrower than the row it contains, so the fields
+         wrapped even with a thousand pixels of gap to sit in. The collapsed
+         panel does its own wrapping below. */
+      flex-wrap: nowrap;
       justify-content: center;
       gap: var(--space-xs);
       /* the gap between the HUD's top corners: integrity takes ~19rem on the
@@ -44,8 +48,10 @@ export class RelocateBar extends LitElement {
     .fields { display: contents; }
     .toggle { display: none; }
 
-    /* no usable gap: collapse to a button that opens the fields on demand */
-    @media (max-width: 84rem) {
+    /* No usable gap: collapse to a button that opens the fields on demand.
+       The threshold is the corners (~52rem) plus what one row of fields needs
+       (~38rem) — widen a field below and this number has to move with it. */
+    @media (max-width: 92rem) {
       :host {
         /* below the corners, because on a phone there is no gap between them
            to sit in — but only a button lives here until you ask for more */

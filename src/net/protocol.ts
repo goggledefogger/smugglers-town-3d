@@ -15,18 +15,21 @@ export type PeerId = string;
  * instead and drove around a different world for the whole match. Better to
  * refuse the match and say why.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Client → host, ~30 Hz. Latest seq wins. */
 export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: number; j: boolean; p: number }
 
 export interface BodySnap { id: number; p: [number, number, number]; q: [number, number, number, number]; v: [number, number, number]; d: number; g: 0 | 1 }
 
+/** One crate on the wire: id, position, and the body id carrying it. */
+export interface CrateSnap { i: number; p: [number, number, number]; c: number | null; d: 0 | 1 }
+
 /** Host → all, ~20 Hz. */
 export interface SnapshotMsg {
   t: 's'; tick: number; timeS: number; timeLeftS: number;
   phase: 'countdown' | 'playing' | 'suddenDeath' | 'gameover';
-  scores: [number, number]; carrier: number | null; crate: [number, number, number];
+  scores: [number, number]; crates: CrateSnap[];
   bodies: BodySnap[];
 }
 
@@ -98,7 +101,7 @@ export function encode(msg: NetMsg): string {
   if (msg.t !== 's') return JSON.stringify(msg);
   const rounded: SnapshotMsg = {
     ...msg,
-    crate: roundVec3(msg.crate),
+    crates: msg.crates.map(c => ({ ...c, p: roundVec3(c.p) })),
     bodies: msg.bodies.map(b => ({ ...b, p: roundVec3(b.p), q: roundQuat(b.q), v: roundVec3(b.v) }))
   };
   return JSON.stringify(rounded);
@@ -134,14 +137,31 @@ function decodeBody(v: unknown): BodySnap | null {
   return { id: v.id, p: v.p, q: v.q, v: v.v, d: v.d, g: v.g };
 }
 
+/** A wave is four; the cap is only here so a peer cannot flood the decoder. */
+const MAX_CRATES = 16;
+
+function decodeCrate(v: unknown): CrateSnap | null {
+  if (!isRecord(v)) return null;
+  if (!isInt(v.i) || v.i < 0) return null;
+  if (!isVec3(v.p)) return null;
+  if (v.c !== null && (!isInt(v.c) || v.c < 0)) return null;
+  if (v.d !== 0 && v.d !== 1) return null;
+  return { i: v.i, p: v.p, c: v.c as number | null, d: v.d };
+}
+
 function decodeSnapshot(r: Record<string, unknown>): SnapshotMsg | null {
   if (!isInt(r.tick) || r.tick < 0) return null;
   if (!isNum(r.timeS) || r.timeS < 0) return null;
   if (!isNum(r.timeLeftS) || r.timeLeftS < 0) return null;
   if (typeof r.phase !== 'string' || !PHASES.has(r.phase as SnapshotMsg['phase'])) return null;
   if (!Array.isArray(r.scores) || r.scores.length !== 2 || !r.scores.every(n => isInt(n) && n >= 0)) return null;
-  if (r.carrier !== null && (!isInt(r.carrier) || r.carrier < 0)) return null;
-  if (!isVec3(r.crate)) return null;
+  if (!Array.isArray(r.crates) || r.crates.length > MAX_CRATES) return null;
+  const crates: CrateSnap[] = [];
+  for (const c of r.crates) {
+    const snap = decodeCrate(c);
+    if (!snap) return null;
+    crates.push(snap);
+  }
   if (!Array.isArray(r.bodies)) return null;
   const bodies: BodySnap[] = [];
   for (const b of r.bodies) {
@@ -152,7 +172,7 @@ function decodeSnapshot(r: Record<string, unknown>): SnapshotMsg | null {
   return {
     t: 's', tick: r.tick, timeS: r.timeS, timeLeftS: r.timeLeftS,
     phase: r.phase as SnapshotMsg['phase'], scores: r.scores as [number, number],
-    carrier: r.carrier as number | null, crate: r.crate, bodies
+    crates, bodies
   };
 }
 

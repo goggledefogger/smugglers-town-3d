@@ -1,7 +1,8 @@
 /**
- * Contraband crate and the two team bases, driven by MatchRules state each
+ * Contraband crates and the two team bases, driven by MatchRules state each
  * frame. Both use a tall additive light column with an alpha fade so they
- * read from across the map; the crate hides its beacon while carried.
+ * read from across the map; a crate hides its beacon while carried. Crates are
+ * pooled: a wave brings four, and the pool grows to whatever the state holds.
  */
 import {
   Group, Mesh, BoxGeometry, CircleGeometry, RingGeometry, CylinderGeometry, EdgesGeometry, LineSegments,
@@ -9,6 +10,7 @@ import {
   DoubleSide, AdditiveBlending, type Material
 } from 'three';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
+import type { VehicleBody } from '../core/physics/VehicleBody.ts';
 import { TEAM_COLORS, type Pose } from './VehicleView.ts';
 import { config } from '../app/config.ts';
 
@@ -84,53 +86,83 @@ class Base {
   }
 }
 
+interface CrateView {
+  readonly group: Group;
+  readonly box: Mesh;
+  readonly beacon: Mesh;
+}
+
 export class Pickups {
   private readonly fade = fadeTexture();
-  private readonly crate = new Group();
-  private readonly crateBox: Mesh;
-  private readonly beacon: Mesh;
+  private readonly crates: CrateView[] = [];
   private readonly bases: readonly [Base, Base];
   private readonly _back = new Vector3();
+  private visible = true;
 
-  constructor(scene: { add(o: Group): void }) {
-    // strapped wooden crate
-    const wood = new MeshStandardMaterial({ color: 0x9a6a36, roughness: 0.9 });
-    const strap = new MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.7, metalness: 0.3 });
-    this.crateBox = new Mesh(new BoxGeometry(1.6, 1.6, 1.6), wood);
-    this.crateBox.add(new LineSegments(new EdgesGeometry(this.crateBox.geometry), new LineBasicMaterial({ color: 0x4a3016 })));
-    for (const [w, d] of [[1.66, 0.3], [0.3, 1.66]] as const) {
-      const s = new Mesh(new BoxGeometry(w, 1.66, d), strap);
-      this.crateBox.add(s);
-    }
-    const seal = new Mesh(new BoxGeometry(0.5, 0.5, 0.06), new MeshStandardMaterial({ color: 0xffcc33, emissive: 0xff9900, emissiveIntensity: 1.2 }));
-    seal.position.z = 0.82;
-    this.crateBox.add(seal);
-    this.beacon = beam(0xffc040, 0.5, 1.4, 50, 0.45, this.fade);
-    this.crate.add(this.crateBox, this.beacon, new PointLight(0xffaa00, 2, 40, 1.5));
-    scene.add(this.crate);
+  constructor(private readonly scene: { add(o: Group): void }) {
     this.bases = [new Base(TEAM_COLORS[0], this.fade), new Base(TEAM_COLORS[1], this.fade)];
     for (const b of this.bases) scene.add(b.group);
   }
 
+  /** One strapped wooden crate, beacon and all. */
+  private makeCrate(): CrateView {
+    const group = new Group();
+    const wood = new MeshStandardMaterial({ color: 0x9a6a36, roughness: 0.9 });
+    const strap = new MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.7, metalness: 0.3 });
+    const box = new Mesh(new BoxGeometry(1.6, 1.6, 1.6), wood);
+    box.add(new LineSegments(new EdgesGeometry(box.geometry), new LineBasicMaterial({ color: 0x4a3016 })));
+    for (const [w, d] of [[1.66, 0.3], [0.3, 1.66]] as const) {
+      box.add(new Mesh(new BoxGeometry(w, 1.66, d), strap));
+    }
+    const seal = new Mesh(new BoxGeometry(0.5, 0.5, 0.06), new MeshStandardMaterial({ color: 0xffcc33, emissive: 0xff9900, emissiveIntensity: 1.2 }));
+    seal.position.z = 0.82;
+    box.add(seal);
+    const beacon = beam(0xffc040, 0.5, 1.4, 50, 0.45, this.fade);
+    group.add(box, beacon, new PointLight(0xffaa00, 2, 40, 1.5));
+    group.visible = this.visible;
+    this.scene.add(group);
+    const view: CrateView = { group, box, beacon };
+    this.crates.push(view);
+    return view;
+  }
+
   /** Hidden in the garage, where no match exists yet. */
   setVisible(v: boolean): void {
-    this.crate.visible = v;
+    this.visible = v;
+    for (const c of this.crates) c.group.visible = v;
     for (const b of this.bases) b.group.visible = v;
   }
 
-  /** carrier: the carrier's rendered pose, so the crate rides the interpolated car. */
-  sync(state: MatchState, timeS: number, dt: number, carrier: Pose | null): void {
-    this.beacon.visible = !carrier;
-    if (carrier) {
-      // ride in the bed behind the driver
-      this._back.set(0, 1.4, 1.2).applyQuaternion(carrier.quat);
-      this.crate.position.copy(carrier.pos).add(this._back);
-      this.crateBox.quaternion.copy(carrier.quat);
-      this.crateBox.position.y = 0;
-    } else {
-      this.crate.position.set(state.contrabandPos.x, state.contrabandPos.y - 1.6, state.contrabandPos.z);
-      this.crateBox.position.y = 1.6 + Math.sin(timeS * 3.3) * 0.4;
-      this.crateBox.rotation.y += dt * 1.2;
+  /** poseOf: a carrier's rendered pose, so a carried crate rides the interpolated car. */
+  sync(state: MatchState, timeS: number, dt: number, poseOf: (body: VehicleBody) => Pose | null): void {
+    const live = state.contraband;
+    while (this.crates.length < live.length) this.makeCrate();
+    for (let i = 0; i < this.crates.length; i++) {
+      const view = this.crates[i]!;
+      const crate = live[i];
+      // a delivered crate leaves the map until its wave resets
+      if (!crate || crate.delivered) {
+        view.group.visible = false;
+        continue;
+      }
+      view.group.visible = this.visible;
+      const pose = crate.carrier ? poseOf(crate.carrier) : null;
+      view.beacon.visible = !crate.carrier;
+      if (pose) {
+        // ride in the bed behind the driver
+        this._back.set(0, 1.4, 1.2).applyQuaternion(pose.quat);
+        view.group.position.copy(pose.pos).add(this._back);
+        view.box.quaternion.copy(pose.quat);
+        view.box.position.y = 0;
+      } else {
+        // carried but its car has no rendered pose (a client mid-join): fall
+        // back to the body's own position rather than dropping it at the origin
+        const at = crate.carrier ? crate.carrier.pos : crate.pos;
+        view.group.position.set(at.x, at.y - 1.6, at.z);
+        // stagger the bob so four crates do not pulse in lockstep
+        view.box.position.y = 1.6 + Math.sin(timeS * 3.3 + i * 1.7) * 0.4;
+        view.box.rotation.y += dt * 1.2;
+      }
     }
     for (const team of [0, 1] as const) {
       const b = state.bases[team];
@@ -140,7 +172,7 @@ export class Pickups {
   }
 
   dispose(): void {
-    const groups = [this.crate, this.bases[0].group, this.bases[1].group];
+    const groups = [...this.crates.map(c => c.group), this.bases[0].group, this.bases[1].group];
     for (const g of groups) {
       g.traverse(obj => {
         const m = obj as Mesh;

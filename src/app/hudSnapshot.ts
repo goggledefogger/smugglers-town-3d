@@ -25,8 +25,11 @@ export interface HudInputs {
 
 export function buildHudSnapshot(o: HudInputs): HudSnapshot {
   const { state: st, player, vehicles } = o;
-  const carrier = st.carrier ? vehicles.find(a => a.body === st.carrier) : null;
   const nav = navTarget(st, player, vehicles);
+  // with four crates live, "held by" means the one you are being sent after,
+  // not some arbitrary other race across the map
+  const carrying = st.contraband.some(c => c.carrier === player.body);
+  const carrier = carrying ? player : nav.carrier;
   return {
     phase: o.phase,
     timeLeftS: o.timeLeftS,

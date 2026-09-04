@@ -51,8 +51,9 @@ Three message kinds, all defined in `src/net/protocol.ts`:
 steer, jump, pitch, plus a sequence number so the host ignores stale packets.
 
 **Snapshot** (host to all, 20 Hz, unreliable). Per body: position, orientation,
-velocity, damage, on-ground. Per match: phase, clock, scores, carrier, crate
-position. Measured: eight bodies is ~790 bytes as JSON, so ~16 KB/s per
+velocity, damage, on-ground. Per match: phase, clock, scores, and every crate
+(id, position, carrier, delivered). Measured: eight bodies and four crates is
+~1090 bytes as JSON, so ~21 KB/s per
 client at 20 Hz and ~110 KB/s upstream from a host with seven guests.
 Fine for a friends match on broadband; binary packets are the version 2
 item if a host's uplink turns out to be the bottleneck.

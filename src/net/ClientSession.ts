@@ -12,7 +12,7 @@ import type { GameEvents } from '../app/events.ts';
 import type { HudSnapshot, Store } from '../app/store.ts';
 import { navMarkerFor } from '../app/navTarget.ts';
 import { buildHudSnapshot } from '../app/hudSnapshot.ts';
-import type { MatchState } from '../core/gameplay/MatchRules.ts';
+import type { Crate, MatchState } from '../core/gameplay/MatchRules.ts';
 import { VehicleBody } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
@@ -40,7 +40,7 @@ const _qb = new Quaternion();
 interface MutableState {
   scores: Record<0 | 1, number>;
   carrier: VehicleBody | null;
-  contrabandPos: Vector3;
+  contraband: Crate[];
   bases: Record<0 | 1, Vector3>;
   winner: 0 | 1 | null;
 }
@@ -85,7 +85,7 @@ export class ClientSession implements WorldView {
     this.st = {
       scores: { 0: 0, 1: 0 },
       carrier: null,
-      contrabandPos: new Vector3(),
+      contraband: [],
       bases: { 0: new Vector3(...hello.bases[0]), 1: new Vector3(...hello.bases[1]) },
       winner: null
     };
@@ -131,8 +131,20 @@ export class ClientSession implements WorldView {
       this.matchPhase = m.phase;
       this.timeLeftS = m.timeLeftS;
       this.st.scores = { 0: m.scores[0], 1: m.scores[1] };
-      this.st.carrier = m.carrier === null ? null : this.byId.get(m.carrier)?.body ?? null;
-      this.st.contrabandPos.set(m.crate[0], m.crate[1], m.crate[2]);
+      // the host owns the wave, so mirror its list rather than reconciling:
+      // crate ids are stable within a wave and change wholesale between them
+      this.st.contraband = m.crates.map(c => {
+        const existing = this.st.contraband.find(e => e.id === c.i);
+        const pos = existing?.pos ?? new Vector3();
+        pos.set(c.p[0], c.p[1], c.p[2]);
+        return {
+          id: c.i,
+          pos,
+          carrier: c.c === null ? null : this.byId.get(c.c)?.body ?? null,
+          lastTransfer: -Infinity,
+          delivered: c.d === 1
+        };
+      });
       if (m.phase === 'gameover') this.st.winner = m.scores[0] >= m.scores[1] ? 0 : 1;
       return;
     }

@@ -142,8 +142,12 @@ export class HostSession {
       timeLeftS: g.timeLeft,
       phase: g.matchPhase,
       scores: [st.scores[0], st.scores[1]],
-      carrier: st.carrier?.id ?? null,
-      crate: [st.contrabandPos.x, st.contrabandPos.y, st.contrabandPos.z],
+      crates: st.contraband.map(c => ({
+        i: c.id,
+        p: [c.pos.x, c.pos.y, c.pos.z] as [number, number, number],
+        c: c.carrier?.id ?? null,
+        d: c.delivered ? 1 as const : 0 as const
+      })),
       bodies: g.vehicles.map(a => {
         const b = a.body;
         return {

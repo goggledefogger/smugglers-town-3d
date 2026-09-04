@@ -16,6 +16,10 @@ import { chromium } from 'playwright-core';
 const URL = process.env.E2E_URL ?? process.argv[2] ?? 'http://localhost:5173/';
 const VIEWPORTS = [
   { name: 'desktop', width: 1280, height: 800 },
+  // the awkward middle: wide enough to try the inline row, narrow enough that
+  // it once wrapped and shoved the RELOCATE button onto the nav marker
+  { name: 'laptop', width: 1400, height: 820 },
+  { name: 'wide', width: 1920, height: 1080 },
   { name: 'phone', width: 390, height: 844 }
 ];
 

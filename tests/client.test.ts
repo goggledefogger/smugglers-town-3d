@@ -15,7 +15,7 @@ const hello: HelloMsg = {
 
 function snapshot(tick: number, x: number): SnapshotMsg {
   const body = (id: number) => ({ id, p: [x, 1, 0] as [number, number, number], q: [0, 0, 0, 1] as [number, number, number, number], v: [60, 0, 0] as [number, number, number], d: 0, g: 1 as const });
-  return { t: 's', tick, timeS: tick / 60, timeLeftS: 300, phase: 'playing', scores: [0, 0], carrier: null, crate: [0, 0, 0], bodies: [body(1), body(2)] };
+  return { t: 's', tick, timeS: tick / 60, timeLeftS: 300, phase: 'playing', scores: [0, 0], crates: [{ i: 0, p: [0, 0, 0], c: null, d: 0 }], bodies: [body(1), body(2)] };
 }
 
 const flush = (): Promise<void> => new Promise(r => setTimeout(r, 0));

@@ -6,7 +6,7 @@
 import { Vector3, MathUtils } from 'three';
 import type { VehicleInput } from '../physics/vehicleStats.ts';
 import type { VehicleBody } from '../physics/VehicleBody.ts';
-import type { MatchState } from '../gameplay/MatchRules.ts';
+import { chooseCrate, type MatchState } from '../gameplay/MatchRules.ts';
 import type { Rng } from '../rng.ts';
 
 type AiState = 'seek' | 'chase' | 'deliver';
@@ -70,16 +70,15 @@ export class DriverBrain {
     this.timer -= dt;
     if (this.timer <= 0) {
       this.timer = this.cfg.reevaluateS * (1 + this.rng());
-      if (!match.carrier) {
-        this.state = 'seek';
-      } else if (this.teamOf(match.carrier) !== this.teamOf(self)) {
-        this.state = 'chase';
-      } else if (match.carrier === self) {
-        this.state = 'deliver';
-      } else {
-        // ally carries — support: head to our base or re-seek
-        this.state = this.rng() < 0.6 ? 'deliver' : 'seek';
-      }
+      // the same rule the player's marker uses, so a bot never fights for a
+      // crate the HUD is telling you to ignore
+      const choice = chooseCrate(match, self, b => (this.teamOf(b) === 1 ? 1 : 0));
+      this.state = choice.goal === 'deliver' ? 'deliver'
+        : choice.goal === 'chase' ? 'chase'
+          // escorting an ally: split between shadowing them home and taking
+          // one of the other three, so a team does not convoy behind one crate
+          : choice.goal === 'escort' ? (this.rng() < 0.6 ? 'deliver' : 'seek')
+            : 'seek';
     }
     this.steerToward(self, match, route);
     if (this.throttle > 0.5 && self.speed < 3 && self.onGround) this.stuckS += dt;
@@ -92,20 +91,22 @@ export class DriverBrain {
   }
 
   private steerToward(self: VehicleBody, match: MatchState, route: RouteFn | null): void {
-    // the state is re-evaluated on a timer, so the carrier may have delivered
-    // (or been stolen from) since: fall back to seeking rather than crash
-    const carrier = match.carrier;
+    // the state is re-evaluated on a timer, so the crate may have been
+    // delivered (or stolen) since: ask again rather than steer at a stale spot
+    const choice = chooseCrate(match, self, b => (this.teamOf(b) === 1 ? 1 : 0));
+    const holder = choice.crate?.carrier ?? null;
     let kind: string;
-    if (this.state === 'chase' && carrier) {
-      _target.copy(carrier.pos).addScaledVector(carrier.vel, 0.3);
+    if (this.state === 'chase' && holder && holder !== self) {
+      // lead the target: driving at where they are means arriving behind them
+      _target.copy(holder.pos).addScaledVector(holder.vel, 0.3);
       _target.y = self.pos.y;
       kind = 'carrier';
-    } else if (this.state === 'deliver' && carrier) {
+    } else if (this.state === 'deliver') {
       const team = this.teamOf(self) === 1 ? 1 : 0;
       _target.copy(match.bases[team]);
       kind = 'base' + team;
     } else {
-      _target.copy(match.contrabandPos);
+      _target.copy(choice.pos);
       kind = 'contraband';
     }
     _toTarget.copy(_target).sub(self.pos);

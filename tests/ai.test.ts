@@ -15,8 +15,7 @@ function makeBody(x: number, z: number, quatYawDeg = 0): VehicleBody {
 function makeMatchState(carrier: VehicleBody | null): MatchState {
   return {
     scores: { 0: 0, 1: 0 },
-    carrier,
-    contrabandPos: new Vector3(100, 3, 0),
+    contraband: [{ id: 0, pos: new Vector3(100, 3, 0), carrier: carrier, lastTransfer: -Infinity, delivered: false }],
     bases: { 0: new Vector3(-100, 0, 0), 1: new Vector3(100, 0, 0) },
     winner: null
   };
@@ -67,7 +66,7 @@ describe('DriverBrain', () => {
     const self = makeBody(0, 0);
     const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
     const state = makeMatchState(null);
-    state.contrabandPos.set(0, 3, -100);
+    state.contraband[0]!.pos.set(0, 3, -100);
     const seen: string[] = [];
     brain.think(1, self, state, (kind, from) => {
       seen.push(kind);
@@ -92,7 +91,7 @@ describe('DriverBrain', () => {
     const self = makeBody(0, 0, 0);
     const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
     const state = makeMatchState(null);
-    state.contrabandPos.set(0, 3, 50);
+    state.contraband[0]!.pos.set(0, 3, 50);
     brain.think(1, self, state);
     const input = brain.input();
     expect(input.steer).toBeGreaterThanOrEqual(-1);

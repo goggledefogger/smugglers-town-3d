@@ -6,15 +6,19 @@
  * carrier has to swing the marker onto them, because a base you cannot deliver
  * to is the one place on the map with nothing for you.
  *
- * There is exactly one crate and so at most one carrier — the marker never has
- * a choice of targets to arbitrate between.
+ * With four crates live there IS a choice to arbitrate, and the order is:
+ * the nearest loose crate, else the nearest one a rival is running off with,
+ * else the nearest teammate to escort. Nearest first because the marker's job
+ * is the next thing you can act on, not the most valuable thing on the map —
+ * and a car holds only one crate, so acting on one means ignoring the rest.
  *
  * Deliberately free of runtime imports so the HUD store, the local sim and the
  * network client can all share it without an import cycle.
  */
 import { Vector3 } from 'three';
-import type { MatchState } from '../core/gameplay/MatchRules.ts';
+import { chooseCrate, type MatchState } from '../core/gameplay/MatchRules.ts';
 import type { VehicleActor } from './Game.ts';
+import type { VehicleBody } from '../core/physics/VehicleBody.ts';
 
 export type NavGoal =
   /** Nobody has it: drive to the loose crate. */
@@ -48,16 +52,14 @@ export function navTarget(
   player: VehicleActor,
   vehicles: readonly VehicleActor[]
 ): NavTarget {
-  const held = state.carrier;
-  if (!held) return { goal: 'collect', pos: state.contrabandPos, carrier: null };
-  if (held === player.body) return { goal: 'deliver', pos: state.bases[player.team], carrier: null };
-  const carrier = vehicles.find(a => a.body === held) ?? null;
-  // held by a body that is not in this view's roster: still chase the crate itself
-  if (!carrier) return { goal: 'chase', pos: held.pos, carrier: null };
+  const teamOf = (body: VehicleBody): 0 | 1 | undefined =>
+    vehicles.find(a => a.body === body)?.team;
+  const choice = chooseCrate(state, player.body, teamOf);
+  const holder = choice.crate?.carrier ?? null;
   return {
-    goal: carrier.team === player.team ? 'escort' : 'chase',
-    pos: carrier.body.pos,
-    carrier
+    goal: choice.goal,
+    pos: choice.pos,
+    carrier: holder && holder !== player.body ? vehicles.find(a => a.body === holder) ?? null : null
   };
 }
 

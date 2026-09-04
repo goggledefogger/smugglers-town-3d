@@ -1,8 +1,10 @@
 # Smugglers Town 3D: Turf Wars
 
-Eight cars, one crate, two bases. Grab the contraband and get it back to your
-crew's base. Ram the carrier and it's yours. First team to five deliveries
-wins, or whoever leads when the five-minute clock runs out.
+Eight cars, four crates, two bases. Grab a crate and get it back to your crew's
+base. Ram a carrier and it's theirs no longer. Four races run at once and each
+is its own: a fresh set of four only drops when every one of them is home.
+First team to five deliveries wins, or whoever leads when the five-minute clock
+runs out.
 
 It starts on a procedural desert, no setup needed. Add a Google Maps API key
 and you can move the match to anywhere on Earth: real elevation, satellite
@@ -60,7 +62,10 @@ steeper the run-up the further you go. In the air the throttle and brake keys
 pitch the nose instead, which is how you land on your wheels, and rams and
 contraband steals work mid-flight.
 
-Landings, walls, and rams all cost integrity. At zero you wreck: the crate
+You carry one crate at a time — drive over a second while loaded and you leave
+it for someone else, so committing to one race means giving up another.
+
+Landings, walls, and rams all cost integrity. At zero you wreck: your crate
 drops where you died and you respawn at your base.
 
 ## Going somewhere real

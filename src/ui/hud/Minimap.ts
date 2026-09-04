@@ -167,7 +167,6 @@ export class Minimap extends HudComponent {
     this.drawRelief(ctx, px, pz, yaw, radius);
     this.drawRangeRings(ctx, radius);
 
-    const carrier = state.carrier;
     const blips: Blip[] = [];
     for (const team of [0, 1] as const) {
       const b = state.bases[team];
@@ -177,14 +176,20 @@ export class Minimap extends HudComponent {
         ring: team === 0 ? '#7dd87d' : '#4fc3f7'
       });
     }
-    if (!carrier) blips.push({ x: state.contrabandPos.x, z: state.contrabandPos.z, r: radius * 0.032, fill: '#ffd54a', ring: '#fff' });
+    // every loose crate of the wave; a carried one shows on its carrier instead
+    for (const crate of state.contraband) {
+      if (crate.delivered || crate.carrier) continue;
+      blips.push({ x: crate.pos.x, z: crate.pos.z, r: radius * 0.032, fill: '#ffd54a', ring: '#fff' });
+    }
+    const carrying = new Set(state.contraband.filter(c => c.carrier).map(c => c.carrier));
     for (const a of actors) {
       if (a === player) continue;
+      const loaded = carrying.has(a.body);
       blips.push({
         x: a.body.pos.x, z: a.body.pos.z,
-        r: radius * (a.body === carrier ? 0.036 : 0.026),
+        r: radius * (loaded ? 0.036 : 0.026),
         fill: a.team === 0 ? '#7dd87d' : '#ff5a4a',
-        ...(a.body === carrier ? { ring: '#ffd54a' } : {})
+        ...(loaded ? { ring: '#ffd54a' } : {})
       });
     }
     for (const b of blips) this.drawBlip(ctx, b, px, pz, yaw, radius);

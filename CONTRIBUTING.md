@@ -159,6 +159,10 @@ chevron sets `--chev-face` and mixes its shaded back and edge from it with
 property. Component-local tokens like that belong on the component's `:host`;
 only genuinely shared scales go in `index.html`.
 
+`width: max-content` on a flex container that also wraps resolves *narrower*
+than the row it holds, so the contents wrap even with room to spare. Only wrap
+where you actually want wrapping.
+
 `index.html`'s `* { box-sizing: border-box }` does **not** cross a shadow
 boundary. Any component that sets an explicit width alongside padding or a
 border needs its own `*, :host { box-sizing: border-box; }`, or the box grows by

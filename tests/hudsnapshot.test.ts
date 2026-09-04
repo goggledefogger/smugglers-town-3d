@@ -13,7 +13,7 @@ function actor(team: 0 | 1, label: string, isPlayer = false): VehicleActor {
 
 const BASES = { 0: new Vector3(-500, 0, 0), 1: new Vector3(500, 0, 0) } as const;
 const state = (carrier: VehicleBody | null, crate = new Vector3(0, 0, 0)): MatchState =>
-  ({ scores: { 0: 1, 1: 2 }, carrier, contrabandPos: crate, bases: BASES, winner: null });
+  ({ scores: { 0: 1, 1: 2 }, contraband: [{ id: 0, pos: crate, carrier: carrier, lastTransfer: -Infinity, delivered: false }], bases: BASES, winner: null });
 
 const build = (st: MatchState, player: VehicleActor, vehicles: readonly VehicleActor[]) =>
   buildHudSnapshot({

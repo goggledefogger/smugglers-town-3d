@@ -192,6 +192,22 @@ ram-to-steal rule itself lives in `MatchRules.onRam` via callback — physics
 just reports contacts.
 
 ### `core/gameplay/MatchRules.ts`
+
+Four crates are live at once and each is its own race: picked up, rammed loose
+and delivered independently. A car carries one at a time, so driving over a
+second while loaded leaves it — committing to one race means giving up another,
+which is where the tension comes from. Ram cooldowns are per crate rather than
+global, or one steal anywhere would freeze the other three. A fresh wave lands
+only when every crate of the last is home, so the final one on the map is worth
+fighting over.
+
+`chooseCrate()` decides which crate a driver should be going for: nearest loose,
+else nearest a rival is running off with, else nearest teammate to escort.
+Nearest first within a priority, because a car holds only one crate — the useful
+answer is the next thing you can reach, not the richest thing on the map. It
+lives in `core/` rather than the HUD because `DriverBrain` steers by it too, and
+a marker that disagreed with the bots about what was worth chasing would be
+worse than no marker.
 Contraband pickup, transfer-on-ram (any contact, teammates included, 0.6 s
 cooldown), drop-on-wreck (the crate falls where the carrier died and the car
 respawns just inside its own base), delivery

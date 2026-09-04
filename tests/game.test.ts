@@ -44,7 +44,7 @@ describe('Game round structure', () => {
     for (let t = 0; t < 0.6; t += 0.02) game.update(0.02, NEUTRAL);
     expect(game.matchPhase).toBe('suddenDeath');
     const player = game.player!.body;
-    player.pos.copy(game.state.contrabandPos);
+    player.pos.copy(game.state.contraband[0]!.pos);
     game.update(0.02, NEUTRAL);
     player.pos.copy(game.state.bases[0]);
     game.update(0.02, NEUTRAL);
@@ -90,7 +90,10 @@ describe('Game', () => {
     const { game } = makeGame();
     const player = game.player!.body;
     player.quat.identity(); // facing -z
-    const c = game.state.contrabandPos;
+    // four crates are live and the marker picks the nearest, so push the other
+    // three out of the way to make this a question about bearing alone
+    const c = game.state.contraband[0]!.pos;
+    for (const other of game.state.contraband.slice(1)) other.pos.set(4000, 0, 4000);
     player.pos.set(c.x, c.y, c.z + 100);            // contraband straight ahead
     expect(game.navMarker()!.yaw).toBeCloseTo(0, 6);
     player.pos.set(c.x - 100, c.y, c.z);            // to the right (+x)
@@ -105,7 +108,7 @@ describe('Game', () => {
     const { game } = makeGame();
     const player = game.player!.body;
     player.quat.identity(); // facing -z
-    const c = game.state.contrabandPos;
+    const c = game.state.contraband[0]!.pos;
     player.pos.set(c.x, c.y - 50, c.z + 100); // 100 out on the flat, 50 below it
     const m = game.navMarker()!;
     expect(m.yaw).toBeCloseTo(0, 6);
@@ -117,22 +120,22 @@ describe('Game', () => {
   it('lets a vehicle pick up contraband by driving onto it', () => {
     const { game } = makeGame();
     const player = game.player!.body;
-    player.pos.copy(game.state.contrabandPos);
+    player.pos.copy(game.state.contraband[0]!.pos);
     game.update(0.02, NEUTRAL);
-    expect(game.state.carrier).toBe(player);
+    expect(game.state.contraband[0]!.carrier).toBe(player);
   });
 
   it('wrecks a car at zero integrity: crate drops there, car respawns near its base', () => {
     const { game } = makeGame();
     const player = game.player!.body;
-    player.pos.copy(game.state.contrabandPos);
+    player.pos.copy(game.state.contraband[0]!.pos);
     game.update(0.02, NEUTRAL);
-    expect(game.state.carrier).toBe(player);
+    expect(game.state.contraband[0]!.carrier).toBe(player);
     const where = player.pos.clone();
     player.damage = 1;
     game.update(0.02, NEUTRAL);
-    expect(game.state.carrier).toBeNull();
-    expect(game.state.contrabandPos.distanceTo(where)).toBeLessThan(10);
+    expect(game.state.contraband[0]!.carrier).toBeNull();
+    expect(game.state.contraband[0]!.pos.distanceTo(where)).toBeLessThan(10);
     expect(player.damage).toBe(0);
     expect(player.pos.distanceTo(game.state.bases[0])).toBeLessThan(80);
   });
@@ -140,12 +143,12 @@ describe('Game', () => {
   it('keeps the contraband with the player across a vehicle switch', () => {
     const { game } = makeGame();
     const before = game.player!.body;
-    before.pos.copy(game.state.contrabandPos);
+    before.pos.copy(game.state.contraband[0]!.pos);
     game.update(0.02, NEUTRAL);
     game.switchPlayerVehicle(0);
     const after = game.player!.body;
     expect(after).not.toBe(before);
-    expect(game.state.carrier).toBe(after);
+    expect(game.state.contraband[0]!.carrier).toBe(after);
     // and the new body is the one the rules see from now on
     after.pos.copy(game.state.bases[0]);
     game.update(0.02, NEUTRAL);

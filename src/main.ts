@@ -427,9 +427,9 @@ function frame(now: number): void {
       }
     }
     for (const v of vehicleViews) v.sync(dt, world.alpha);
-    const carrier = world.state.carrier;
-    const carrierView = carrier ? vehicleViews.find(v => v.actor.body === carrier) : undefined;
-    pickups.sync(world.state, simTime, dt, carrierView?.pose ?? null);
+    // each carried crate rides its carrier's interpolated pose, not the body,
+    // so it does not judder a frame behind the car it is strapped to
+    pickups.sync(world.state, simTime, dt, body => vehicleViews.find(v => v.actor.body === body)?.pose ?? null);
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);

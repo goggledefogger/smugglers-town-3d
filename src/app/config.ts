@@ -19,6 +19,8 @@ export const config = {
     groundClearance: 1.0
   },
   scoring: {
+    /** Crates in play at once; a fresh set lands only when all four are home. */
+    crateCount: 4,
     scoreGoal: 5,
     deliveryRadius: 22,
     contrabandRadius: 4.5,

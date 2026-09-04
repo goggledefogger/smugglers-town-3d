@@ -36,8 +36,8 @@ describe('InputMsg', () => {
 describe('SnapshotMsg', () => {
   const sample: SnapshotMsg = {
     t: 's', tick: 42, timeS: 12.3, timeLeftS: 118.7,
-    phase: 'playing', scores: [1, 2], carrier: 3,
-    crate: [1.23456, 0.5, -7.89123],
+    phase: 'playing', scores: [1, 2],
+    crates: [{ i: 0, p: [1.23456, 0.5, -7.89123], c: 3, d: 0 }],
     bodies: [
       { id: 0, p: [1.23456, 0.5, -3.14159], q: [0.123456, 0.5, -0.5, 0.707107], v: [1.111, -2.222, 0], d: 0.42, g: 1 },
       { id: 1, p: [0, 0, 0], q: [0, 0, 0, 1], v: [0, 0, 0], d: 0, g: 0 }
@@ -49,25 +49,47 @@ describe('SnapshotMsg', () => {
     expect(decoded.tick).toBe(42);
     expect(decoded.phase).toBe('playing');
     expect(decoded.scores).toEqual([1, 2]);
-    expect(decoded.carrier).toBe(3);
-    expect(decoded.crate).toEqual([1.23, 0.5, -7.89]);
+    expect(decoded.crates[0]!.c).toBe(3);
+    expect(decoded.crates[0]!.p).toEqual([1.23, 0.5, -7.89]);
     const body0 = decoded.bodies[0] as BodySnap;
     expect(body0.p).toEqual([1.23, 0.5, -3.14]);
     expect(body0.q).toEqual([0.1235, 0.5, -0.5, 0.7071]);
     expect(body0.v).toEqual([1.11, -2.22, 0]);
   });
 
-  it('allows a null carrier', () => {
-    const msg: SnapshotMsg = { ...sample, carrier: null };
+  it('carries a whole wave, loose and carried and delivered alike', () => {
+    const msg: SnapshotMsg = {
+      ...sample,
+      crates: [
+        { i: 0, p: [1, 2, 3], c: null, d: 0 },
+        { i: 1, p: [4, 5, 6], c: 7, d: 0 },
+        { i: 2, p: [0, 0, 0], c: null, d: 1 },
+        { i: 3, p: [-9, 1, 2], c: null, d: 0 }
+      ]
+    };
     const decoded = decode(encode(msg)) as SnapshotMsg;
-    expect(decoded.carrier).toBeNull();
+    expect(decoded.crates).toHaveLength(4);
+    expect(decoded.crates[0]!.c).toBeNull();
+    expect(decoded.crates[1]!.c).toBe(7);
+    expect(decoded.crates[2]!.d).toBe(1);
+  });
+
+  it('rejects a malformed crate rather than half-decoding the wave', () => {
+    const base = JSON.parse(encode(sample)) as Record<string, unknown>;
+    const withCrates = (crates: unknown) => decode(JSON.stringify({ ...base, crates }));
+    expect(withCrates([{ i: 0, p: [1, 2], c: null, d: 0 }])).toBeNull();      // short vector
+    expect(withCrates([{ i: -1, p: [1, 2, 3], c: null, d: 0 }])).toBeNull();  // bad id
+    expect(withCrates([{ i: 0, p: [1, 2, 3], c: 'x', d: 0 }])).toBeNull();    // carrier not an id
+    expect(withCrates([{ i: 0, p: [1, 2, 3], c: null, d: 2 }])).toBeNull();   // delivered not a flag
+    expect(withCrates('nope')).toBeNull();
+    expect(withCrates(new Array(20).fill({ i: 0, p: [1, 2, 3], c: null, d: 0 }))).toBeNull();
   });
 
   it('rejects a bad phase, wrong-length arrays, and non-finite numbers', () => {
     const base = JSON.parse(encode(sample)) as Record<string, unknown>;
     expect(decode(JSON.stringify({ ...base, phase: 'paused' }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, scores: [1] }))).toBeNull();
-    expect(decode(JSON.stringify({ ...base, crate: [1, 2] }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, crates: [{ i: 0, p: [1, 2], c: null, d: 0 }] }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, bodies: [{ ...(base.bodies as unknown[])[0] as object, q: [0, 0, 0] }] }))).toBeNull();
     expect(decode('{"t":"s","tick":1,"timeS":1,"timeLeftS":1,"phase":"playing","scores":[0,0],"carrier":null,"crate":[0,0,0],"bodies":[{"id":0,"p":[0,0,0],"q":[0,0,0,1],"v":[0,0,0],"d":NaN,"g":0}]}')).toBeNull();
   });
@@ -88,7 +110,7 @@ describe('SnapshotMsg', () => {
     });
     const msg: SnapshotMsg = {
       t: 's', tick: 1200, timeS: 42.5, timeLeftS: 77.3,
-      phase: 'playing', scores: [3, 5], carrier: 2, crate: [10.5, 0.5, -8.25], bodies
+      phase: 'playing', scores: [3, 5], crates: [{ i: 0, p: [10.5, 0.5, -8.25], c: 2, d: 0 }], bodies
     };
     const bytes = new TextEncoder().encode(encode(msg)).length;
     // The literal single-char-keyed schema plus JSON's own punctuation puts a
