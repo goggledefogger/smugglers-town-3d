@@ -12,6 +12,8 @@ import { logger } from '../app/log.ts';
 
 const log = logger('relocate');
 
+import { GroundStreamer } from './maps/GroundStreamer.ts';
+
 export interface RelocateOptions {
   readonly query: string;
   readonly apiKey: string;
@@ -26,6 +28,8 @@ export interface RelocateResult {
   readonly terrain: TerrainProvider;
   /** Null when 3D tiles failed; the terrain still loaded. */
   readonly tiles: TileStreamer | null;
+  /** Progressive ground detail streamer for high-res satellite map textures. */
+  readonly groundStreamer?: GroundStreamer | null;
 }
 
 /**
@@ -86,7 +90,7 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
   const grid: ElevationGrid = await fetchElevationGrid(lat, lon);
   onProgress('Fetching satellite imagery');
   const sat = await fetchSatellite(lat, lon, apiKey);
-  const terrain = buildRealTerrain(label, grid, 420, sat);
+  const terrain = buildRealTerrain(label, grid, 420, sat, { lat, lon });
   // 3D tiles are best-effort: terrain still loads if they fail
   let tiles: TileStreamer | null = null;
   try {
@@ -100,8 +104,15 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
+  const groundStreamer = sat ? new GroundStreamer({
+    apiKey,
+    center: { lat, lon },
+    heightfield: terrain.heightfield,
+    anisotropy: opts.anisotropy,
+    zoom: 18
+  }) : null;
   log.info('relocated', {
     label, lat, lon, tiles: tiles?.tileCount ?? 0, ms: Date.now() - startedAt
   });
-  return { terrain, tiles };
+  return { terrain, tiles, groundStreamer };
 }

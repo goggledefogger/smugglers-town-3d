@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4, Float32BufferAttribute } from 'three';
 import {
-  boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, type TileNode
+  boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, STREAM_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
 import {
   buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP
@@ -9,6 +9,8 @@ import {
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
+import { tileCache, cacheKeyFor } from '../src/services/tiles/TileCache.ts';
+import { satelliteUrl } from '../src/services/maps/MapsApi.ts';
 
 const ORIGIN = { x: 1000, y: 2000, z: 3000 };
 
@@ -35,10 +37,62 @@ describe('boxDistanceM', () => {
 });
 
 describe('allowedErrorM', () => {
-  it('grows with distance between the clamps', () => {
-    expect(allowedErrorM(0, DEFAULT_LOD)).toBe(20);
-    expect(allowedErrorM(1000, DEFAULT_LOD)).toBe(50);
-    expect(allowedErrorM(5000, DEFAULT_LOD)).toBe(70);
+  it('grows with distance between the clamps for DEFAULT_LOD', () => {
+    expect(allowedErrorM(0, DEFAULT_LOD)).toBe(10);
+    expect(allowedErrorM(900, DEFAULT_LOD)).toBe(30);
+    expect(allowedErrorM(3000, DEFAULT_LOD)).toBe(60);
+  });
+
+  it('allows high-resolution ~1.5m error near the vehicle for STREAM_LOD', () => {
+    expect(allowedErrorM(0, STREAM_LOD)).toBe(1.5);
+    expect(allowedErrorM(60, STREAM_LOD)).toBe(1.5);
+    expect(allowedErrorM(180, STREAM_LOD)).toBe(3.0);
+    expect(allowedErrorM(480, STREAM_LOD)).toBe(8.0);
+    expect(allowedErrorM(3000, STREAM_LOD)).toBe(40);
+  });
+});
+
+describe('TileCache & cacheKeyFor', () => {
+  it('strips ?session= query parameters from 3D tile URLs', () => {
+    const url1 = 'https://tile.googleapis.com/v1/3dtiles/tiles/tile123.glb?session=abc123xyz';
+    const url2 = 'https://tile.googleapis.com/v1/3dtiles/tiles/tile123.glb?session=differentSession';
+    expect(cacheKeyFor(url1)).toBe('https://tile.googleapis.com/v1/3dtiles/tiles/tile123.glb');
+    expect(cacheKeyFor(url1)).toBe(cacheKeyFor(url2));
+  });
+
+  it('strips API key from satellite maps URL while preserving scale and geometry', () => {
+    const url = satelliteUrl(45.5, -122.6, 'SECRET_KEY', 15, 640, 640, 2);
+    expect(url).toContain('scale=2');
+    const key = cacheKeyFor(url);
+    expect(key).not.toContain('SECRET_KEY');
+    expect(key).toContain('scale=2');
+    expect(key).toContain('center=45.5%2C-122.6');
+  });
+
+  it('stores and retrieves binary buffers in memory', async () => {
+    const fakeUrl = 'https://tile.googleapis.com/test-tile.glb';
+    const data = new Uint8Array([1, 2, 3, 4, 5, 6]).buffer;
+    await tileCache.putBuffer(fakeUrl, data);
+    const retrieved = await tileCache.getBuffer(fakeUrl);
+    expect(retrieved).not.toBeNull();
+    expect(Array.from(new Uint8Array(retrieved!))).toEqual([1, 2, 3, 4, 5, 6]);
+  });
+
+  it('stores and retrieves JSON in memory', async () => {
+    const fakeUrl = 'https://tile.googleapis.com/sub.json?session=XYZ';
+    const json = { root: { geometricError: 4 } };
+    await tileCache.putJson(fakeUrl, json);
+    const retrieved = await tileCache.getJson(fakeUrl);
+    expect(retrieved).toEqual(json);
+  });
+});
+
+describe('satelliteUrl', () => {
+  it('defaults to scale=2 for high resolution output', () => {
+    const url = satelliteUrl(35.68, 139.76, 'KEY', 15, 640, 640);
+    expect(url).toContain('scale=2');
+    expect(url).toContain('maptype=satellite');
+    expect(url).toContain('size=640x640');
   });
 });
 

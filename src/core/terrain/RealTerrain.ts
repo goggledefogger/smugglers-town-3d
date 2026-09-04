@@ -62,7 +62,8 @@ export function buildRealTerrain(
   label: string,
   grid: ElevationGrid,
   mapHalf: number,
-  satelliteCanvas: HTMLCanvasElement | null
+  satelliteCanvas: HTMLCanvasElement | null,
+  center?: { lat: number; lon: number }
 ): TerrainProvider {
   const seg = SEGS, size = mapHalf * 2;
   const data = new Float32Array((seg + 1) * (seg + 1));
@@ -85,6 +86,7 @@ export function buildRealTerrain(
     heightfield: new Heightfield(size, seg, data),
     satelliteCanvas,
     reliefBoost: boost,
-    datumAltM: minH
+    datumAltM: minH,
+    ...(center ? { center } : {})
   };
 }

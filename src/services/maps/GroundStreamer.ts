@@ -1,0 +1,302 @@
+import {
+  Group, Mesh, PlaneGeometry, MeshStandardMaterial, Texture, BufferAttribute,
+  SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter
+} from 'three';
+import { satelliteUrl } from './MapsApi.ts';
+import { tileCache } from '../tiles/TileCache.ts';
+import { logger } from '../../app/log.ts';
+import type { Heightfield } from '../../core/heightfield.ts';
+
+const log = logger('ground-streamer');
+
+export interface GroundStreamerOptions {
+  readonly apiKey: string;
+  readonly center: { lat: number; lon: number };
+  readonly heightfield: Heightfield;
+  readonly anisotropy?: number | undefined;
+  /** High-resolution zoom level (default 18 for ~0.25m/px, 19 for ~0.12m/px). */
+  readonly zoom?: number | undefined;
+  /** Keep radius around player in world units (default 120 units = ~800m). */
+  readonly keepRadiusUnits?: number | undefined;
+  /** Max patches in memory. */
+  readonly maxPatches?: number | undefined;
+}
+
+interface LoadedPatch {
+  readonly key: string;
+  readonly col: number;
+  readonly row: number;
+  readonly mesh: Mesh;
+  readonly centerWx: number;
+  readonly centerWz: number;
+}
+
+/**
+ * Progressively streams high-resolution (Zoom 18, ~0.25m/pixel) Google Maps
+ * satellite ground patches around the player's vehicle, draped directly onto
+ * the terrain heightfield with zero downsampling or texture squishing.
+ */
+export class GroundStreamer {
+  readonly group = new Group();
+  private readonly apiKey: string;
+  private readonly center: { lat: number; lon: number };
+  private readonly heightfield: Heightfield;
+  private readonly anisotropy: number;
+  private readonly zoom: number;
+  private readonly keepRadiusUnits: number;
+  private readonly maxPatches: number;
+
+  private readonly cosLat: number;
+  private readonly spanLatDeg: number;
+  private readonly spanLonDeg: number;
+  private readonly latNorth: number;
+  private readonly lonWest: number;
+
+  private readonly dLon: number;
+  private readonly dLat: number;
+  readonly tileSizeUnits: number;
+
+  private readonly patches = new Map<string, LoadedPatch>();
+  private readonly inFlightKeys = new Set<string>();
+  private inFlight = false;
+  private lastPickMs = 0;
+  private disposed = false;
+
+  constructor(opts: GroundStreamerOptions) {
+    this.apiKey = opts.apiKey;
+    this.center = opts.center;
+    this.heightfield = opts.heightfield;
+    this.anisotropy = opts.anisotropy ?? 1;
+    this.zoom = opts.zoom ?? 18;
+    this.keepRadiusUnits = opts.keepRadiusUnits ?? 120;
+    this.maxPatches = opts.maxPatches ?? 16;
+
+    this.cosLat = Math.max(0.2, Math.cos((this.center.lat * Math.PI) / 180));
+    this.spanLatDeg = 0.05;
+    this.spanLonDeg = this.spanLatDeg / this.cosLat;
+    this.latNorth = this.center.lat + this.spanLatDeg / 2;
+    this.lonWest = this.center.lon - this.spanLonDeg / 2;
+
+    // Google Static Maps 640px tile spans in degrees at target zoom:
+    // 360 * 640 / (256 * 2^zoom) = 900 / 2^zoom
+    this.dLon = 900 / Math.pow(2, this.zoom);
+    this.dLat = this.dLon * this.cosLat;
+
+    // Tile size in world units (total map is 840 world units across)
+    this.tileSizeUnits = (this.dLon / this.spanLonDeg) * 840;
+  }
+
+  get patchCount(): number {
+    return this.patches.size;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    for (const p of this.patches.values()) {
+      this.group.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      const mat = p.mesh.material as MeshStandardMaterial;
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    this.patches.clear();
+    this.inFlightKeys.clear();
+    this.group.clear();
+  }
+
+  /** Re-sample vertex heights if heightfield is updated (e.g. 3D tiles datum calibration). */
+  refresh(): void {
+    for (const p of this.patches.values()) {
+      const pos = p.mesh.geometry.attributes.position as BufferAttribute;
+      for (let i = 0; i < pos.count; i++) {
+        const lx = pos.getX(i);
+        const lz = pos.getZ(i);
+        const wx = p.centerWx + lx;
+        const wz = p.centerWz + lz;
+        pos.setY(i, this.heightfield.sample(wx, wz) + 0.05);
+      }
+      pos.needsUpdate = true;
+      p.mesh.geometry.computeVertexNormals();
+    }
+  }
+
+  /**
+   * Called with the vehicle world position (or showroom camera position).
+   * Picks the closest un-fetched high-res patch under/near the player and streams it.
+   */
+  update(playerWorld: { x: number; z: number }, nowMs: number): void {
+    if (this.disposed) return;
+
+    // Evict patches farther than keepRadiusUnits
+    for (const [key, p] of this.patches) {
+      const dist = Math.hypot(p.centerWx - playerWorld.x, p.centerWz - playerWorld.z);
+      if (dist > this.keepRadiusUnits) {
+        this.group.remove(p.mesh);
+        p.mesh.geometry.dispose();
+        const mat = p.mesh.material as MeshStandardMaterial;
+        mat.map?.dispose();
+        mat.dispose();
+        this.patches.delete(key);
+      }
+    }
+
+    if (this.inFlight || nowMs - this.lastPickMs < 300) return;
+    this.lastPickMs = nowMs;
+
+    const centerCol = Math.floor((playerWorld.x + 420) / this.tileSizeUnits);
+    const centerRow = Math.floor((playerWorld.z + 420) / this.tileSizeUnits);
+
+    let bestKey: string | null = null;
+    let bestDist = Infinity;
+    let bestCol = 0, bestRow = 0;
+
+    // Check a 3x3 ring of neighborhood patches around the player
+    for (let dr = -1; dr <= 1; dr++) {
+      for (let dc = -1; dc <= 1; dc++) {
+        const c = centerCol + dc;
+        const r = centerRow + dr;
+        const key = `${this.zoom}:${c}:${r}`;
+        if (this.patches.has(key) || this.inFlightKeys.has(key)) continue;
+
+        const cellWx = (c + 0.5) * this.tileSizeUnits - 420;
+        const cellWz = (r + 0.5) * this.tileSizeUnits - 420;
+        if (cellWx < -420 || cellWx > 420 || cellWz < -420 || cellWz > 420) continue;
+
+        const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
+        if (dist < bestDist) {
+          bestDist = dist;
+          bestKey = key;
+          bestCol = c;
+          bestRow = r;
+        }
+      }
+    }
+
+    if (!bestKey || this.patches.size >= this.maxPatches) return;
+
+    this.inFlight = true;
+    const tileKey = bestKey;
+    const col = bestCol;
+    const row = bestRow;
+    this.inFlightKeys.add(tileKey);
+
+    const cellLon = this.lonWest + (col + 0.5) * this.dLon;
+    const cellLat = this.latNorth - (row + 0.5) * this.dLat;
+
+    this.createPatch(tileKey, col, row, cellLat, cellLon)
+      .catch(err => {
+        log.warn('ground patch failed', { key: tileKey, err });
+      })
+      .finally(() => {
+        this.inFlight = false;
+        this.inFlightKeys.delete(tileKey);
+      });
+  }
+
+  private async createPatch(
+    key: string, col: number, row: number, lat: number, lon: number
+  ): Promise<void> {
+    const url = satelliteUrl(lat, lon, this.apiKey, this.zoom, 640, 640, 2);
+
+    let img: HTMLImageElement | null = null;
+    const cachedBuf = await tileCache.getBuffer(url);
+
+    if (cachedBuf) {
+      img = await this.decodeBlob(new Blob([cachedBuf]));
+    } else {
+      if (typeof Image === 'undefined') return;
+
+      img = await new Promise<HTMLImageElement>((resolve, reject) => {
+        const image = new Image();
+        image.crossOrigin = 'anonymous';
+        const timer = setTimeout(() => {
+          image.src = '';
+          reject(new Error('patch fetch timeout'));
+        }, 8000);
+        image.onload = () => {
+          clearTimeout(timer);
+          resolve(image);
+        };
+        image.onerror = () => {
+          clearTimeout(timer);
+          reject(new Error('patch image error'));
+        };
+        image.src = url;
+      });
+
+      // Cache asynchronously
+      fetch(url)
+        .then(r => r.ok ? r.arrayBuffer() : null)
+        .then(buf => { if (buf) void tileCache.putBuffer(url, buf, 'image/jpeg'); })
+        .catch(() => {});
+    }
+
+    if (this.disposed || !img) return;
+
+    const tex = new Texture(img);
+    tex.colorSpace = SRGBColorSpace;
+    tex.wrapS = ClampToEdgeWrapping;
+    tex.wrapT = ClampToEdgeWrapping;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.magFilter = LinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = this.anisotropy;
+    tex.needsUpdate = true;
+
+    const cellWx = (col + 0.5) * this.tileSizeUnits - 420;
+    const cellWz = (row + 0.5) * this.tileSizeUnits - 420;
+
+    const segs = 16;
+    const geo = new PlaneGeometry(this.tileSizeUnits, this.tileSizeUnits, segs, segs);
+    geo.rotateX(-Math.PI / 2);
+    const pos = geo.attributes.position as BufferAttribute;
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i);
+      const lz = pos.getZ(i);
+      const wx = cellWx + lx;
+      const wz = cellWz + lz;
+      // Drape onto heightfield with a tiny 0.05 units (~30cm) lift + polygonOffset to avoid z-fighting
+      pos.setY(i, this.heightfield.sample(wx, wz) + 0.05);
+    }
+    pos.needsUpdate = true;
+    geo.computeVertexNormals();
+
+    const mat = new MeshStandardMaterial({
+      map: tex,
+      roughness: 0.94,
+      metalness: 0,
+      polygonOffset: true,
+      polygonOffsetFactor: -1,
+      polygonOffsetUnits: -1
+    });
+
+    const mesh = new Mesh(geo, mat);
+    mesh.position.set(cellWx, 0, cellWz);
+
+    this.group.add(mesh);
+    this.patches.set(key, {
+      key,
+      col,
+      row,
+      mesh,
+      centerWx: cellWx,
+      centerWz: cellWz
+    });
+  }
+
+  private decodeBlob(blob: Blob): Promise<HTMLImageElement> {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      const objUrl = URL.createObjectURL(blob);
+      img.onload = () => {
+        URL.revokeObjectURL(objUrl);
+        resolve(img);
+      };
+      img.onerror = () => {
+        URL.revokeObjectURL(objUrl);
+        reject(new Error('blob decode failed'));
+      };
+      img.src = objUrl;
+    });
+  }
+}

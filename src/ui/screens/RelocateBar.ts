@@ -22,7 +22,7 @@ export class RelocateBar extends LitElement {
       top: max(var(--space-md), env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%);
-      z-index: 20;
+      z-index: 50;
       display: flex;
       /* nowrap on the inline row: width:max-content on a *wrapping* flex
          container resolves narrower than the row it contains, so the fields
@@ -115,6 +115,10 @@ export class RelocateBar extends LitElement {
   private submit(): void {
     const q = (this.renderRoot.querySelector('#q') as HTMLInputElement).value.trim();
     const key = (this.renderRoot.querySelector('#key') as HTMLInputElement).value.trim();
+    if (key.startsWith('4/')) {
+      this.status = 'Key starts with "4/" — this is an OAuth authorization code, not a Google API Key (starts with AIzaSy).';
+      return;
+    }
     if (q && this.onSearch) this.onSearch(q, key);
   }
 

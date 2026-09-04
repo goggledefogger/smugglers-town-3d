@@ -19,7 +19,10 @@
  * - A tile is one merged photogrammetry mesh (ground + buildings + trees),
  *   ~5k triangles, 100–450 KB.
  */
-import { Matrix4, Vector3, Group, type Object3D, type Mesh, type Material, type Texture } from 'three';
+import {
+  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
+  type Object3D, type Mesh, type Material, type Texture
+} from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { tileTransformChain } from '../../core/geo/projection.ts';
 import { latLonToEcef, WORLD_M_PER_M, type Ecef, type GeoOrigin } from '../../core/geo/ecef.ts';
@@ -27,6 +30,7 @@ import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
+import { tileCache } from './TileCache.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP,
   type Grid, type TileRaster
@@ -55,13 +59,12 @@ export interface LodPolicy {
 
 /**
  * Initial load, relative to the match center. Google's levels carry errors
- * of 16.05, 32.1, 64.2 m (525957 m halved per level), so the clamps sit just
- * above them. 16 m tiles within 640 m, 32 m out to 1.3 km, 64 m beyond:
- * ~85 tiles, ~20 MB for a downtown.
+ * of 16.05, 32.1, 64.2 m (525957 m halved per level). We accept ~16m tiles
+ * near center so the initial load is quick (~1-2s) and light.
  */
-export const DEFAULT_LOD: LodPolicy = { minErrorM: 20, maxErrorM: 70, errorPerMeter: 1 / 20 };
-/** Streaming, relative to the player: 8 m tiles within 360 m, 16 m to 640 m, 32 m to 1.3 km. */
-export const STREAM_LOD: LodPolicy = { minErrorM: 9, maxErrorM: 70, errorPerMeter: 1 / 40 };
+export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMeter: 1 / 30 };
+/** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
+export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 };
 
 /** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
@@ -69,18 +72,26 @@ const LOAD_RADIUS_M = 4000;
 const MAX_INITIAL_TILES = 150;
 /**
  * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
- * ponytail: no coarsening; evict the farthest tiles first if memory bites
+ * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
-const MAX_TILES = 250;
+const MAX_TILES = 350;
+/** Tiles beyond this distance (well outside the 700m fog horizon) can be evicted under budget pressure. */
+const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
-/** Before play, tiles this close (real m) to the start are refined to the streaming LOD... */
-const CORE_RADIUS_M = 600;
+/** Before play, tiles within visible range of the start are refined to the streaming LOD. */
+const CORE_RADIUS_M = 350;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 8;
+const CORE_REFINE_BATCH = 4;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
 const GLTF_TO_ECEF = new Matrix4().makeRotationX(Math.PI / 2);
+
+function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
 
 /**
  * Distance from a point to a 3D Tiles OBB (center + 3 half-axis vectors).
@@ -143,19 +154,23 @@ function noteFailure(kind: string, data: unknown): void {
 }
 
 export async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
-  const res = await fetch(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
+  const res = await fetchWithTimeout(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
   if (!res.ok) throw new Error('3D tiles root HTTP ' + res.status);
   return res.json();
 }
 
 async function fetchSubTileset(url: string, apiKey: string): Promise<TilesetRoot | null> {
   try {
-    const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
+    const cached = await tileCache.getJson<TilesetRoot>(url);
+    if (cached) return cached;
+    const res = await fetchWithTimeout(url, { headers: { 'X-Goog-Api-Key': apiKey } });
     if (!res.ok) {
       noteFailure('sub-tileset http', { status: res.status, path: uriPath(url).slice(-40) });
       return null;
     }
-    return await res.json();
+    const data = await res.json();
+    await tileCache.putJson(url, data);
+    return data;
   } catch (e) {
     noteFailure('sub-tileset threw', e);
     return null;
@@ -264,26 +279,34 @@ async function loadTileGlb(
   anisotropy: number
 ): Promise<Group | null> {
   const url = withSession(fullUrl(tile.node.content!.uri!), tile.session);
-  // GLTFLoader's own fetch can't set headers, so fetch the bytes ourselves
-  let buf: ArrayBuffer;
-  try {
-    const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
-    if (!res.ok) {
-      noteFailure('tile http', { status: res.status, path: uriPath(url).slice(-40) });
+  // Check TileCache first: avoid network roundtrips and billing sessions for cached geometry
+  let buf: ArrayBuffer | null = await tileCache.getBuffer(url);
+  if (!buf) {
+    try {
+      const res = await fetchWithTimeout(url, { headers: { 'X-Goog-Api-Key': apiKey } });
+      if (!res.ok) {
+        noteFailure('tile http', { status: res.status, path: uriPath(url).slice(-40) });
+        return null;
+      }
+      buf = await res.arrayBuffer();
+      await tileCache.putBuffer(url, buf, 'model/gltf-binary');
+    } catch (e) {
+      noteFailure('tile threw', e);
       return null;
     }
-    buf = await res.arrayBuffer();
-  } catch (e) {
-    noteFailure('tile threw', e);
-    return null;
   }
   const root = (await gltfLoader.parseAsync(buf, '')).scene;
   root.matrixAutoUpdate = false;
   root.matrix.copy(placement);
   root.matrixWorldNeedsUpdate = true;
-  // the ground is seen at grazing angles from the chase cam; without
-  // anisotropy the mip chain smears it into mush
-  forEachMap(root, map => { map.anisotropy = anisotropy; });
+  // Enforce trilinear mipmapping + anisotropy so grazing ground and facades stay razor sharp
+  forEachMap(root, map => {
+    map.anisotropy = anisotropy;
+    map.minFilter = LinearMipmapLinearFilter;
+    map.magFilter = LinearFilter;
+    map.generateMipmaps = true;
+    map.needsUpdate = true;
+  });
   return root;
 }
 
@@ -367,16 +390,17 @@ export class TileStreamer {
   }
 
   /**
-   * Refine everything near the start to the streaming LOD before the match
-   * begins. The first load is coarse (20–70 m error: blocks are blobs,
-   * streets are gone), and a ground and a set of colliders taken from it
-   * put cars where buildings turn out to be once the fine tiles arrive.
+   * Refine tiles near the start to a crisp core before the match begins.
+   * Capped at 2 quick rounds with ~10m error threshold so initial load completes
+   * in ~1-2s; the streaming loop (update) takes over and refines down to 1.5m
+   * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    for (let round = 0; round < 12 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = 10;
+    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
-          && (t.node.geometricError ?? 0) > this.lod.minErrorM)
+          && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
         .sort((a, b) => nodeDistM(a.node, this.ecef0) - nodeDistM(b.node, this.ecef0))
         .slice(0, CORE_REFINE_BATCH);
       if (coarse.length === 0) return;
@@ -415,9 +439,28 @@ export class TileStreamer {
    * refinement every 250 ms and never runs two at once.
    */
   update(playerWorld: Vector3, nowMs: number): void {
-    if (this.inFlight || nowMs - this.lastPickMs < 250 || this.tiles.length >= MAX_TILES) return;
+    if (this.inFlight || nowMs - this.lastPickMs < 250) return;
     this.lastPickMs = nowMs;
     const p = _ecef.copy(playerWorld).applyMatrix4(this.worldToEcef);
+
+    // If approaching tile capacity, evict the farthest tile beyond the fog horizon
+    if (this.tiles.length >= MAX_TILES) {
+      let farthest: LoadedTile | null = null;
+      let farthestD = 0;
+      for (const t of this.tiles) {
+        const d = nodeDistM(t.node, p);
+        if (d > farthestD) {
+          farthestD = d;
+          farthest = t;
+        }
+      }
+      if (farthest && farthestD > FOG_HORIZON_M) {
+        this.remove(farthest);
+      } else {
+        return;
+      }
+    }
+
     let best: LoadedTile | null = null;
     let bestD = Infinity;
     for (const t of this.tiles) {

@@ -33,6 +33,7 @@ import { logger } from './app/log.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
+import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
@@ -119,6 +120,7 @@ const minimapEl = document.querySelector('sr-minimap') as Minimap;
 const showroom = new Showroom(renderer.scene, renderer.camera, () => world.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
+let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
 let groundRefreshAt = 0;
 let groundDirty = false;
@@ -148,6 +150,11 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 }
 
 function clearTiles(): void {
+  if (groundStreamer) {
+    renderer.scene.remove(groundStreamer.group);
+    groundStreamer.dispose();
+    groundStreamer = null;
+  }
   if (!tiles) return;
   renderer.scene.remove(tiles.group);
   tiles.dispose();
@@ -181,7 +188,7 @@ log.info('boot', {
 prepareTerrain(desertTerrain);
 minimapEl.setTerrain(desertTerrain.heightfield, config.world.mapHalf);
 hudEl.hidden = true;
-relocateBarEl.hidden = true;
+relocateBarEl.hidden = false;
 pickups.setVisible(false);
 
 // ---- input ----
@@ -304,10 +311,13 @@ async function openOnline(type: number): Promise<void> {
         if (!apiKey) throw new Error('no-maps-key');
         loaderEl.hidden = false;
         try {
-          const { terrain: loaded, tiles: newTiles } = await relocateTo(
+          const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocateTo(
             map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy
           );
+          clearTiles();
           tiles = newTiles;
+          groundStreamer = newGround ?? null;
+          if (groundStreamer) renderer.scene.add(groundStreamer.group);
           if (tiles) renderer.scene.add(tiles.group);
           // one ground for everything, cut from the tiles — same as single player
           return tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
@@ -373,7 +383,7 @@ relocateBarEl.onSearch = async (q, key) => {
   relocateBarEl.status = '';
   loaderEl.hidden = false;
   try {
-    const { terrain: loaded, tiles: newTiles } = await relocate({
+    const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocate({
       query: q, apiKey: key, anisotropy: renderer.maxAnisotropy,
       onProgress: (msg) => { loaderEl.message = msg; }
     });
@@ -384,6 +394,8 @@ relocateBarEl.onSearch = async (q, key) => {
       : loaded;
     clearTiles();
     tiles = newTiles;
+    groundStreamer = newGround ?? null;
+    if (groundStreamer) renderer.scene.add(groundStreamer.group);
     if (tiles) renderer.scene.add(tiles.group);
     swapTerrainMesh(terrain);
     startMatch(terrain);
@@ -453,8 +465,12 @@ function frame(now: number): void {
         groundDirty = false;
         game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
         terrainMesh.refresh(game.terrainProvider.heightfield);
+        groundStreamer?.refresh();
         minimapEl.setTerrain(game.terrainProvider.heightfield, config.world.mapHalf);
       }
+    }
+    if (groundStreamer && player) {
+      groundStreamer.update(player.pos, now);
     }
     for (const v of vehicleViews) v.sync(dt, world.alpha);
     // each carried crate rides its carrier's interpolated pose, not the body,
@@ -466,6 +482,8 @@ function frame(now: number): void {
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
   } else if (introEl.isConnected) {
     showroom.update(dt, window.innerWidth, window.innerHeight);
+    if (tiles) tiles.update(renderer.camera.position, now);
+    if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
   }
   renderer.render();
   requestAnimationFrame(frame);

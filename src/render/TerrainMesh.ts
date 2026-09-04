@@ -4,7 +4,7 @@
  * as an sRGB texture with mipmaps + anisotropy for crisp detail.
  */
 import {
-  Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, Texture,
+  Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, CanvasTexture,
   SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter, Color,
   type BufferAttribute as BufferAttributeT
 } from 'three';
@@ -13,9 +13,18 @@ import type { Heightfield } from '../core/heightfield.ts';
 
 export class TerrainMesh {
   private _mesh: Mesh | null = null;
+  private _texture: CanvasTexture | null = null;
 
   get mesh(): Mesh | null {
     return this._mesh;
+  }
+
+  get texture(): CanvasTexture | null {
+    return this._texture;
+  }
+
+  markTextureNeedsUpdate(): void {
+    if (this._texture) this._texture.needsUpdate = true;
   }
 
   build(provider: TerrainProvider, anisotropy: number): Mesh {
@@ -31,7 +40,7 @@ export class TerrainMesh {
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
       }
-      const tex = new Texture(provider.satelliteCanvas);
+      const tex = new CanvasTexture(provider.satelliteCanvas);
       tex.colorSpace = SRGBColorSpace;
       tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
       tex.minFilter = LinearMipmapLinearFilter;
@@ -39,6 +48,7 @@ export class TerrainMesh {
       tex.generateMipmaps = true;
       tex.anisotropy = anisotropy;
       tex.needsUpdate = true;
+      this._texture = tex;
       const mat = new MeshStandardMaterial({ map: tex, roughness: 0.96, metalness: 0 });
       this._mesh = new Mesh(geo, mat);
     } else {
@@ -90,5 +100,6 @@ export class TerrainMesh {
     mat.map?.dispose();
     mat.dispose();
     this._mesh = null;
+    this._texture = null;
   }
 }
