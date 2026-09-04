@@ -175,6 +175,7 @@ function applyColliders(): void {
     tiles?.activeGrid,
     (x, z) => world.terrainProvider.heightfield.sample(x, z)
   );
+  terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2);
 }
 
 function rebuildViews(): void {

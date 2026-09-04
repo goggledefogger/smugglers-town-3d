@@ -536,16 +536,16 @@ export class TileStreamer {
     return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
   }
 
-  /** Shift every tile so the tile ground sits just under the satellite drape (see tileGroundOffset). */
+  /** Shift every tile so the tile ground sits cleanly flush or above the terrain underlay (see tileGroundOffset). */
   private calibrateGround(): void {
     const offset = tileGroundOffset(this.tiles.map(t => t.raster), this.grid, this.terrainTop);
     if (offset === null) return;
-    this.group.position.y -= offset + TILE_GROUND_GAP;
+    this.group.position.y -= (offset - TILE_GROUND_GAP);
     this.group.updateMatrixWorld(true);
     for (const t of this.tiles) t.raster = rasterizeTile(t.group, this.grid);
     this.dirty = true;
     log.info('ground datum shifted', {
-      metres: Number((-(offset + TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
+      metres: Number((-(offset - TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
     });
   }
 

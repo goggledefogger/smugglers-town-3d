@@ -103,7 +103,7 @@ export class GroundStreamer {
         const lz = pos.getZ(i);
         const wx = p.centerWx + lx;
         const wz = p.centerWz + lz;
-        pos.setY(i, this.heightfield.sample(wx, wz) + 0.05);
+        pos.setY(i, this.heightfield.sample(wx, wz));
       }
       pos.needsUpdate = true;
       p.mesh.geometry.computeVertexNormals();
@@ -243,8 +243,9 @@ export class GroundStreamer {
       const lz = pos.getZ(i);
       const wx = cellWx + lx;
       const wz = cellWz + lz;
-      // Drape onto heightfield with a tiny 0.05 units (~30cm) lift + polygonOffset to avoid z-fighting
-      pos.setY(i, this.heightfield.sample(wx, wz) + 0.05);
+      // Drape onto heightfield cleanly; polygonOffset ensures GroundStreamer sits
+      // above base TerrainMesh (offset 3) while 3D tiles (offset 0) cleanly win depth
+      pos.setY(i, this.heightfield.sample(wx, wz));
     }
     pos.needsUpdate = true;
     geo.computeVertexNormals();
@@ -254,8 +255,8 @@ export class GroundStreamer {
       roughness: 0.94,
       metalness: 0,
       polygonOffset: true,
-      polygonOffsetFactor: -1,
-      polygonOffsetUnits: -1
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: 2
     });
 
     const mesh = new Mesh(geo, mat);

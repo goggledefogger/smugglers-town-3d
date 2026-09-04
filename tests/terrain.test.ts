@@ -69,3 +69,85 @@ describe('PropScatter', () => {
     expect(ps.colliders.length).toBe(0);
   });
 });
+
+describe('neutralizeBuildingFootprints', () => {
+  it('safely handles empty colliders or node environment without canvas', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const tm = new TerrainMesh();
+    // Empty colliders
+    expect(() => tm.neutralizeBuildingFootprints([], 5600)).not.toThrow();
+    tm.dispose();
+  });
+
+  it('neutralizes building footprints and updates texture when canvas is present', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const { Vector3 } = await import('three');
+
+    const tm = new TerrainMesh();
+    const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
+
+    // Create a mock canvas with a 2D context
+    const width = 100, height = 100;
+    const pixelData = new Uint8ClampedArray(width * height * 4);
+    // Fill with ambient ground color (r: 100, g: 120, b: 90)
+    for (let i = 0; i < pixelData.length; i += 4) {
+      pixelData[i] = 100;
+      pixelData[i + 1] = 120;
+      pixelData[i + 2] = 90;
+      pixelData[i + 3] = 255;
+    }
+
+    let putImageDataCalled = false;
+    const mockCtx = {
+      getImageData: () => ({ data: pixelData, width, height }),
+      putImageData: () => { putImageDataCalled = true; }
+    };
+
+    class MockHTMLCanvasElement {
+      width = width;
+      height = height;
+      getContext() { return mockCtx; }
+    }
+
+    // Set global HTMLCanvasElement for the test
+    const origCanvas = (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement;
+    (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement = MockHTMLCanvasElement;
+
+    try {
+      const mockCanvas = new MockHTMLCanvasElement() as unknown as HTMLCanvasElement;
+      const terrain = {
+        label: 'test',
+        isReal: true,
+        heightfield: hf,
+        satelliteCanvas: mockCanvas,
+        reliefBoost: 1,
+        datumAltM: 0
+      };
+
+      tm.build(terrain, 1);
+      expect(tm.texture).toBeDefined();
+
+      const mockColliders = [
+        {
+          min: new Vector3(-10, 0, -10),
+          max: new Vector3(10, 20, 10)
+        }
+      ];
+
+      const initialVersion = tm.texture?.version ?? 0;
+      tm.neutralizeBuildingFootprints(mockColliders, 100);
+      expect(putImageDataCalled).toBe(true);
+      expect(tm.texture?.version).toBeGreaterThan(initialVersion);
+
+      // Re-calling with identical count skips redundant processing
+      putImageDataCalled = false;
+      tm.neutralizeBuildingFootprints(mockColliders, 100);
+      expect(putImageDataCalled).toBe(false);
+    } finally {
+      (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement = origCanvas;
+      tm.dispose();
+    }
+  });
+});
+

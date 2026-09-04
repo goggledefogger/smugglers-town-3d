@@ -39,10 +39,10 @@ const GROUND_K = 6;
 const BUILDING_RISE_M = 8;
 /**
  * Height gap between the physics ground and photogrammetry surface.
- * Kept at 2cm so vehicle tires contact the pavement directly rather than hovering,
- * and the continuous 2D terrain mesh stays cleanly underneath the 3D tiles.
+ * Kept at 5cm so 3D tile pavement sits cleanly above the continuous terrain underlay
+ * while vehicle tires contact the pavement directly rather than hovering.
  */
-export const TILE_GROUND_GAP = 0.02;
+export const TILE_GROUND_GAP = 0.05;
 
 export interface Grid {
   readonly cell: number;
@@ -346,7 +346,7 @@ export function tileGroundOffset(
   }
   if (diffs.length < 100) return null;
   diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length * 0.3)]!;
+  return diffs[Math.floor(diffs.length * 0.15)]!;
 }
 
 export function collidersFromRasters(
