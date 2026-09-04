@@ -25,9 +25,9 @@ export interface ElevationGrid {
 
 /** Relief exaggeration for a real elevation range (meters). */
 export function reliefBoostFor(rangeM: number): number {
-  if (rangeM < 80) return 2.2;
-  if (rangeM < 300) return 1.5;
-  if (rangeM < 1000) return 1.2;
+  if (rangeM < 80) return 1.3;
+  if (rangeM < 300) return 1.2;
+  if (rangeM < 1000) return 1.1;
   return 1.0;
 }
 

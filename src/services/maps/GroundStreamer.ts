@@ -5,6 +5,7 @@ import {
 import { satelliteUrl } from './MapsApi.ts';
 import { tileCache } from '../tiles/TileCache.ts';
 import { logger } from '../../app/log.ts';
+import { EARTH_RADIUS_M, WORLD_M_PER_M } from '../../core/geo/ecef.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
 
 const log = logger('ground-streamer');
@@ -16,7 +17,7 @@ export interface GroundStreamerOptions {
   readonly anisotropy?: number | undefined;
   /** High-resolution zoom level (default 18 for ~0.25m/px, 19 for ~0.12m/px). */
   readonly zoom?: number | undefined;
-  /** Keep radius around player in world units (default 120 units = ~800m). */
+  /** Keep radius around player in world units (default 800 units = ~800m). */
   readonly keepRadiusUnits?: number | undefined;
   /** Max patches in memory. */
   readonly maxPatches?: number | undefined;
@@ -47,13 +48,6 @@ export class GroundStreamer {
   private readonly maxPatches: number;
 
   private readonly cosLat: number;
-  private readonly spanLatDeg: number;
-  private readonly spanLonDeg: number;
-  private readonly latNorth: number;
-  private readonly lonWest: number;
-
-  private readonly dLon: number;
-  private readonly dLat: number;
   readonly tileSizeUnits: number;
 
   private readonly patches = new Map<string, LoadedPatch>();
@@ -68,22 +62,14 @@ export class GroundStreamer {
     this.heightfield = opts.heightfield;
     this.anisotropy = opts.anisotropy ?? 1;
     this.zoom = opts.zoom ?? 18;
-    this.keepRadiusUnits = opts.keepRadiusUnits ?? 120;
+    this.keepRadiusUnits = opts.keepRadiusUnits ?? 800;
     this.maxPatches = opts.maxPatches ?? 16;
 
     this.cosLat = Math.max(0.2, Math.cos((this.center.lat * Math.PI) / 180));
-    this.spanLatDeg = 0.05;
-    this.spanLonDeg = this.spanLatDeg / this.cosLat;
-    this.latNorth = this.center.lat + this.spanLatDeg / 2;
-    this.lonWest = this.center.lon - this.spanLonDeg / 2;
-
-    // Google Static Maps 640px tile spans in degrees at target zoom:
-    // 360 * 640 / (256 * 2^zoom) = 900 / 2^zoom
-    this.dLon = 900 / Math.pow(2, this.zoom);
-    this.dLat = this.dLon * this.cosLat;
-
-    // Tile size in world units (total map is 840 world units across)
-    this.tileSizeUnits = (this.dLon / this.spanLonDeg) * 840;
+    // Physical tile size on ground in meters:
+    // In Web Mercator, a 640px image at zoom Z covers:
+    // 640 * (2 * PI * EARTH_RADIUS_M * cosLat) / (256 * 2^zoom) = 5 * PI * EARTH_RADIUS_M * cosLat / 2^zoom
+    this.tileSizeUnits = (5 * Math.PI * EARTH_RADIUS_M * this.cosLat) / Math.pow(2, this.zoom) * WORLD_M_PER_M;
   }
 
   get patchCount(): number {
@@ -143,12 +129,14 @@ export class GroundStreamer {
     if (this.inFlight || nowMs - this.lastPickMs < 300) return;
     this.lastPickMs = nowMs;
 
-    const centerCol = Math.floor((playerWorld.x + 420) / this.tileSizeUnits);
-    const centerRow = Math.floor((playerWorld.z + 420) / this.tileSizeUnits);
+    const half = this.heightfield.size / 2;
+    const centerCol = Math.round(playerWorld.x / this.tileSizeUnits);
+    const centerRow = Math.round(playerWorld.z / this.tileSizeUnits);
 
     let bestKey: string | null = null;
     let bestDist = Infinity;
     let bestCol = 0, bestRow = 0;
+    let bestWx = 0, bestWz = 0;
 
     // Check a 3x3 ring of neighborhood patches around the player
     for (let dr = -1; dr <= 1; dr++) {
@@ -158,9 +146,9 @@ export class GroundStreamer {
         const key = `${this.zoom}:${c}:${r}`;
         if (this.patches.has(key) || this.inFlightKeys.has(key)) continue;
 
-        const cellWx = (c + 0.5) * this.tileSizeUnits - 420;
-        const cellWz = (r + 0.5) * this.tileSizeUnits - 420;
-        if (cellWx < -420 || cellWx > 420 || cellWz < -420 || cellWz > 420) continue;
+        const cellWx = c * this.tileSizeUnits;
+        const cellWz = r * this.tileSizeUnits;
+        if (cellWx < -half || cellWx > half || cellWz < -half || cellWz > half) continue;
 
         const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
         if (dist < bestDist) {
@@ -168,6 +156,8 @@ export class GroundStreamer {
           bestKey = key;
           bestCol = c;
           bestRow = r;
+          bestWx = cellWx;
+          bestWz = cellWz;
         }
       }
     }
@@ -178,12 +168,11 @@ export class GroundStreamer {
     const tileKey = bestKey;
     const col = bestCol;
     const row = bestRow;
+    const wx = bestWx;
+    const wz = bestWz;
     this.inFlightKeys.add(tileKey);
 
-    const cellLon = this.lonWest + (col + 0.5) * this.dLon;
-    const cellLat = this.latNorth - (row + 0.5) * this.dLat;
-
-    this.createPatch(tileKey, col, row, cellLat, cellLon)
+    this.createPatch(tileKey, col, row, wx, wz)
       .catch(err => {
         log.warn('ground patch failed', { key: tileKey, err });
       })
@@ -194,41 +183,36 @@ export class GroundStreamer {
   }
 
   private async createPatch(
-    key: string, col: number, row: number, lat: number, lon: number
+    key: string, col: number, row: number, cellWx: number, cellWz: number
   ): Promise<void> {
+    const lon = this.center.lon + (cellWx / (EARTH_RADIUS_M * this.cosLat * WORLD_M_PER_M)) * (180 / Math.PI);
+    const lat = this.center.lat - (cellWz / (EARTH_RADIUS_M * WORLD_M_PER_M)) * (180 / Math.PI);
     const url = satelliteUrl(lat, lon, this.apiKey, this.zoom, 640, 640, 2);
 
+    let buf: ArrayBuffer | null = await tileCache.getBuffer(url);
+    if (!buf) {
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const res = await fetch(url, { signal: controller.signal }).finally(() => clearTimeout(timer));
+        if (res.ok) {
+          buf = await res.arrayBuffer();
+          await tileCache.putBuffer(url, buf, 'image/jpeg');
+        }
+      } catch (err) {
+        log.debug('patch fetch error', err);
+        return;
+      }
+    }
+
+    if (this.disposed || !buf) return;
+    if (typeof Image === 'undefined') return;
+
     let img: HTMLImageElement | null = null;
-    const cachedBuf = await tileCache.getBuffer(url);
-
-    if (cachedBuf) {
-      img = await this.decodeBlob(new Blob([cachedBuf]));
-    } else {
-      if (typeof Image === 'undefined') return;
-
-      img = await new Promise<HTMLImageElement>((resolve, reject) => {
-        const image = new Image();
-        image.crossOrigin = 'anonymous';
-        const timer = setTimeout(() => {
-          image.src = '';
-          reject(new Error('patch fetch timeout'));
-        }, 8000);
-        image.onload = () => {
-          clearTimeout(timer);
-          resolve(image);
-        };
-        image.onerror = () => {
-          clearTimeout(timer);
-          reject(new Error('patch image error'));
-        };
-        image.src = url;
-      });
-
-      // Cache asynchronously
-      fetch(url)
-        .then(r => r.ok ? r.arrayBuffer() : null)
-        .then(buf => { if (buf) void tileCache.putBuffer(url, buf, 'image/jpeg'); })
-        .catch(() => {});
+    try {
+      img = await this.decodeBlob(new Blob([buf]));
+    } catch {
+      return;
     }
 
     if (this.disposed || !img) return;
@@ -242,9 +226,6 @@ export class GroundStreamer {
     tex.generateMipmaps = true;
     tex.anisotropy = this.anisotropy;
     tex.needsUpdate = true;
-
-    const cellWx = (col + 0.5) * this.tileSizeUnits - 420;
-    const cellWz = (row + 0.5) * this.tileSizeUnits - 420;
 
     const segs = 16;
     const geo = new PlaneGeometry(this.tileSizeUnits, this.tileSizeUnits, segs, segs);

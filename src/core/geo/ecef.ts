@@ -6,7 +6,7 @@
  * 1 real meter = `WORLD_M_PER_M` world units, so terrain and streamed building
  * geometry share one true-to-scale mapping.
  */
-export const WORLD_M_PER_M = 0.15;
+export const WORLD_M_PER_M = 1;
 
 /** WGS84 semi-major axis (equatorial radius), meters */
 export const EARTH_RADIUS_M = 6_378_137;

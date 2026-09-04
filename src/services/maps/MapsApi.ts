@@ -101,8 +101,8 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
   const all: google.maps.LatLng[] = [];
   for (let j = 0; j < N; j++) {
     for (let i = 0; i < N; i++) {
-      const la = lat - dlat + (j / (N - 1)) * spanDeg;
-      const lo = lon - dlon + (i / (N - 1)) * spanDeg * 2 * cosLat;
+      const la = lat + dlat - (j / (N - 1)) * spanDeg;
+      const lo = lon - dlon + (i / (N - 1)) * (dlon * 2);
       all.push(new google.maps.LatLng(la, lo));
     }
   }

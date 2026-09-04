@@ -3,7 +3,7 @@ import { GroundStreamer } from '../src/services/maps/GroundStreamer.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 
 function createMockHeightfield(): Heightfield {
-  return new Heightfield(840, 16, new Float32Array(17 * 17));
+  return new Heightfield(5600, 16, new Float32Array(17 * 17));
 }
 
 describe('GroundStreamer', () => {
@@ -20,9 +20,9 @@ describe('GroundStreamer', () => {
 
     expect(streamer.patchCount).toBe(0);
     expect(streamer.group).toBeDefined();
-    // For Phoenix (lat 33.4484), tile size in world units is ~48.1 units
-    expect(streamer.tileSizeUnits).toBeGreaterThan(45);
-    expect(streamer.tileSizeUnits).toBeLessThan(55);
+    // For Phoenix (lat 33.4484), 640px at zoom 18 is ~318 meters
+    expect(streamer.tileSizeUnits).toBeGreaterThan(300);
+    expect(streamer.tileSizeUnits).toBeLessThan(340);
 
     streamer.dispose();
   });

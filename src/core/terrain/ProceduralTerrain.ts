@@ -37,10 +37,10 @@ export function generateDesertHeightfieldData(seed = 0): Float32Array {
         tot += amp; amp *= 0.5; freq *= 2;
       }
       h /= tot;
-      h = h * 16;
+      h = h * 107;
       const butte = Math.max(0, 1 - Math.abs(nx - 0.5) * 3.5) * Math.max(0, 1 - Math.abs(nz - 0.68) * 3.5);
-      h += butte * 40;
-      const canyon = (1 - Math.min(1, Math.abs(nz - 0.25) * 6)) * 14;
+      h += butte * 267;
+      const canyon = (1 - Math.min(1, Math.abs(nz - 0.25) * 6)) * 93;
       h -= canyon;
       data[j * (seg + 1) + i] = h;
     }

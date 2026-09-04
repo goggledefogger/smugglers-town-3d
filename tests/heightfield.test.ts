@@ -47,7 +47,7 @@ describe('Heightfield', () => {
     expect(data.length).toBe(257 * 257);
     let min = Infinity, max = -Infinity;
     for (const h of data) { if (h < min) min = h; if (h > max) max = h; }
-    expect(min).toBeGreaterThanOrEqual(-14);
-    expect(max).toBeLessThanOrEqual(16 + 40);
+    expect(min).toBeGreaterThanOrEqual(-93);
+    expect(max).toBeLessThanOrEqual(107 + 267);
   });
 });

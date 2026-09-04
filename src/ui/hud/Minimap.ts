@@ -27,7 +27,7 @@ import type { NavGoal } from '../../app/navTarget.ts';
  */
 
 /** World units from the player to the rim. About a third of the field. */
-const RANGE = 260;
+const RANGE = 1750;
 /** Relief raster resolution. 256 is one texel per ~3 m of a 840-unit field. */
 const RELIEF_N = 256;
 /**
@@ -76,7 +76,7 @@ export class Minimap extends HudComponent {
   private ctx: CanvasRenderingContext2D | null = null;
   /** Shaded relief for the current terrain, in world-aligned north-up pixels. */
   private relief: HTMLCanvasElement | null = null;
-  private mapHalf = 420;
+  private mapHalf = 2800;
 
   override firstUpdated(): void {
     this.canvas = this.renderRoot.querySelector('canvas');

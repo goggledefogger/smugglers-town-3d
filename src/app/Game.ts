@@ -105,7 +105,7 @@ export class Game {
   private lastCountdownN = -1;
   private timeLeftS = 0;
   private finalMinuteShown = false;
-  private readonly nav = new NavGrid(config.world.mapHalf * 2);
+  private readonly nav = new NavGrid(config.world.mapHalf * 2, 6);
   private readonly rng: Rng;
   private readonly spawn: SpawnPlanner;
   private readonly fields = new Map<string, CachedField>();
@@ -142,11 +142,20 @@ export class Game {
    */
   readonly route: RouteFn = (kind, from, to) => {
     if (this.nav.isEmpty) return null;
-    let e = this.fields.get(kind);
+    const q = this.nav.cell * 2;
+    const key = `${kind}:${Math.round(to.x / q)}:${Math.round(to.z / q)}`;
+    let e = this.fields.get(key);
     const moved = e ? Math.hypot(e.x - to.x, e.z - to.z) : Infinity;
     if (!e || moved > this.nav.cell * 4 || (moved > 0 && this.timeS - e.at > 0.5)) {
+      if (this.fields.size > 16) {
+        for (const [k, old] of this.fields) {
+          if (this.timeS - old.at > 5.0 || this.fields.size > 16) {
+            this.fields.delete(k);
+          }
+        }
+      }
       e = { field: this.nav.flowField(to.x, to.z), x: to.x, z: to.z, at: this.timeS };
-      this.fields.set(kind, e);
+      this.fields.set(key, e);
     }
     return e.field.waypoint(from.x, from.z, 3, this._wp);
   };

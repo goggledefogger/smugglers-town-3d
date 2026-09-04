@@ -42,10 +42,10 @@ export class GameRenderer {
     this.renderer.toneMappingExposure = 1.05;
 
     this.scene.background = makeSkyTexture(SUN_POS);
-    this.scene.fog = new Fog(SKY_HORIZON, 200, 700);
+    this.scene.fog = new Fog(SKY_HORIZON, 1500, 5000);
 
     this.camera = new PerspectiveCamera(
-      62, window.innerWidth / window.innerHeight, 0.5, 2000
+      62, window.innerWidth / window.innerHeight, 0.5, 8000
     );
     this.camera.position.set(0, 20, 30);
 

@@ -90,9 +90,9 @@ describe('tileTransformChain', () => {
     const vEcef = latLonToEcef(latN, lonE, 50);
     const m = tileTransformChain(new Matrix4(), origin, ecef0, 1);
     const world = new Vector3(vEcef.x, vEcef.y, vEcef.z).applyMatrix4(m);
-    // east 100m -> x=15, up 50m -> y=7.5, north 1km -> z=-150 (scaled 0.15)
-    expect(world.x).toBeCloseTo(15, 1);
-    expect(world.y).toBeCloseTo(7.5, 1);
-    expect(world.z).toBeCloseTo(-150, 1);
+    // east 100m -> x=100, up 50m -> y=50, north 1km -> z=-1000 (scaled 1.0)
+    expect(world.x).toBeCloseTo(100, 0);
+    expect(world.y).toBeCloseTo(50, 0);
+    expect(world.z).toBeCloseTo(-1000, 0);
   });
 });

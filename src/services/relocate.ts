@@ -13,6 +13,7 @@ import { logger } from '../app/log.ts';
 const log = logger('relocate');
 
 import { GroundStreamer } from './maps/GroundStreamer.ts';
+import { config } from '../app/config.ts';
 
 export interface RelocateOptions {
   readonly query: string;
@@ -90,7 +91,7 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
   const grid: ElevationGrid = await fetchElevationGrid(lat, lon);
   onProgress('Fetching satellite imagery');
   const sat = await fetchSatellite(lat, lon, apiKey);
-  const terrain = buildRealTerrain(label, grid, 420, sat, { lat, lon });
+  const terrain = buildRealTerrain(label, grid, config.world.mapHalf, sat, { lat, lon });
   // 3D tiles are best-effort: terrain still loads if they fail
   let tiles: TileStreamer | null = null;
   try {
@@ -104,7 +105,11 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
-  const groundStreamer = sat ? new GroundStreamer({
+  // Google Photorealistic 3D Tiles renders the complete physical world (streets, curbs,
+  // bridges, river surfaces, seawalls). Only stream secondary 2D satellite patches if
+  // 3D tiles are unavailable (terrain-only mode), preventing floating sheets over rivers
+  // and shoreline seawall clipping.
+  const groundStreamer = (sat && !tiles) ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
     heightfield: terrain.heightfield,

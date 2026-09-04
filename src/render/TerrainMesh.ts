@@ -61,11 +61,11 @@ export class TerrainMesh {
         const h = hf.sample(x, z);
         pos.setY(i, h);
         let r: number, g: number, b: number;
-        if (h < 1) { r = 0.76; g = 0.62; b = 0.42; }
-        else if (h < 10) { r = 0.82; g = 0.68; b = 0.45; }
-        else if (h < 26) { r = 0.6; g = 0.5; b = 0.36; }
+        if (h < 7) { r = 0.76; g = 0.62; b = 0.42; }
+        else if (h < 65) { r = 0.82; g = 0.68; b = 0.45; }
+        else if (h < 175) { r = 0.6; g = 0.5; b = 0.36; }
         else { r = 0.85; g = 0.85; b = 0.82; }
-        const n = (Math.sin(x * 0.3) + Math.cos(z * 0.27)) * 0.03;
+        const n = (Math.sin(x * 0.045) + Math.cos(z * 0.04)) * 0.03;
         col.setRGB(
           Math.max(0, Math.min(1, r + n)),
           Math.max(0, Math.min(1, g + n)),

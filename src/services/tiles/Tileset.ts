@@ -63,10 +63,10 @@ export interface LodPolicy {
  * near center so the initial load is quick (~1-2s) and light.
  */
 export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMeter: 1 / 30 };
-/** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
-export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 };
+/** Streaming, relative to the player: refine down to 0.6m near vehicle for crisp street-level textures and facades. */
+export const STREAM_LOD: LodPolicy = { minErrorM: 0.6, maxErrorM: 35, errorPerMeter: 1 / 80 };
 
-/** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
+/** The field is 5600 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
 /** Initial-load cap; the closest win. */
 const MAX_INITIAL_TILES = 150;
@@ -74,14 +74,14 @@ const MAX_INITIAL_TILES = 150;
  * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
-const MAX_TILES = 350;
-/** Tiles beyond this distance (well outside the 700m fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 1500;
+const MAX_TILES = 400;
+/** Tiles beyond this distance (into the fog horizon) can be evicted under budget pressure. */
+const FOG_HORIZON_M = 2500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 350;
+const CORE_RADIUS_M = 750;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 4;
+const CORE_REFINE_BATCH = 8;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
@@ -301,7 +301,7 @@ async function loadTileGlb(
   root.matrixWorldNeedsUpdate = true;
   // Enforce trilinear mipmapping + anisotropy so grazing ground and facades stay razor sharp
   forEachMap(root, map => {
-    map.anisotropy = anisotropy;
+    map.anisotropy = Math.max(anisotropy, 8);
     map.minFilter = LinearMipmapLinearFilter;
     map.magFilter = LinearFilter;
     map.generateMipmaps = true;
@@ -396,8 +396,8 @@ export class TileStreamer {
    * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    const CORE_TARGET_ERROR_M = 10;
-    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = 3.5;
+    for (let round = 0; round < 3 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
           && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
