@@ -29,7 +29,7 @@ describe('MatchRules', () => {
     for (let i = 0; i < 25; i++) {
       m.placeBases();
       m.spawnContraband();
-      expect(m.state.contraband[0]!.pos.x).toBeLessThanOrEqual(0);
+      for (const crate of m.state.contraband) expect(crate.pos.x).toBeLessThanOrEqual(0);
       expect(m.state.bases[0].x).toBeLessThanOrEqual(0);
       expect(m.state.bases[1].x).toBeLessThanOrEqual(0);
     }

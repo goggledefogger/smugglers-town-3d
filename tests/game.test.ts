@@ -108,7 +108,10 @@ describe('Game', () => {
     const { game } = makeGame();
     const player = game.player!.body;
     player.quat.identity(); // facing -z
+    // as above: the marker picks the nearest of four, so isolate one crate or
+    // the answer depends on where the wave happened to land
     const c = game.state.contraband[0]!.pos;
+    for (const other of game.state.contraband.slice(1)) other.pos.set(4000, 0, 4000);
     player.pos.set(c.x, c.y - 50, c.z + 100); // 100 out on the flat, 50 below it
     const m = game.navMarker()!;
     expect(m.yaw).toBeCloseTo(0, 6);

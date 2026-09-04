@@ -95,7 +95,7 @@ Engine pitch from speed, ram and landing impacts, pickup/steal/deliver
 stingers, a proximity cue near your base. Web Audio with procedural sounds
 first, no assets needed.
 
-## 7. Multiplayer — spec written
+## 7. Multiplayer — version 1 live
 
 Version 1 is live: host-authoritative over WebRTC (Trystero), Firebase for
 lobby, signalling and anonymous auth, bots in empty seats, and rooms that play
@@ -107,8 +107,9 @@ out of `Game`, an input-source interface, body snapshots) are listed in
 ## 8. Tooling and code quality
 
 - ESLint with typescript-eslint; `npm run lint`.
-- CI: typecheck, tests, build, and a no-key Playwright smoke run on the
-  desert (the scripts in this session's notes are a starting point).
+- CI. The checks themselves exist — `npm run typecheck`, `npm test`,
+  `npm run build`, `npm run smoke` (no key needed) and `npm run e2e:online` —
+  but nothing runs them on a push.
 - A per-frame HUD channel like the direction arrow's for speed and integrity,
   so they don't tick at 10 Hz.
 

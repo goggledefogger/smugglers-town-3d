@@ -59,10 +59,12 @@ run the lobby without it). Ownership is enforced by the rules:
   authenticated seat.
 - `signal/$room`: any signed-in user, for Trystero's handshake. Trystero
   keys its entries by its own random peer id, which Firebase cannot tie to
-  `auth.uid`, so per-peer ownership is not expressible here. What that
-  leaves open: a signed-in stranger who knows a room code can join the
-  WebRTC mesh and watch snapshots; without a seat token they can never
-  drive a car or write a room.
+  `auth.uid`, so neither per-peer ownership nor a shape is expressible here.
+  What that leaves open: a signed-in stranger who knows a room code can join
+  the WebRTC mesh and watch snapshots, and anyone signed in can write
+  arbitrary data under `signal/`. Without a seat token they can never drive a
+  car or write a room, but the storage is theirs to fill. Worth a size
+  validator if this is ever more than friends-with-a-code.
 
 Shapes are validated field by field; `players` is deliberately not a
 required child of the room, because a host's pre-registered `onDisconnect`
@@ -88,6 +90,14 @@ Three places to look, cheapest first:
    ```
 
 3. `npm run e2e:online` reproduces a full match with two profiles.
+
+**Logs are kept until you delete them.** Each session appends up to 300
+entries and nothing prunes them: the Realtime Database has no TTL, and this
+repo runs no scheduled job. A day of testing leaves tens of sessions (39 after
+the one that wrote this), which is nothing yet and unbounded in principle.
+`firebase database:remove /logs` is the whole retention policy for now, so run
+it when you are done debugging; if that gets tiresome the fix is a scheduled
+Cloud Function dropping sessions older than a week, not a bigger plan.
 
 ### Firestore (profiles, stats, saved locations)
 

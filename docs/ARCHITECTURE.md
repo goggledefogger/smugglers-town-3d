@@ -208,12 +208,12 @@ answer is the next thing you can reach, not the richest thing on the map. It
 lives in `core/` rather than the HUD because `DriverBrain` steers by it too, and
 a marker that disagreed with the bots about what was worth chasing would be
 worse than no marker.
-Contraband pickup, transfer-on-ram (any contact, teammates included, 0.6 s
-cooldown), drop-on-wreck (the crate falls where the carrier died and the car
-respawns just inside its own base), delivery
-scoring at the carrier's own team base (two bases, placed on opposite sides
-of the field once per match), win-at-5, respawn of contraband. Emits typed
-`MatchEvent`s drained once per step by `Game`.
+Pickup, transfer-on-ram (any contact, teammates included, 0.6 s cooldown *per
+crate*), drop-on-wreck (a carrier's crate falls where they died and the car
+respawns just inside its own base), delivery scoring at the carrier's own team
+base (two bases, placed on opposite sides of the field once per match),
+win-at-5, and the wave reset. Emits typed `MatchEvent`s drained once per step
+by `Game`.
 
 ### `core/ai/DriverBrain.ts`
 Per-bot state machine: `seek` (no carrier) / `chase` (enemy carries — with
@@ -389,7 +389,9 @@ despite serving the HUD. The chevron is a rigid plate lying on a leaned ground
 plane, turning about that plane's normal only — composing the lean *after* the
 yaw turns it into roll, which is what made an earlier version tumble.
 `navTarget` answers "am I carrying?", never "is anyone carrying?", so a rival
-stealing the crate swings the marker onto them.
+stealing your crate swings the marker onto them rather than leaving it on a
+base you can no longer deliver to. Which of the four it picks is
+`chooseCrate()`'s call, above.
 
 Keyboard guards go through `isTypingInField()` in `ui/controls.ts`, never
 `document.activeElement` directly: that retargets to the shadow *host*, so a
@@ -406,9 +408,10 @@ per roster type from primitives (buggy cage, rally spoiler, SUV rack, lifted
 pickups) with clearcoat paint in the team color, the type's accent on trim,
 headlights, and tail lights that flare while braking. Wheels sit in pivots
 (the front pair steer with the input) and spin on their axle with forward
-speed; wheel radius scales with the type's mass. `render/Pickups.ts` draws
-the crate with a fading light beacon (hidden while carried) and each base as
-a landing pad: glow disc, edge ring, rotating dashes, lit pylons and a beam,
+speed; wheel radius scales with the type's mass. `render/Pickups.ts` pools a
+crate mesh per live crate — a fading light beacon each, hidden while carried,
+bob phases staggered so a wave does not pulse in lockstep — and draws each base
+as a landing pad: glow disc, edge ring, rotating dashes, lit pylons and a beam,
 all in team color.
 
 The app boots into the garage (`ui/screens/IntroScreen.ts`) with no match
@@ -477,7 +480,7 @@ UI logic that has bitten us (`navArrow`, `navTarget`), which is DOM-free
 precisely so it can be tested here.
 
 The renderer and HUD are covered by `npm run smoke`, which drives a headless
-desert match at desktop and phone sizes and asserts the things that have
+desert match at four widths and asserts the things that have
 actually broken: console errors, HUD corners off-screen, horizontal overflow,
 and a radar that never rasterised its relief. Multiplayer has `npm run
 e2e:online`, two headless browsers through a real room against Firebase. Both

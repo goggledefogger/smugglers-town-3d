@@ -24,6 +24,7 @@ Useful scripts:
 | `npm test` | The unit suite, plain node, under a second |
 | `npm run build` | Typecheck plus a production bundle in `dist/` |
 | `npm run serve` | Build and serve it the way hosting will |
+| `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 
 ## Where things live

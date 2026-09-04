@@ -91,11 +91,13 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (187 tests, plain node) |
-| `npm run smoke` | Headless desert match: HUD, radar, input and layout, desktop and phone |
+| `npm test` | Test suite (228 tests, plain node) |
+| `npm run test:watch` | The same, re-running as you edit |
+| `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |
+| `npm run serve` | Build and serve through the Firebase emulator, as hosting will |
 | `npm run deploy` | Build and ship to Firebase Hosting |
 
 ```
