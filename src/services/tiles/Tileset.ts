@@ -63,8 +63,8 @@ export interface LodPolicy {
  * near center so the initial load is quick (~1-2s) and light.
  */
 export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMeter: 1 / 30 };
-/** Streaming, relative to the player: refine down to 0.6m near vehicle for crisp street-level textures and facades. */
-export const STREAM_LOD: LodPolicy = { minErrorM: 0.6, maxErrorM: 35, errorPerMeter: 1 / 80 };
+/** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
+export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 };
 
 /** The field is 5600 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
@@ -74,14 +74,14 @@ const MAX_INITIAL_TILES = 150;
  * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
-const MAX_TILES = 400;
+const MAX_TILES = 350;
 /** Tiles beyond this distance (into the fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 2500;
+const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 750;
+const CORE_RADIUS_M = 350;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 8;
+const CORE_REFINE_BATCH = 4;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
@@ -406,6 +406,24 @@ export class TileStreamer {
     this.calibrateGround();
   }
 
+  /** True if any loaded 3D tile covers (or comes within radiusM of) the world coordinate. */
+  hasTileNear(wx: number, wz: number, radiusM = 150): boolean {
+    const half = this.grid.half;
+    const cell = this.grid.cell;
+    const pad = Math.ceil(radiusM / cell);
+    const i = Math.floor((wx + half) / cell);
+    const j = Math.floor((wz + half) / cell);
+    if (i < -pad || i >= this.grid.n + pad || j < -pad || j >= this.grid.n + pad) return false;
+    for (const t of this.tiles) {
+      const r = t.raster;
+      if (!r) continue;
+      if (i >= r.i0 - pad && i <= r.i0 + r.w + pad && j >= r.j0 - pad && j <= r.j0 + r.h + pad) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   /**
    * Refine tiles near the start to a crisp core before the match begins.
    * Capped at 2 quick rounds with ~10m error threshold so initial load completes
@@ -413,8 +431,8 @@ export class TileStreamer {
    * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    const CORE_TARGET_ERROR_M = 3.5;
-    for (let round = 0; round < 3 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = 10;
+    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
           && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)

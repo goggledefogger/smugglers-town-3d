@@ -105,16 +105,16 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
-  // Google Photorealistic 3D Tiles renders the complete physical world (streets, curbs,
-  // bridges, river surfaces, seawalls). Only stream secondary 2D satellite patches if
-  // 3D tiles are unavailable (terrain-only mode), preventing floating sheets over rivers
-  // and shoreline seawall clipping.
-  const groundStreamer = (sat && !tiles) ? new GroundStreamer({
+  // High-resolution satellite ground patches (Zoom 18, ~0.25m/px) stream outside
+  // 3D photogrammetry cities so the outskirts and rural areas have crisp imagery,
+  // while isTileCovered ensures no flat 2D patches drape over 3D bridges or city streets.
+  const groundStreamer = sat ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
     heightfield: terrain.heightfield,
     anisotropy: opts.anisotropy,
-    zoom: 18
+    zoom: 18,
+    isTileCovered: (wx, wz) => tiles?.hasTileNear(wx, wz, 150) ?? false
   }) : null;
   log.info('relocated', {
     label, lat, lon, tiles: tiles?.tileCount ?? 0, ms: Date.now() - startedAt

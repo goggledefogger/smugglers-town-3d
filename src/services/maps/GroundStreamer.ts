@@ -21,6 +21,8 @@ export interface GroundStreamerOptions {
   readonly keepRadiusUnits?: number | undefined;
   /** Max patches in memory. */
   readonly maxPatches?: number | undefined;
+  /** Optional filter to skip streaming 2D patches over areas already covered by 3D tiles. */
+  readonly isTileCovered?: ((wx: number, wz: number) => boolean) | undefined;
 }
 
 interface LoadedPatch {
@@ -46,6 +48,7 @@ export class GroundStreamer {
   private readonly zoom: number;
   private readonly keepRadiusUnits: number;
   private readonly maxPatches: number;
+  private readonly isTileCovered?: ((wx: number, wz: number) => boolean) | undefined;
 
   private readonly cosLat: number;
   readonly tileSizeUnits: number;
@@ -64,6 +67,7 @@ export class GroundStreamer {
     this.zoom = opts.zoom ?? 18;
     this.keepRadiusUnits = opts.keepRadiusUnits ?? 800;
     this.maxPatches = opts.maxPatches ?? 16;
+    this.isTileCovered = opts.isTileCovered;
 
     this.cosLat = Math.max(0.2, Math.cos((this.center.lat * Math.PI) / 180));
     // Physical tile size on ground in meters:
@@ -149,6 +153,7 @@ export class GroundStreamer {
         const cellWx = c * this.tileSizeUnits;
         const cellWz = r * this.tileSizeUnits;
         if (cellWx < -half || cellWx > half || cellWz < -half || cellWz > half) continue;
+        if (this.isTileCovered?.(cellWx, cellWz)) continue;
 
         const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
         if (dist < bestDist) {

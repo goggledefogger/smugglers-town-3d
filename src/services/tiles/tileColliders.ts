@@ -38,10 +38,11 @@ const GROUND_K = 6;
 /** Real meters above the estimated ground that make a cell a building. */
 const BUILDING_RISE_M = 8;
 /**
- * Height gap between the physics ground and photogrammetry surface.
- * Kept at 2cm so vehicle tires contact the pavement directly rather than hovering.
+ * The shared ground sits this far (world units) above the tile surface, so
+ * the vehicle smoothly rides over street-level photogrammetry noise, kerbs,
+ * parked cars and bushes without snagging.
  */
-export const TILE_GROUND_GAP = 0.02;
+export const TILE_GROUND_GAP = 0.6;
 
 export interface Grid {
   readonly cell: number;

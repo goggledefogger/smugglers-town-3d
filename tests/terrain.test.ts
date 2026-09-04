@@ -25,8 +25,8 @@ describe('sampleGridSmooth', () => {
   });
 });
 
-describe('TerrainMesh cutout mask', () => {
-  it('instantiates, builds, and updates cutout mask without crashing', async () => {
+describe('TerrainMesh continuous underlay', () => {
+  it('instantiates, builds continuous mesh with polygonOffset, and disposes without crashing', async () => {
     const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
     const { createDesertTerrain } = await import('../src/core/terrain/ProceduralTerrain.ts');
     const { Heightfield } = await import('../src/core/heightfield.ts');
@@ -36,8 +36,9 @@ describe('TerrainMesh cutout mask', () => {
     const mesh = tm.build(terrain, 1);
     expect(mesh).toBeDefined();
     expect(tm.mesh).toBe(mesh);
+    expect(mesh.material).toBeDefined();
 
-    // updateCutout handles empty bounds and tile bounds safely
+    // updateCutout is a safe no-op for backward compatibility
     tm.updateCutout([]);
     tm.updateCutout([{ minX: -500, maxX: 500, minZ: -500, maxZ: 500 }]);
     tm.dispose();
