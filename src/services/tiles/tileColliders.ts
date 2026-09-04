@@ -140,33 +140,24 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
       const isSteepWall = Math.abs(det) < 1e-9 || (nHoriz > 2.0 * Math.abs(det) && maxY - minY >= BIN_SIZE);
 
       if (Math.abs(det) < 1e-9) {
-        // vertical wall: stamp full height range at each vertex cell
-        for (const q of _tri) {
-          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
-            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
-          }
-        }
-        continue;
-      }
-
-      if (isSteepWall) {
-        // Stamp the full vertical range at centroid and vertices for steep wall/pier faces
+        // Vertical wall with zero horizontal footprint: stamp only at centroid
         const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
         if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
           stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
         }
-        for (const q of _tri) {
-          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
-            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
-          }
-        }
-      } else {
-        // Gentle slope, roadway, roof, or ground terrain: stamp centroid height
-        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3, midY = (a.y + b.y + c.y) / 3;
-        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-          stamp(cellOf(midX), cellOf(midZ), midY);
+        continue;
+      }
+
+      // Stamp centroid height/range so small triangles register accurately
+      const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
+      if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+        if (isSteepWall) {
+          stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
+        } else {
+          stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
         }
       }
+
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
       const minZ = Math.min(a.z, b.z, c.z), maxZ = Math.max(a.z, b.z, c.z);
       if (maxX < -half || minX >= half || maxZ < -half || minZ >= half) continue;
@@ -180,7 +171,11 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
           const l2 = ((b.x - a.x) * (cz - a.z) - (cx - a.x) * (b.z - a.z)) / det;
           const l0 = 1 - l1 - l2;
           if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
-          stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
+          if (isSteepWall) {
+            stampRange(i, j, minY, maxY);
+          } else {
+            stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
+          }
         }
       }
     }
@@ -524,14 +519,18 @@ export function collidersFromRasters(
     }
     above = row;
   }
-  // Inset building colliders horizontally by 1.2m so 10m quantization steps and
+  // Inset building colliders horizontally so 10m quantization steps and
   // facade overshoots do not protrude into roadway lanes and sidewalks.
-  const INSET_M = 1.2;
+  // Isolated single-cell pillars/piers (width <= cell && depth <= cell) get a tighter
+  // inset (2.8m each side -> ~4.4m column) so they snugly wrap bridge supports without
+  // blocking adjacent open lanes or water channels.
   for (const b of out) {
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
-    const insetX = Math.min(INSET_M, Math.max(0, (width - 2) / 2));
-    const insetZ = Math.min(INSET_M, Math.max(0, (depth - 2) / 2));
+    const isIsolatedColumn = width <= cell && depth <= cell;
+    const insetMax = isIsolatedColumn ? 2.8 : 1.0;
+    const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
+    const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
     b.min.x += insetX;
     b.max.x -= insetX;
     b.min.z += insetZ;

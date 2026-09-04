@@ -30,7 +30,7 @@ export type BindingTable = Record<LogicalAction, Binding[]>;
 export const DRIVING_ACTIONS: readonly LogicalAction[] = [
   'accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'
 ];
-export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset'];
+export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset', 'viewMode'];
 export const UI_ACTIONS: readonly LogicalAction[] = [
   'uiUp', 'uiDown', 'uiLeft', 'uiRight', 'uiConfirm', 'uiBack', 'uiTab', 'uiPause'
 ];
@@ -53,6 +53,7 @@ const DEFAULTS_KEYBOARD: BindingTable = {
   pitchDown: [],
   camera: [{ kind: 'key', code: 'KeyC' }],
   reset: [{ kind: 'key', code: 'KeyR' }],
+  viewMode: [{ kind: 'key', code: 'KeyV' }, { kind: 'key', code: 'KeyG' }],
   uiUp: [{ kind: 'key', code: 'ArrowUp' }],
   uiDown: [{ kind: 'key', code: 'ArrowDown' }],
   uiLeft: [{ kind: 'key', code: 'ArrowLeft' }],
@@ -78,6 +79,7 @@ const DEFAULTS_GAMEPAD: BindingTable = {
   pitchDown: [{ kind: 'axis', index: 3, sign: 1 }],  // right stick down = nose down
   camera: [{ kind: 'button', index: 8 }],          // Select
   reset: [{ kind: 'button', index: 9 }],            // Start/Options
+  viewMode: [],
   uiUp: [{ kind: 'button', index: 12 }, { kind: 'axis', index: 1, sign: -1 }],   // dpad-up + stick up
   uiDown: [{ kind: 'button', index: 13 }, { kind: 'axis', index: 1, sign: 1 }],  // dpad-down + stick down
   uiLeft: [{ kind: 'button', index: 14 }, { kind: 'axis', index: 0, sign: -1 }], // dpad-left + stick left

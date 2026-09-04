@@ -427,6 +427,14 @@ export class TileStreamer {
 
   private deckGrid: Float32Array;
 
+  get activeDeckGrid(): Float32Array {
+    return this.deckGrid;
+  }
+
+  get activeGrid(): Grid {
+    return this.grid;
+  }
+
   /**
    * O(1) mathematical lookup of elevated drivable surfaces (e.g. bridge decks, overpasses, ramps)
    * sampled bilinearly from the classified deck grid. Zero raycasts, zero allocations.

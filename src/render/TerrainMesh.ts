@@ -10,8 +10,8 @@
  */
 import {
   Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, CanvasTexture,
-  SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter, Color,
-  type BufferAttribute as BufferAttributeT
+  SRGBColorSpace, ClampToEdgeWrapping, RepeatWrapping, LinearMipmapLinearFilter,
+  LinearFilter, Color, type BufferAttribute as BufferAttributeT
 } from 'three';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Heightfield } from '../core/heightfield.ts';
@@ -23,9 +23,37 @@ export interface TileFootprint {
   readonly maxZ: number;
 }
 
+function createGridTexture(): CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#1e232a';
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.strokeStyle = '#2d3748';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, 64, 64);
+    const tex = new CanvasTexture(c);
+    tex.wrapS = tex.wrapT = RepeatWrapping;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.magFilter = LinearFilter;
+    tex.generateMipmaps = true;
+    return tex;
+  } catch {
+    return null;
+  }
+}
+
 export class TerrainMesh {
   private _mesh: Mesh | null = null;
   private _texture: CanvasTexture | null = null;
+  private _gridTexture: CanvasTexture | null = null;
+  private _photorealMat: MeshStandardMaterial | null = null;
+  private _game3dMat: MeshStandardMaterial | null = null;
+  private _mode: 'photoreal' | 'game3d' = 'photoreal';
 
   get mesh(): Mesh | null {
     return this._mesh;
@@ -33,6 +61,19 @@ export class TerrainMesh {
 
   get texture(): CanvasTexture | null {
     return this._texture;
+  }
+
+  get gridTexture(): CanvasTexture | null {
+    return this._gridTexture;
+  }
+
+  setMode(mode: 'photoreal' | 'game3d'): void {
+    this._mode = mode;
+    if (this._mesh) {
+      this._mesh.material = (mode === 'game3d' && this._game3dMat)
+        ? this._game3dMat
+        : (this._photorealMat ?? this._mesh.material);
+    }
   }
 
   markTextureNeedsUpdate(): void {
@@ -48,6 +89,7 @@ export class TerrainMesh {
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as BufferAttributeT;
 
+    // 1. Build Photoreal material
     if (provider.isReal && provider.satelliteCanvas) {
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
@@ -62,7 +104,7 @@ export class TerrainMesh {
       tex.needsUpdate = true;
       this._texture = tex;
 
-      const mat = new MeshStandardMaterial({
+      this._photorealMat = new MeshStandardMaterial({
         map: tex,
         roughness: 0.96,
         metalness: 0,
@@ -70,7 +112,6 @@ export class TerrainMesh {
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
       });
-      this._mesh = new Mesh(geo, mat);
     } else {
       // Desert palette: low=sand, mid=rock, high=snow cap, canyon=dark
       const colors = new Float32Array(pos.count * 3);
@@ -96,7 +137,7 @@ export class TerrainMesh {
         colors[i * 3 + 2] = col.b;
       }
       geo.setAttribute('color', new BufferAttribute(colors, 3));
-      const mat = new MeshStandardMaterial({
+      this._photorealMat = new MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.95,
         metalness: 0,
@@ -104,8 +145,26 @@ export class TerrainMesh {
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
       });
-      this._mesh = new Mesh(geo, mat);
     }
+
+    // 2. Build Game 3D stylized material (crisp 10m grid)
+    const gridTex = createGridTexture();
+    if (gridTex) {
+      gridTex.repeat.set(size / 10, size / 10);
+      this._gridTexture = gridTex;
+    }
+    this._game3dMat = new MeshStandardMaterial({
+      color: gridTex ? 0xffffff : 0x1e232a,
+      ...(gridTex ? { map: gridTex } : {}),
+      roughness: 0.88,
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: 3,
+      polygonOffsetUnits: 3
+    });
+
+    const mat = (this._mode === 'game3d' && this._game3dMat) ? this._game3dMat : this._photorealMat;
+    this._mesh = new Mesh(geo, mat);
     geo.computeVertexNormals();
     return this._mesh;
   }
@@ -128,11 +187,15 @@ export class TerrainMesh {
   dispose(): void {
     if (this._mesh) {
       this._mesh.geometry.dispose();
-      const mat = this._mesh.material as MeshStandardMaterial;
-      mat.map?.dispose();
-      mat.dispose();
+      this._photorealMat?.map?.dispose();
+      this._photorealMat?.dispose();
+      this._game3dMat?.map?.dispose();
+      this._game3dMat?.dispose();
       this._mesh = null;
     }
+    this._photorealMat = null;
+    this._game3dMat = null;
     this._texture = null;
+    this._gridTexture = null;
   }
 }
