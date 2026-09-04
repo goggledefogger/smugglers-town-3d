@@ -22,7 +22,7 @@ export class RelocateBar extends LitElement {
       top: max(var(--space-md), env(safe-area-inset-top));
       left: 50%;
       transform: translateX(-50%);
-      z-index: 20;
+      z-index: 50;
       display: flex;
       /* nowrap on the inline row: width:max-content on a *wrapping* flex
          container resolves narrower than the row it contains, so the fields
