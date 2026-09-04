@@ -122,8 +122,6 @@ const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
-let groundRefreshAt = 0;
-let groundDirty = false;
 
 /** Buildings from the streamed tiles plus the scattered props. */
 function applyColliders(): void {
@@ -417,6 +415,21 @@ relocateBarEl.onSearch = async (q, key) => {
 dirArrowEl.bind(store);
 minimapEl.bind(store);
 
+// ---- live alignment diagnostic HUD (toggle with F8 or ?debug) ----
+let showDiagnostic = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
+const diagEl = document.createElement('div');
+diagEl.id = 'debug-diagnostic';
+diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(26,20,16,0.92);backdrop-filter:blur(8px);border:1px solid #ff5a1f;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f4ead8;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+diagEl.style.display = showDiagnostic ? 'flex' : 'none';
+document.body.appendChild(diagEl);
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'F8') {
+    showDiagnostic = !showDiagnostic;
+    diagEl.style.display = showDiagnostic ? 'flex' : 'none';
+  }
+});
+
 // ---- frame loop ----
 let last = performance.now();
 let simTime = 0;
@@ -426,6 +439,25 @@ function frame(now: number): void {
   const dt = Math.min(rawDt, config.loop.maxFrameDt);
   last = now;
   renderer.adapt(rawDt, now);
+
+  if (showDiagnostic && world.player?.body) {
+    const b = world.player.body;
+    const hf = world.terrainProvider.heightfield;
+    const groundY = hf.sample(b.pos.x, b.pos.z);
+    const diff = b.pos.y - groundY;
+    const isUnder = diff < -0.3;
+    diagEl.innerHTML = `
+      <span style="color:#ff5a1f;font-weight:700;">[F8 DIAG]</span>
+      <span>X:${b.pos.x.toFixed(0)} Z:${b.pos.z.toFixed(0)}</span>
+      <span>Ground: ${groundY.toFixed(1)}m</span>
+      <span>Car Y: ${b.pos.y.toFixed(1)}m</span>
+      <span style="color:${isUnder ? '#ff2d55' : '#7dd87d'};font-weight:700;">
+        ${isUnder ? `⚠️ UNDERGROUND (${Math.abs(diff).toFixed(1)}m)` : `✅ ON SURFACE (Δ ${diff.toFixed(2)}m)`}
+      </span>
+      <span>Tiles: ${tiles ? `${tiles.tileCount} active` : 'off'}</span>
+    `;
+  }
+
   // poll every source each frame so gamepad edges fire on menus too — the
   // gamepad has no keydown event, so its edge scan must run even when nothing
   // is driving (vehicleInput is only called while playing, below)
@@ -454,15 +486,10 @@ function frame(now: number): void {
     if (tiles && player) {
       tiles.update(player.pos, now);
       // refined tiles change the building footprints; rebuild at most every 1.5 s
+      // refined tiles change the building footprints and ground; refresh every ~1.5 s
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
         applyColliders();
-        groundDirty = true;
-      }
-      // ...and sharpen the shared ground, less often: this one costs ~50 ms
-      if (groundDirty && now - groundRefreshAt > 6000) {
-        groundRefreshAt = now;
-        groundDirty = false;
         game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
         terrainMesh.refresh(game.terrainProvider.heightfield);
         groundStreamer?.refresh();

@@ -105,7 +105,10 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
-  const groundStreamer = sat ? new GroundStreamer({
+  // Google 3D Tiles already provides high-resolution photogrammetry on streets, bridges,
+  // and shorelines. Only stream secondary 2D satellite patches if 3D tiles are unavailable,
+  // avoiding double-bridge artifacts (2D road on water) and shoreline seams.
+  const groundStreamer = (sat && !tiles) ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
     heightfield: terrain.heightfield,
