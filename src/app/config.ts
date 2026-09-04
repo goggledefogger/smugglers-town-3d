@@ -5,7 +5,7 @@
 export const config = {
   world: {
     /** Half-extent of the play field in world units. */
-    mapHalf: 420
+    mapHalf: 2800
   },
   physics: {
     gravity: 22,

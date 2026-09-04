@@ -47,13 +47,13 @@ export interface SpawnConfig {
 }
 
 export const DEFAULT_SPAWN: SpawnConfig = {
-  mapHalf: 420,
+  mapHalf: 2800,
   carClearance: 4,
-  ringRadius: 26,
-  baseClearance: 13,
-  baseOffset: 0.65,
+  ringRadius: 78,
+  baseClearance: 25,
+  baseOffset: 0.45,
   itemClearance: 5,
-  itemMinDist: 40,
+  itemMinDist: 150,
   dropHeight: 14
 };
 

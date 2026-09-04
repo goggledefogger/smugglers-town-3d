@@ -5,7 +5,7 @@ import { VEHICLE_TYPES } from '../src/core/physics/vehicleStats.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 import type { VehicleInput } from '../src/core/physics/vehicleStats.ts';
 
-const FLAT = new Heightfield(840, 1, new Float32Array([0, 0, 0, 0]));
+const FLAT = new Heightfield(5600, 1, new Float32Array([0, 0, 0, 0]));
 const NO_INPUT: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
 const NO_BUILDINGS: never[] = [];
 
@@ -155,7 +155,7 @@ describe('VehicleBody.step', () => {
 
   it('stays planted driving downhill instead of riding the air state', () => {
     // ground rises toward +z; forward is -z, so this is a 7% descent
-    const slope = new Heightfield(840, 1, new Float32Array([0, 0, 60, 60]));
+    const slope = new Heightfield(5600, 1, new Float32Array([0, 0, 400, 400]));
     const v = makeBody();
     v.pos.set(0, slope.sample(0, 0) + 1, 0);
     let airborneSteps = 0;

@@ -75,8 +75,8 @@ const MAX_INITIAL_TILES = 150;
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
 const MAX_TILES = 350;
-/** Tiles beyond this distance (well outside the 700m fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 1500;
+/** Tiles beyond this distance (well outside the 5000m fog horizon) can be evicted under budget pressure. */
+const FOG_HORIZON_M = 5000;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
 const CORE_RADIUS_M = 350;

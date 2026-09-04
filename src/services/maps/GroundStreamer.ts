@@ -16,7 +16,7 @@ export interface GroundStreamerOptions {
   readonly anisotropy?: number | undefined;
   /** High-resolution zoom level (default 18 for ~0.25m/px, 19 for ~0.12m/px). */
   readonly zoom?: number | undefined;
-  /** Keep radius around player in world units (default 120 units = ~800m). */
+  /** Keep radius around player in world units (default 800 units = ~800m). */
   readonly keepRadiusUnits?: number | undefined;
   /** Max patches in memory. */
   readonly maxPatches?: number | undefined;
@@ -68,7 +68,7 @@ export class GroundStreamer {
     this.heightfield = opts.heightfield;
     this.anisotropy = opts.anisotropy ?? 1;
     this.zoom = opts.zoom ?? 18;
-    this.keepRadiusUnits = opts.keepRadiusUnits ?? 120;
+    this.keepRadiusUnits = opts.keepRadiusUnits ?? 800;
     this.maxPatches = opts.maxPatches ?? 16;
 
     this.cosLat = Math.max(0.2, Math.cos((this.center.lat * Math.PI) / 180));
@@ -82,8 +82,8 @@ export class GroundStreamer {
     this.dLon = 900 / Math.pow(2, this.zoom);
     this.dLat = this.dLon * this.cosLat;
 
-    // Tile size in world units (total map is 840 world units across)
-    this.tileSizeUnits = (this.dLon / this.spanLonDeg) * 840;
+    // Tile size in world units
+    this.tileSizeUnits = (this.dLon / this.spanLonDeg) * this.heightfield.size;
   }
 
   get patchCount(): number {
@@ -143,8 +143,9 @@ export class GroundStreamer {
     if (this.inFlight || nowMs - this.lastPickMs < 300) return;
     this.lastPickMs = nowMs;
 
-    const centerCol = Math.floor((playerWorld.x + 420) / this.tileSizeUnits);
-    const centerRow = Math.floor((playerWorld.z + 420) / this.tileSizeUnits);
+    const half = this.heightfield.size / 2;
+    const centerCol = Math.floor((playerWorld.x + half) / this.tileSizeUnits);
+    const centerRow = Math.floor((playerWorld.z + half) / this.tileSizeUnits);
 
     let bestKey: string | null = null;
     let bestDist = Infinity;
@@ -158,9 +159,9 @@ export class GroundStreamer {
         const key = `${this.zoom}:${c}:${r}`;
         if (this.patches.has(key) || this.inFlightKeys.has(key)) continue;
 
-        const cellWx = (c + 0.5) * this.tileSizeUnits - 420;
-        const cellWz = (r + 0.5) * this.tileSizeUnits - 420;
-        if (cellWx < -420 || cellWx > 420 || cellWz < -420 || cellWz > 420) continue;
+        const cellWx = (c + 0.5) * this.tileSizeUnits - half;
+        const cellWz = (r + 0.5) * this.tileSizeUnits - half;
+        if (cellWx < -half || cellWx > half || cellWz < -half || cellWz > half) continue;
 
         const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
         if (dist < bestDist) {
@@ -243,8 +244,9 @@ export class GroundStreamer {
     tex.anisotropy = this.anisotropy;
     tex.needsUpdate = true;
 
-    const cellWx = (col + 0.5) * this.tileSizeUnits - 420;
-    const cellWz = (row + 0.5) * this.tileSizeUnits - 420;
+    const half = this.heightfield.size / 2;
+    const cellWx = (col + 0.5) * this.tileSizeUnits - half;
+    const cellWz = (row + 0.5) * this.tileSizeUnits - half;
 
     const segs = 16;
     const geo = new PlaneGeometry(this.tileSizeUnits, this.tileSizeUnits, segs, segs);

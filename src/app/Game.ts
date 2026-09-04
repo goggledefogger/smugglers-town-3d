@@ -142,11 +142,13 @@ export class Game {
    */
   readonly route: RouteFn = (kind, from, to) => {
     if (this.nav.isEmpty) return null;
-    let e = this.fields.get(kind);
+    const q = this.nav.cell * 2;
+    const key = `${kind}:${Math.round(to.x / q)}:${Math.round(to.z / q)}`;
+    let e = this.fields.get(key);
     const moved = e ? Math.hypot(e.x - to.x, e.z - to.z) : Infinity;
     if (!e || moved > this.nav.cell * 4 || (moved > 0 && this.timeS - e.at > 0.5)) {
       e = { field: this.nav.flowField(to.x, to.z), x: to.x, z: to.z, at: this.timeS };
-      this.fields.set(kind, e);
+      this.fields.set(key, e);
     }
     return e.field.waypoint(from.x, from.z, 3, this._wp);
   };

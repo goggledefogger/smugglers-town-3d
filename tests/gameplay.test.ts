@@ -6,7 +6,7 @@ import { Heightfield } from '../src/core/heightfield.ts';
 import { SpawnPlanner, DEFAULT_SPAWN } from '../src/core/spawn/SpawnPlanner.ts';
 import type { OpenSpace } from '../src/core/world/OpenSpace.ts';
 
-const FLAT = new Heightfield(840, 1, new Float32Array([0, 0, 0, 0]));
+const FLAT = new Heightfield(5600, 1, new Float32Array([0, 0, 0, 0]));
 
 function makeMatch(bodies: VehicleBody[], teams: ReadonlyMap<number, 0 | 1>): MatchRules {
   const m = new MatchRules(DEFAULT_SCORING, bodies, teams, FLAT, new SpawnPlanner(DEFAULT_SPAWN));
@@ -40,7 +40,7 @@ describe('MatchRules', () => {
     const m = makeMatch([a], new Map([[a.id, 0 as const]]));
     const b0 = m.state.bases[0].clone();
     const b1 = m.state.bases[1].clone();
-    expect(b0.distanceTo(b1)).toBeGreaterThan(420);
+    expect(b0.distanceTo(b1)).toBeGreaterThan(2000);
     a.pos.copy(m.state.contraband[0]!.pos);
     m.checkPickup();
     a.pos.copy(m.state.bases[0]);

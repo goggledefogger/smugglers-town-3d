@@ -45,7 +45,7 @@ export const DEFAULT_PHYSICS: VehiclePhysicsConfig = {
   jumpBoost: 1.55,
   airControl: 2.1,
   rollRecover: 4.2,
-  worldHalf: 420,
+  worldHalf: 2800,
   groundClearance: 1.0
 };
 

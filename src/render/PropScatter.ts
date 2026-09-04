@@ -32,8 +32,8 @@ export class PropScatter {
     this.clear();
     // On real satellite terrain the imagery already carries visual detail,
     // so keep props sparse (cover only) and skip the desert-only cacti
-    const nRocks = real ? 36 : 80;
-    const nCacti = real ? 0 : 60;
+    const nRocks = real ? 180 : 400;
+    const nCacti = real ? 0 : 300;
     const rocks = new InstancedMesh(
       new DodecahedronGeometry(2, 0), new MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95 }), nRocks
     );

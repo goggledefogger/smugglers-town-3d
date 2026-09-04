@@ -27,8 +27,8 @@ import { WORLD_M_PER_M } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
 
-/** 1.5 units = 10 m cells. */
-const CELL = 1.5;
+/** 10 units = 10 m cells. */
+const CELL = 10;
 /**
  * Opening radius in cells (6 = 60 m, a 120 m window). Wider than a city
  * block so buildings are erased from the ground estimate; narrow enough that

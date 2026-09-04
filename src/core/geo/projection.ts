@@ -68,7 +68,7 @@ export function ecefToWorldMatrix(origin: GeoOrigin): Matrix4 {
  * match-center ECEF first, the rotation projects the entire earth radius onto
  * the up axis and the tile renders at Y ~956720 while the terrain sits at
  * Y ~0. A vertex 1km N + 100E + 50U from the match center must land at
- * (15, 7.5, -150.3) with default scale.
+ * (100, 50, -1000) with default scale.
  */
 export function tileTransformChain(
   tileTf: Matrix4,

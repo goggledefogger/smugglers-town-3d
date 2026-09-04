@@ -141,11 +141,11 @@ describe('glbPlacement', () => {
     // node translation read straight out of a depth-20 Portland GLB
     const nodeT = new Vector3(-2415800, 4527445, 3769234);
     const w = nodeT.clone().applyMatrix4(glbPlacement(origin, ecef0, 1));
-    expect(Math.hypot(w.x, w.z)).toBeLessThan(5000 * 0.15);
-    expect(Math.abs(w.y)).toBeLessThan(1000 * 0.15);
+    expect(Math.hypot(w.x, w.z)).toBeLessThan(5000);
+    expect(Math.abs(w.y)).toBeLessThan(1000);
     // without the Y-up fix the same node lands on the far side of the planet
     const raw = nodeT.clone().applyMatrix4(tileTransformChain(new Matrix4(), origin, ecef0, 1));
-    expect(raw.length()).toBeGreaterThan(1e6 * 0.15);
+    expect(raw.length()).toBeGreaterThan(1e6);
   });
 });
 
