@@ -59,6 +59,9 @@ export interface TileRaster {
   readonly top: Float32Array;
   /** Lowest surface per cell: the street under canopy or a bridge deck; a roof inside a building. */
   readonly low: Float32Array;
+  /** Vertical height band bitmask (1.5m per bit) relative to y0 for underpass clearance detection. */
+  readonly mask?: Uint32Array;
+  readonly y0?: number;
 }
 
 export function gridFor(ground: Heightfield): Grid {
@@ -96,13 +99,18 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
   const i0 = cellOf(bounds.min.x), i1 = cellOf(bounds.max.x);
   const j0 = cellOf(bounds.min.z), j1 = cellOf(bounds.max.z);
   const w = i1 - i0 + 1, h = j1 - j0 + 1;
+  const BIN_SIZE = 1.5;
+  const y0 = bounds.min.y;
   const top = new Float32Array(w * h).fill(-Infinity);
   const low = new Float32Array(w * h).fill(Infinity);
+  const mask = new Uint32Array(w * h);
   const stamp = (i: number, j: number, y: number): void => {
     if (i < i0 || i > i1 || j < j0 || j > j1) return;
     const idx = (j - j0) * w + (i - i0);
     if (y > top[idx]!) top[idx] = y;
     if (y < low[idx]!) low[idx] = y;
+    const bin = Math.min(31, Math.max(0, Math.floor((y - y0) / BIN_SIZE)));
+    mask[idx] = (mask[idx]! | (1 << bin)) >>> 0;
   };
   const [a, b, c] = _tri;
   obj.traverse(o => {
@@ -147,7 +155,7 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
       }
     }
   });
-  return { i0, j0, w, h, top, low };
+  return { i0, j0, w, h, top, low, mask, y0 };
 }
 
 /**
@@ -327,15 +335,51 @@ export function collidersFromRasters(
   const low = compositeLows(rasters, n);
   const ground = groundEstimate(top, n);
   const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+  const BIN_SIZE = 1.5;
+
+  /**
+   * Check if the vehicle driving zone above the ground [g + 1.2m, min(g + 4.5m, t - 1.5m)]
+   * has no geometry in any tile raster covering cell c. If clear, the space is an open underpass / bridge span.
+   */
+  const hasGroundClearance = (c: number, g: number, t: number): boolean => {
+    const y1 = g + 1.2;
+    const y2 = Math.min(g + 4.5, t - 1.5);
+    if (y1 >= y2) return false;
+    let foundRaster = false;
+    for (const r of rasters) {
+      if (!r || !r.mask || r.y0 === undefined) continue;
+      const j = Math.floor(c / n) - r.j0;
+      const i = (c % n) - r.i0;
+      if (i < 0 || i >= r.w || j < 0 || j >= r.h) continue;
+      foundRaster = true;
+      const idx = j * r.w + i;
+      const m = r.mask[idx]!;
+      if (!m) continue;
+      const b1 = Math.max(0, Math.ceil((y1 - r.y0) / BIN_SIZE));
+      const b2 = Math.min(31, Math.floor((y2 - r.y0) / BIN_SIZE));
+      if (b1 <= b2) {
+        const rangeMask = (0xFFFFFFFF >>> (31 - (b2 - b1))) << b1;
+        if ((m & rangeMask) !== 0) {
+          // Geometry exists in the driving clearance zone (wall, pier, column)
+          return false;
+        }
+      }
+    }
+    return foundRaster;
+  };
+
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
     const g = ground[c]!;
     const l = low[c]!;
+    if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
     // An elevated roadway, bridge deck, or overpass has substantial open clearance
     // between its underside (l) and the ground/water (g). It is a drivable surface,
     // not an impenetrable ground-to-sky building obstacle.
-    if (l !== Infinity && g !== NO_DATA && l - g >= 5.0) return false;
-    return t !== NO_DATA && g !== NO_DATA && t - g >= rise;
+    if (l !== Infinity && l - g >= 5.0) return false;
+    // An underpass or bridge span over a street has open driving clearance between ground and overhead deck
+    if (t - g >= 13.0 && hasGroundClearance(c, g, t)) return false;
+    return true;
   };
 
   const out: BuildingCollider[] = [];

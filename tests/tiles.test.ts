@@ -241,6 +241,15 @@ describe('buildingCollidersFrom', () => {
       expect(b.max.x).toBeLessThan(12);
     }
   });
+
+  it('exempts elevated bridge decks and underpasses with open driving clearance', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // ground roadway at Y = 0
+    g.add(roof(-6, -6, 6, 6, 20)); // elevated bridge deck at Y = 20m (open air from 0 to 20)
+    const boxes = buildingCollidersFrom(g, flat);
+    // Because the driving zone [1.2m, 4.5m] is completely clear, it is an underpass roadway, not a building
+    expect(boxes).toHaveLength(0);
+  });
 });
 
 describe('tileGroundOffset', () => {
