@@ -9,3 +9,5 @@ firebase-debug.*.log
 *.local
 .playwright-mcp/
 .claude/
+.worktrees/
+
