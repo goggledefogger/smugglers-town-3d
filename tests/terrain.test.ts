@@ -24,3 +24,23 @@ describe('sampleGridSmooth', () => {
     expect(Math.abs(left - right)).toBeLessThan(0.01);
   });
 });
+
+describe('TerrainMesh cutout mask', () => {
+  it('instantiates, builds, and updates cutout mask without crashing', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const { createDesertTerrain } = await import('../src/core/terrain/ProceduralTerrain.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const tm = new TerrainMesh();
+    const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
+    const terrain = createDesertTerrain(hf);
+    const mesh = tm.build(terrain, 1);
+    expect(mesh).toBeDefined();
+    expect(tm.mesh).toBe(mesh);
+
+    // updateCutout handles empty bounds and tile bounds safely
+    tm.updateCutout([]);
+    tm.updateCutout([{ minX: -500, maxX: 500, minZ: -500, maxZ: 500 }]);
+    tm.dispose();
+    expect(tm.mesh).toBeNull();
+  });
+});

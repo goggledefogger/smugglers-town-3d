@@ -374,6 +374,23 @@ export class TileStreamer {
     return this.dirty;
   }
 
+  /** World-space X/Z rectangular footprint of all currently loaded tiles. */
+  getTileBounds(): readonly { minX: number; maxX: number; minZ: number; maxZ: number }[] {
+    const half = this.grid.half;
+    const cell = this.grid.cell;
+    const out: { minX: number; maxX: number; minZ: number; maxZ: number }[] = [];
+    for (const t of this.tiles) {
+      if (!t.raster) continue;
+      out.push({
+        minX: -half + t.raster.i0 * cell,
+        maxX: -half + (t.raster.i0 + t.raster.w) * cell,
+        minZ: -half + t.raster.j0 * cell,
+        maxZ: -half + (t.raster.j0 + t.raster.h) * cell
+      });
+    }
+    return out;
+  }
+
   async loadInitial(root: TileNode, onProgress?: (loaded: number, total: number) => void): Promise<void> {
     const wanted = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey);
     let next = 0;

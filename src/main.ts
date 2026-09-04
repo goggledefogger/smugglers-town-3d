@@ -158,18 +158,18 @@ function clearTiles(): void {
     tiles.dispose();
     tiles = null;
   }
-  if (terrainMesh.mesh) terrainMesh.mesh.visible = true;
+  terrainMesh.updateCutout([]);
 }
 
 function swapTerrainMesh(terrain: TerrainProvider): void {
   const old = terrainMesh.mesh;
   if (old) renderer.scene.remove(old);
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
-  // In 3D tile cities, Google Photorealistic 3D Tiles already renders the full
-  // physical world (streets, curbs, sidewalks, bridges, river surfaces).
-  // Hiding the 2D terrain mesh avoids blurry 2D drapes, double bridges, and seawall clipping.
-  mesh.visible = !tiles;
+  // Ground is always visible across the full 5.6km map. When 3D photogrammetry
+  // tiles are active, an alpha cutout mask cleanly discards terrain under the 3D
+  // tiles so bridges/seawalls render cleanly, while retaining solid terrain outside.
   renderer.scene.add(mesh);
+  if (tiles) terrainMesh.updateCutout(tiles.getTileBounds());
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }
 
@@ -498,7 +498,8 @@ function frame(now: number): void {
         colliderRefreshAt = now;
         applyColliders();
         game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
-        if (terrainMesh.mesh?.visible) terrainMesh.refresh(game.terrainProvider.heightfield);
+        terrainMesh.updateCutout(tiles.getTileBounds());
+        terrainMesh.refresh(game.terrainProvider.heightfield);
         groundStreamer?.refresh();
         minimapEl.setTerrain(game.terrainProvider.heightfield, config.world.mapHalf);
       }
