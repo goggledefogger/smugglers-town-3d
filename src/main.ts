@@ -34,6 +34,8 @@ import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
+import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
+import { worldToLl } from './core/geo/projection.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
@@ -419,8 +421,9 @@ relocateBarEl.onSearch = async (q, key) => {
 dirArrowEl.bind(store);
 minimapEl.bind(store);
 
-// ---- live alignment diagnostic HUD (toggle with F8 or ?debug) ----
-let showDiagnostic = typeof window !== 'undefined' && new URLSearchParams(window.location.search).has('debug');
+// ---- live alignment diagnostic HUD (toggle with F8 or ?debug / ?scenario) ----
+const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+let showDiagnostic = !!urlParams && (urlParams.has('debug') || urlParams.has('scenario') || urlParams.has('lat'));
 const diagEl = document.createElement('div');
 diagEl.id = 'debug-diagnostic';
 diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(26,20,16,0.92);backdrop-filter:blur(8px);border:1px solid #ff5a1f;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f4ead8;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
@@ -433,6 +436,53 @@ window.addEventListener('keydown', (e) => {
     diagEl.style.display = showDiagnostic ? 'flex' : 'none';
   }
 });
+
+// ---- URL test scenarios / deep linking (?scenario=<id> | ?lat=<lat>&lon=<lon> | ?key=<apiKey>) ----
+if (urlParams) {
+  const urlKey = urlParams.get('key');
+  if (urlKey) {
+    localStorage.setItem('gmap_key', urlKey.trim());
+  }
+  const scenarioId = urlParams.get('scenario');
+  const latStr = urlParams.get('lat');
+  const lonStr = urlParams.get('lon');
+
+  let targetCoords: string | null = null;
+  let targetScenario: TestScenario | undefined = undefined;
+
+  if (scenarioId) {
+    targetScenario = getScenario(scenarioId);
+    if (targetScenario) {
+      targetCoords = `${targetScenario.lat}, ${targetScenario.lon}`;
+    }
+  } else if (latStr && lonStr) {
+    const lat = parseFloat(latStr);
+    const lon = parseFloat(lonStr);
+    if (!isNaN(lat) && !isNaN(lon)) {
+      targetCoords = `${lat}, ${lon}`;
+      targetScenario = findScenarioByCoords(lat, lon);
+    }
+  }
+
+  if (targetCoords) {
+    const activeKey = urlKey || localStorage.getItem('gmap_key') || '';
+    if (activeKey) {
+      setTimeout(() => {
+        if (relocateBarEl.onSearch) {
+          if (introEl.isConnected) {
+            introEl.onStart?.(targetScenario?.recommendedVehicleType ?? 0);
+          }
+          relocateBarEl.onSearch(targetCoords, activeKey);
+        }
+      }, 400);
+    } else {
+      setTimeout(() => {
+        relocateBarEl.setQuery(targetCoords);
+        relocateBarEl.status = `Scenario: ${targetScenario?.name ?? targetCoords}. Enter Google Maps API key to relocate.`;
+      }, 200);
+    }
+  }
+}
 
 // ---- frame loop ----
 let last = performance.now();
@@ -450,8 +500,18 @@ function frame(now: number): void {
     const groundY = hf.sample(b.pos.x, b.pos.z);
     const diff = b.pos.y - groundY;
     const isUnder = diff < -0.3;
+    const center = world.terrainProvider.center;
+    let gpsSnippet = '';
+    if (center) {
+      const gps = worldToLl(b.pos.x, b.pos.z, center);
+      const matched = findScenarioByCoords(gps.lat, gps.lon);
+      gpsSnippet = `
+        <span style="color:#ffb84d;font-weight:600;">${matched ? `[${matched.name}]` : 'GPS'} ${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}</span>
+      `;
+    }
     diagEl.innerHTML = `
       <span style="color:#ff5a1f;font-weight:700;">[F8 DIAG]</span>
+      ${gpsSnippet}
       <span>X:${b.pos.x.toFixed(0)} Z:${b.pos.z.toFixed(0)}</span>
       <span>Ground: ${groundY.toFixed(1)}m</span>
       <span>Car Y: ${b.pos.y.toFixed(1)}m</span>

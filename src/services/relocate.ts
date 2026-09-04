@@ -14,6 +14,7 @@ const log = logger('relocate');
 
 import { GroundStreamer } from './maps/GroundStreamer.ts';
 import { config } from '../app/config.ts';
+import { parseGpsString, findScenarioByCoords } from '../core/geo/testScenarios.ts';
 
 export interface RelocateOptions {
   readonly query: string;
@@ -47,11 +48,21 @@ export async function previewPlace(query: string, apiKey: string): Promise<{
   thumbnailUrl: string;
 }> {
   await loadMapsApi(apiKey);
-  const r0 = await geocode(query);
-  const lat = r0.geometry.location.lat();
-  const lon = r0.geometry.location.lng();
+  const coords = parseGpsString(query);
+  let lat: number, lon: number, label: string;
+  if (coords) {
+    lat = coords.lat;
+    lon = coords.lon;
+    const matched = findScenarioByCoords(lat, lon);
+    label = matched ? matched.label : `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+  } else {
+    const r0 = await geocode(query);
+    lat = r0.geometry.location.lat();
+    lon = r0.geometry.location.lng();
+    label = r0.formatted_address.slice(0, 80);
+  }
   return {
-    map: { kind: 'city', query, label: r0.formatted_address.slice(0, 80), lat, lon },
+    map: { kind: 'city', query, label, lat, lon },
     thumbnailUrl: satelliteUrl(lat, lon, apiKey, 13, 320, 128)
   };
 }
@@ -81,11 +92,19 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // builds from the identical centre, whatever their own geocoder would say
     ({ lat, lon, label } = opts.at);
   } else {
-    onProgress(`Geocoding "${query}"`);
-    const r0 = await geocode(query);
-    lat = r0.geometry.location.lat();
-    lon = r0.geometry.location.lng();
-    label = r0.formatted_address;
+    const coords = parseGpsString(query);
+    if (coords) {
+      lat = coords.lat;
+      lon = coords.lon;
+      const matched = findScenarioByCoords(lat, lon);
+      label = matched ? matched.label : `GPS (${lat.toFixed(4)}, ${lon.toFixed(4)})`;
+    } else {
+      onProgress(`Geocoding "${query}"`);
+      const r0 = await geocode(query);
+      lat = r0.geometry.location.lat();
+      lon = r0.geometry.location.lng();
+      label = r0.formatted_address;
+    }
   }
   onProgress(`Fetching elevation grid for ${label}`);
   const grid: ElevationGrid = await fetchElevationGrid(lat, lon);

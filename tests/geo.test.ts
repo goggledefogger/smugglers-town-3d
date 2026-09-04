@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Matrix4, Vector3 } from 'three';
-import { llToWorld, ecefToWorldMatrix, tileTransformChain } from '../src/core/geo/projection.ts';
+import { llToWorld, worldToLl, ecefToWorldMatrix, tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef, WORLD_M_PER_M } from '../src/core/geo/ecef.ts';
 
 const ORIGIN = { lat: 37.7749, lon: -122.4194 }; // San Francisco
@@ -49,6 +49,32 @@ describe('llToWorld', () => {
   it('maps altitude to Y scaled by WORLD_M_PER_M and relief boost', () => {
     expect(llToWorld(ORIGIN.lat, ORIGIN.lon, 50, ORIGIN, 1).y).toBeCloseTo(50 * WORLD_M_PER_M, 6);
     expect(llToWorld(ORIGIN.lat, ORIGIN.lon, 50, ORIGIN, 2).y).toBeCloseTo(50 * WORLD_M_PER_M * 2, 6);
+  });
+});
+
+describe('worldToLl', () => {
+  it('maps the world origin back to the origin lat/lon', () => {
+    const ll = worldToLl(0, 0, ORIGIN);
+    expect(ll.lat).toBeCloseTo(ORIGIN.lat, 6);
+    expect(ll.lon).toBeCloseTo(ORIGIN.lon, 6);
+  });
+
+  it('inverts llToWorld precisely for arbitrary offsets across locations', () => {
+    const testCases = [
+      { lat: 40.7061, lon: -73.9969 }, // Brooklyn Bridge
+      { lat: 37.8199, lon: -122.4783 }, // Golden Gate Bridge
+      { lat: 45.5189, lon: -122.6793 }, // Portland
+      { lat: 29.9584, lon: -90.0644 },  // New Orleans
+      { lat: 0, lon: 0 },              // Equator
+    ];
+    for (const tc of testCases) {
+      const origin = { lat: tc.lat, lon: tc.lon };
+      // Test 500m east, 800m north
+      const w = llToWorld(tc.lat + 0.007, tc.lon + 0.006, 0, origin);
+      const inv = worldToLl(w.x, w.z, origin);
+      expect(inv.lat).toBeCloseTo(tc.lat + 0.007, 7);
+      expect(inv.lon).toBeCloseTo(tc.lon + 0.006, 7);
+    }
   });
 });
 

@@ -84,3 +84,23 @@ export function tileTransformChain(
   m.multiply(tileTf);
   return m;
 }
+
+/**
+ * World position (x = east, z = south) -> geodetic lat/lon (degrees).
+ * Exact horizontal inverse of llToWorld.
+ */
+export function worldToLl(
+  x: number,
+  z: number,
+  origin: GeoOrigin
+): { lat: number; lon: number } {
+  const cosLat = Math.max(0.0001, Math.cos((origin.lat * Math.PI) / 180));
+  const north = -z / WORLD_M_PER_M;
+  const east = x / WORLD_M_PER_M;
+  const dLatRad = north / EARTH_RADIUS_M;
+  const dLonRad = east / (EARTH_RADIUS_M * cosLat);
+  return {
+    lat: origin.lat + (dLatRad * 180) / Math.PI,
+    lon: origin.lon + (dLonRad * 180) / Math.PI
+  };
+}
