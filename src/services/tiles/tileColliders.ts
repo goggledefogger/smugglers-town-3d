@@ -38,11 +38,11 @@ const GROUND_K = 6;
 /** Real meters above the estimated ground that make a cell a building. */
 const BUILDING_RISE_M = 8;
 /**
- * The shared ground sits this far (world units) above the tile surface, so
- * the vehicle smoothly rides over street-level photogrammetry noise, kerbs,
- * parked cars and bushes without snagging.
+ * Height gap between the physics ground and photogrammetry surface.
+ * Kept at 2cm so vehicle tires contact the pavement directly rather than hovering,
+ * and the continuous 2D terrain mesh stays cleanly underneath the 3D tiles.
  */
-export const TILE_GROUND_GAP = 0.6;
+export const TILE_GROUND_GAP = 0.02;
 
 export interface Grid {
   readonly cell: number;
@@ -324,11 +324,17 @@ export function collidersFromRasters(
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
+  const low = compositeLows(rasters, n);
   const ground = groundEstimate(top, n);
   const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
     const g = ground[c]!;
+    const l = low[c]!;
+    // An elevated roadway, bridge deck, or overpass has substantial open clearance
+    // between its underside (l) and the ground/water (g). It is a drivable surface,
+    // not an impenetrable ground-to-sky building obstacle.
+    if (l !== Infinity && g !== NO_DATA && l - g >= 5.0) return false;
     return t !== NO_DATA && g !== NO_DATA && t - g >= rise;
   };
 
