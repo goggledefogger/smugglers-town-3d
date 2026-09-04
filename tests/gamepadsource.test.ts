@@ -58,18 +58,18 @@ describe('GamepadSource', () => {
     expect(g.vehicleInput().throttle).toBe(1);
   });
 
-  it('RT (index 7) gives analog throttle', () => {
+  it('LT (index 6) gives analog brake', () => {
     const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
-    buttons[7] = { value: 0.6, pressed: false }; // analog, not pressed
+    buttons[6] = { value: 0.6, pressed: false }; // analog, not pressed
     padAt({ buttons });
-    expect(g.vehicleInput().throttle).toBeCloseTo(0.6, 5);
+    expect(g.vehicleInput().brake).toBeCloseTo(0.6, 5);
   });
 
   it('a trigger under the deadzone reads as zero', () => {
     const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
-    buttons[7] = { value: 0.03, pressed: false };
+    buttons[6] = { value: 0.03, pressed: false };
     padAt({ buttons });
-    expect(g.vehicleInput().throttle).toBe(0);
+    expect(g.vehicleInput().brake).toBe(0);
   });
 
   it('left stick right steers right (negative)', () => {
@@ -90,6 +90,13 @@ describe('GamepadSource', () => {
   it('Y (index 3) jumps, not A', () => {
     const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
     buttons[3] = { value: 1, pressed: true };
+    padAt({ buttons });
+    expect(g.vehicleInput().jump).toBe(true);
+  });
+
+  it('RT (index 7) also jumps', () => {
+    const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+    buttons[7] = { value: 1, pressed: true };
     padAt({ buttons });
     expect(g.vehicleInput().jump).toBe(true);
   });

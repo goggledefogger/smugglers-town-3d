@@ -61,18 +61,19 @@ const DEFAULTS_KEYBOARD: BindingTable = {
   uiPause: [{ kind: 'key', code: 'KeyP' }]
 };
 
-// Stadia-friendly: A = accelerate (Danny's ask), B = brake, Y = jump, X = camera.
-// Triggers RT/LT are analog throttle/brake on top of the face buttons.
-// Standard Gamepad mapping indices.
+// Mapped from the original PS2 game's face-button layout (Square=brake,
+// Circle=reverse, X=forward) onto Stadia's same physical positions
+// (X=brake, B=reverse, A=accelerate). RT is jump (Danny's ask) on top of Y.
+// Camera sits on Select, matching the PS2's SELECT=camera.
 const DEFAULTS_GAMEPAD: BindingTable = {
-  accelerate: [{ kind: 'button', index: 0 }, { kind: 'button', index: 7 }],   // A + RT
-  brake: [{ kind: 'button', index: 1 }, { kind: 'button', index: 6 }],        // B + LT
+  accelerate: [{ kind: 'button', index: 0 }],                          // A
+  brake: [{ kind: 'button', index: 1 }, { kind: 'button', index: 2 }, { kind: 'button', index: 6 }],  // B + X + LT
   steerLeft: [{ kind: 'axis', index: 0, sign: -1 }, { kind: 'button', index: 14 }], // stick L + dpad-left
   steerRight: [{ kind: 'axis', index: 0, sign: 1 }, { kind: 'button', index: 15 }], // stick R + dpad-right
-  jump: [{ kind: 'button', index: 3 }],                                         // Y
+  jump: [{ kind: 'button', index: 3 }, { kind: 'button', index: 7 }],  // Y + RT
   pitchUp: [{ kind: 'axis', index: 3, sign: -1 }],   // right stick up = nose up
   pitchDown: [{ kind: 'axis', index: 3, sign: 1 }],  // right stick down = nose down
-  camera: [{ kind: 'button', index: 2 }],          // X
+  camera: [{ kind: 'button', index: 8 }],          // Select
   reset: [{ kind: 'button', index: 9 }],            // Start/Options
   uiUp: [{ kind: 'button', index: 12 }, { kind: 'axis', index: 1, sign: -1 }],   // dpad-up + stick up
   uiDown: [{ kind: 'button', index: 13 }, { kind: 'axis', index: 1, sign: 1 }],  // dpad-down + stick down
@@ -91,7 +92,7 @@ const STORAGE_KEY = 'stt.bindings';
  * an older default (e.g. the pre-redesign layout that mapped A→jump) can't
  * override the corrected defaults. Forward-compatible: bumping re-invalidates.
  */
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 
 export interface SavedBindings {
   readonly keyboard: BindingTable;
