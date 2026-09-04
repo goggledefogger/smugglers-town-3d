@@ -116,11 +116,19 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
         const vi = index ? index.getX(t * 3 + k) : t * 3 + k;
         _tri[k]!.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
       }
-      for (const q of _tri) {
-        if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) stamp(cellOf(q.x), cellOf(q.z), q.y);
-      }
       const det = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
-      if (Math.abs(det) < 1e-9) continue; // vertical: vertices already stamped
+      if (Math.abs(det) < 1e-9) {
+        // vertical wall: stamp vertices
+        for (const q of _tri) {
+          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) stamp(cellOf(q.x), cellOf(q.z), q.y);
+        }
+        continue;
+      }
+      // non-vertical: stamp the centroid so small triangles register without bleeding into neighbor cells
+      const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3, midY = (a.y + b.y + c.y) / 3;
+      if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+        stamp(cellOf(midX), cellOf(midZ), midY);
+      }
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
       const minZ = Math.min(a.z, b.z, c.z), maxZ = Math.max(a.z, b.z, c.z);
       if (maxX < -half || minX >= half || maxZ < -half || minZ >= half) continue;
@@ -364,6 +372,19 @@ export function collidersFromRasters(
       start = -1;
     }
     above = row;
+  }
+  // Inset building colliders horizontally by 1.2m so 10m quantization steps and
+  // facade overshoots do not protrude into roadway lanes and sidewalks.
+  const INSET_M = 1.2;
+  for (const b of out) {
+    const width = b.max.x - b.min.x;
+    const depth = b.max.z - b.min.z;
+    const insetX = Math.min(INSET_M, Math.max(0, (width - 2) / 2));
+    const insetZ = Math.min(INSET_M, Math.max(0, (depth - 2) / 2));
+    b.min.x += insetX;
+    b.max.x -= insetX;
+    b.min.z += insetZ;
+    b.max.z -= insetZ;
   }
   return out;
 }

@@ -30,10 +30,13 @@ export class PropScatter {
   /** Re-seat the props; `rng` seeded from the match makes every player's rocks the same rocks. */
   scatter(hf: Heightfield, mapHalf: number, real: boolean, rng: () => number = Math.random): void {
     this.clear();
-    // On real satellite terrain the imagery already carries visual detail,
-    // so keep props sparse (cover only) and skip the desert-only cacti
-    const nRocks = real ? 180 : 400;
-    const nCacti = real ? 0 : 300;
+    // On real satellite / 3D photogrammetry terrain, cities carry their own real-world
+    // buildings, curbs and structures. Skip procedural desert props so invisible rock colliders
+    // are never placed in city streets and avenues.
+    if (real) return;
+
+    const nRocks = 400;
+    const nCacti = 300;
     const rocks = new InstancedMesh(
       new DodecahedronGeometry(2, 0), new MeshStandardMaterial({ color: 0x6a5a4a, roughness: 0.95 }), nRocks
     );

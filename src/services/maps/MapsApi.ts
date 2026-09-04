@@ -6,6 +6,7 @@
  * the browser blocks them with a generic "Failed to fetch".
  */
 import type { ElevationGrid } from '../../core/terrain/RealTerrain.ts';
+import { EARTH_RADIUS_M } from '../../core/geo/ecef.ts';
 
 declare global {
   interface Window {
@@ -140,25 +141,40 @@ export function satelliteUrl(
     + `&maptype=satellite&key=${encodeURIComponent(apiKey)}`;
 }
 
+/** Converts (lat, lon) in degrees to Web Mercator world pixel coordinate at zoom Z. */
+export function latLonToWorldPixel(latDeg: number, lonDeg: number, zoom: number): { x: number; y: number } {
+  const mapSize = 256 * Math.pow(2, zoom);
+  const x = ((lonDeg + 180) / 360) * mapSize;
+  const sinLat = Math.sin((latDeg * Math.PI) / 180);
+  const clampedSin = Math.max(-0.9999, Math.min(0.9999, sinLat));
+  const y = (0.5 - Math.log((1 + clampedSin) / (1 - clampedSin)) / (4 * Math.PI)) * mapSize;
+  return { x, y };
+}
+
+/** Converts Web Mercator world pixel coordinate at zoom Z back to (lat, lon) in degrees. */
+export function worldPixelToLatLon(x: number, y: number, zoom: number): { lat: number; lon: number } {
+  const mapSize = 256 * Math.pow(2, zoom);
+  const lon = (x / mapSize) * 360 - 180;
+  const yFrac = 0.5 - y / mapSize;
+  const latRad = 2 * Math.atan(Math.exp(yFrac * 2 * Math.PI)) - Math.PI / 2;
+  const lat = (latRad * 180) / Math.PI;
+  return { lat, lon };
+}
+
 export async function fetchSatellite(
   lat: number,
   lon: number,
   apiKey: string,
   scale = 2
 ): Promise<HTMLCanvasElement> {
-  // Stitch a grid of Static Maps satellite tiles into one high-res canvas.
-  // With scale=2, a 3x3 grid of 640x640 requests yields 1280x1280 px per tile
-  // (3840x3840 canvas total) over ~5.5km, providing ~1.46m/px sharp ground
-  // detail without consuming any additional API quota.
-  // Static Maps returns access-control-allow-origin: *, so an <img> with
-  // crossOrigin='anonymous' stays untainted and uploads cleanly as a GL texture.
+  // Stitch a 3x3 grid of Static Maps satellite tiles into one contiguous canvas using
+  // exact Web Mercator pixel alignment.
+  // Each tile is 640x640 at zoom 15. In Web Mercator pixel space, neighboring tiles
+  // are separated by EXACTLY 640 pixels, guaranteeing 0-pixel gap and 0-pixel overlap.
   const TILE = 640, GRID = 3, zoom = 15;
   const tilePx = TILE * scale;
-  const spanDeg = 0.05;
-  const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
-  const spanLonDeg = spanDeg / cosLat;
-  const dlat = spanDeg / 2;
-  const dlon = spanLonDeg / 2;
+  const centerPix = latLonToWorldPixel(lat, lon, zoom);
+
   const canvas = document.createElement('canvas');
   canvas.width = tilePx * GRID;
   canvas.height = tilePx * GRID;
@@ -182,17 +198,45 @@ export async function fetchSatellite(
     img.src = url;
   });
 
-  // fetch tiles row by row (limits concurrency)
+  // fetch tiles row by row using exact Web Mercator tile centers
   for (let r = 0; r < GRID; r++) {
     const rowPromises: Promise<HTMLImageElement>[] = [];
     for (let c = 0; c < GRID; c++) {
-      const la = lat + dlat - (r / (GRID - 1)) * spanDeg;
-      const lo = lon - dlon + (c / (GRID - 1)) * spanLonDeg;
-      rowPromises.push(loadImg(satelliteUrl(la, lo, apiKey, zoom, TILE, TILE, scale)));
+      const tilePixX = centerPix.x + (c - 1) * TILE;
+      const tilePixY = centerPix.y + (r - 1) * TILE;
+      const { lat: tileLat, lon: tileLon } = worldPixelToLatLon(tilePixX, tilePixY, zoom);
+      rowPromises.push(loadImg(satelliteUrl(tileLat, tileLon, apiKey, zoom, TILE, TILE, scale)));
     }
     const imgs = await Promise.all(rowPromises);
     for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * tilePx, r * tilePx, tilePx, tilePx);
   }
-  return canvas;
+
+  // Crop the stitched canvas to match the exact 5600m x 5600m world bounds centered at (lat, lon)
+  const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
+  const mercatorMetersPerPx = (2 * Math.PI * EARTH_RADIUS_M * cosLat) / (256 * Math.pow(2, zoom));
+  const canvasPixelsPerMeter = scale / mercatorMetersPerPx;
+  const fieldSpanCanvasPx = 5600 * canvasPixelsPerMeter;
+
+  const totalPx = tilePx * GRID;
+  const canvasCenterX = totalPx / 2;
+  const canvasCenterY = totalPx / 2;
+  const cropSize = Math.min(totalPx, fieldSpanCanvasPx);
+  const cropX = Math.max(0, canvasCenterX - cropSize / 2);
+  const cropY = Math.max(0, canvasCenterY - cropSize / 2);
+  const cropW = Math.min(totalPx - cropX, cropSize);
+  const cropH = Math.min(totalPx - cropY, cropSize);
+
+  const outSize = Math.min(2560, Math.round(cropSize));
+  const outCanvas = document.createElement('canvas');
+  outCanvas.width = outSize;
+  outCanvas.height = outSize;
+  const outCtx = outCanvas.getContext('2d')!;
+  outCtx.drawImage(
+    canvas,
+    cropX, cropY, cropW, cropH,
+    0, 0, outSize, outSize
+  );
+
+  return outCanvas;
 }
 
