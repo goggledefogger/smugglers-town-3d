@@ -59,8 +59,8 @@ export interface LodPolicy {
 
 /**
  * Initial load, relative to the match center. Google's levels carry errors
- * of 16.05, 32.1, 64.2 m (525957 m halved per level). We accept 8–16m tiles
- * near center so the initial load is already crisp without blocky slabs.
+ * of 16.05, 32.1, 64.2 m (525957 m halved per level). We accept ~16m tiles
+ * near center so the initial load is quick (~1-2s) and light.
  */
 export const DEFAULT_LOD: LodPolicy = { minErrorM: 10, maxErrorM: 60, errorPerMeter: 1 / 30 };
 /** Streaming, relative to the player: 1.5 m tiles within 90 m, 3 m to 180 m, 5 m to 300 m, 8 m to 500 m. */
@@ -69,7 +69,7 @@ export const STREAM_LOD: LodPolicy = { minErrorM: 1.5, maxErrorM: 40, errorPerMe
 /** The field is 840 units = 5.6 km across; 4 km reaches its corners. */
 const LOAD_RADIUS_M = 4000;
 /** Initial-load cap; the closest win. */
-const MAX_INITIAL_TILES = 180;
+const MAX_INITIAL_TILES = 150;
 /**
  * Streaming stops adding detail past this many tiles (~1 MB of GPU each).
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
@@ -79,13 +79,19 @@ const MAX_TILES = 350;
 const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 650;
+const CORE_RADIUS_M = 350;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 8;
+const CORE_REFINE_BATCH = 4;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
 const GLTF_TO_ECEF = new Matrix4().makeRotationX(Math.PI / 2);
+
+function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+}
 
 /**
  * Distance from a point to a 3D Tiles OBB (center + 3 half-axis vectors).
@@ -148,7 +154,7 @@ function noteFailure(kind: string, data: unknown): void {
 }
 
 export async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
-  const res = await fetch(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
+  const res = await fetchWithTimeout(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
   if (!res.ok) throw new Error('3D tiles root HTTP ' + res.status);
   return res.json();
 }
@@ -157,7 +163,7 @@ async function fetchSubTileset(url: string, apiKey: string): Promise<TilesetRoot
   try {
     const cached = await tileCache.getJson<TilesetRoot>(url);
     if (cached) return cached;
-    const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
+    const res = await fetchWithTimeout(url, { headers: { 'X-Goog-Api-Key': apiKey } });
     if (!res.ok) {
       noteFailure('sub-tileset http', { status: res.status, path: uriPath(url).slice(-40) });
       return null;
@@ -277,7 +283,7 @@ async function loadTileGlb(
   let buf: ArrayBuffer | null = await tileCache.getBuffer(url);
   if (!buf) {
     try {
-      const res = await fetch(url, { headers: { 'X-Goog-Api-Key': apiKey } });
+      const res = await fetchWithTimeout(url, { headers: { 'X-Goog-Api-Key': apiKey } });
       if (!res.ok) {
         noteFailure('tile http', { status: res.status, path: uriPath(url).slice(-40) });
         return null;
@@ -384,16 +390,17 @@ export class TileStreamer {
   }
 
   /**
-   * Refine everything near the start to the streaming LOD before the match
-   * begins. The first load is coarse (20–70 m error: blocks are blobs,
-   * streets are gone), and a ground and a set of colliders taken from it
-   * put cars where buildings turn out to be once the fine tiles arrive.
+   * Refine tiles near the start to a crisp core before the match begins.
+   * Capped at 2 quick rounds with ~10m error threshold so initial load completes
+   * in ~1-2s; the streaming loop (update) takes over and refines down to 1.5m
+   * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    for (let round = 0; round < 12 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = 10;
+    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
-          && (t.node.geometricError ?? 0) > allowedErrorM(nodeDistM(t.node, this.ecef0), this.lod))
+          && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
         .sort((a, b) => nodeDistM(a.node, this.ecef0) - nodeDistM(b.node, this.ecef0))
         .slice(0, CORE_REFINE_BATCH);
       if (coarse.length === 0) return;

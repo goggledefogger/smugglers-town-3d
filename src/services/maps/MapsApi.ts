@@ -11,6 +11,7 @@ declare global {
   interface Window {
     google?: typeof google;
     __gmapsCb?: () => void;
+    gm_authFailure?: () => void;
   }
 }
 
@@ -27,12 +28,39 @@ export function loadMapsApi(apiKey: string): Promise<void> {
   if (mapsApiPromise) return mapsApiPromise;
   const load = new Promise<void>((resolve, reject) => {
     const cb = '__gmapsCb';
-    window[cb] = () => resolve();
+    let settled = false;
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      reject(new Error('Google Maps JS API load timed out. Check your network or API key.'));
+    }, 10000);
+
+    window[cb] = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve();
+    };
+
+    window.gm_authFailure = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(
+        'Google Maps authentication failed (InvalidKeyMapError). Check that your API key is valid (starts with AIzaSy) and Maps JavaScript API is enabled.'
+      ));
+    };
+
     const s = document.createElement('script');
     s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&callback=${cb}`;
-    s.onerror = () => reject(new Error(
-      'Could not load Google Maps JS API — check that Maps JavaScript API is enabled for your key.'
-    ));
+    s.onerror = () => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(new Error(
+        'Could not load Google Maps JS API — check that Maps JavaScript API is enabled for your key.'
+      ));
+    };
     document.head.appendChild(s);
   });
   mapsApiPromise = load.catch((err: unknown) => {
@@ -44,11 +72,20 @@ export function loadMapsApi(apiKey: string): Promise<void> {
 
 export async function geocode(query: string): Promise<google.maps.GeocoderResult> {
   return new Promise((resolve, reject) => {
-    const geocoder = new google.maps.Geocoder();
-    geocoder.geocode({ address: query }, (results, status) => {
-      if (status === 'OK' && results && results.length > 0) resolve(results[0]!);
-      else reject(new Error('Geocode failed: ' + status));
-    });
+    const timer = setTimeout(() => {
+      reject(new Error('Geocoding timed out. Check that your Google Maps API key is valid and Geocoding API is enabled.'));
+    }, 8000);
+    try {
+      const geocoder = new google.maps.Geocoder();
+      geocoder.geocode({ address: query }, (results, status) => {
+        clearTimeout(timer);
+        if (status === 'OK' && results && results.length > 0) resolve(results[0]!);
+        else reject(new Error('Geocode failed: ' + status));
+      });
+    } catch (err) {
+      clearTimeout(timer);
+      reject(err);
+    }
   });
 }
 
@@ -75,10 +112,19 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
   for (let s = 0; s < all.length; s += CHUNK) {
     const chunk = all.slice(s, s + CHUNK);
     const part = await new Promise<google.maps.ElevationResult[]>((resolve, reject) => {
-      elevator.getElevationForLocations({ locations: chunk }, (res, status) => {
-        if (status === 'OK' && res) resolve(res);
-        else reject(new Error(`Elevation failed: ${status} (chunk ${s / CHUNK})`));
-      });
+      const timer = setTimeout(() => {
+        reject(new Error(`Elevation request timed out (chunk ${s / CHUNK}). Check Elevation API is enabled.`));
+      }, 8000);
+      try {
+        elevator.getElevationForLocations({ locations: chunk }, (res, status) => {
+          clearTimeout(timer);
+          if (status === 'OK' && res) resolve(res);
+          else reject(new Error(`Elevation failed: ${status} (chunk ${s / CHUNK})`));
+        });
+      } catch (err) {
+        clearTimeout(timer);
+        reject(err);
+      }
     });
     for (let k = 0; k < part.length; k++) samples[s + k] = part[k]!.elevation;
   }
@@ -120,8 +166,18 @@ export async function fetchSatellite(
   const loadImg = (url: string): Promise<HTMLImageElement> => new Promise((res, rej) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => res(img);
-    img.onerror = () => rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+    const timer = setTimeout(() => {
+      img.src = '';
+      rej(new Error('Satellite image request timed out (check Static Maps API enabled)'));
+    }, 10000);
+    img.onload = () => {
+      clearTimeout(timer);
+      res(img);
+    };
+    img.onerror = () => {
+      clearTimeout(timer);
+      rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+    };
     img.src = url;
   });
 

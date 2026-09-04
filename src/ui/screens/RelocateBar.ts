@@ -115,6 +115,10 @@ export class RelocateBar extends LitElement {
   private submit(): void {
     const q = (this.renderRoot.querySelector('#q') as HTMLInputElement).value.trim();
     const key = (this.renderRoot.querySelector('#key') as HTMLInputElement).value.trim();
+    if (key.startsWith('4/')) {
+      this.status = 'Key starts with "4/" — this is an OAuth authorization code, not a Google API Key (starts with AIzaSy).';
+      return;
+    }
     if (q && this.onSearch) this.onSearch(q, key);
   }
 
