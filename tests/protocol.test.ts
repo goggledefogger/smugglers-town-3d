@@ -7,25 +7,33 @@ import type { VehicleInput } from '../src/core/physics/vehicleStats.ts';
 
 describe('InputMsg', () => {
   it('round trips through encode/decode', () => {
-    const msg: InputMsg = { t: 'i', seq: 7, th: 0.5, br: 0.25, st: -0.3, j: true, p: 0.2 };
+    const msg: InputMsg = { t: 'i', seq: 7, th: 0.5, br: 0.25, st: -0.3, j: true, p: 0.2, hb: false };
     expect(decode(encode(msg))).toEqual(msg);
   });
 
   it('inputToMsg / inputFromMsg round trip, defaulting missing pitch to 0', () => {
     const input: VehicleInput = { throttle: 1, brake: 0, steer: -1, jump: false };
     const msg = inputToMsg(input, 3);
-    expect(msg).toEqual({ t: 'i', seq: 3, th: 1, br: 0, st: -1, j: false, p: 0 });
-    expect(inputFromMsg(msg)).toEqual({ throttle: 1, brake: 0, steer: -1, jump: false, pitch: 0 });
+    expect(msg).toEqual({ t: 'i', seq: 3, th: 1, br: 0, st: -1, j: false, p: 0, hb: false });
+    expect(inputFromMsg(msg)).toEqual({ throttle: 1, brake: 0, steer: -1, jump: false, pitch: 0, handbrake: false });
+  });
+
+  it('round trips a handbrake input', () => {
+    const input: VehicleInput = { throttle: 0.8, brake: 0, steer: 0.5, jump: false, handbrake: true };
+    const msg = inputToMsg(input, 1);
+    expect(msg.hb).toBe(true);
+    expect(inputFromMsg(msg).handbrake).toBe(true);
   });
 
   it('rejects out-of-range fields', () => {
-    const base = { t: 'i', seq: 1, th: 0.5, br: 0.5, st: 0, j: false, p: 0 };
+    const base = { t: 'i', seq: 1, th: 0.5, br: 0.5, st: 0, j: false, p: 0, hb: false };
     expect(decode(JSON.stringify({ ...base, th: 1.5 }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, br: -0.1 }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, st: 2 }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, p: -2 }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, seq: -1 }))).toBeNull();
     expect(decode(JSON.stringify({ ...base, j: 'yes' }))).toBeNull();
+    expect(decode(JSON.stringify({ ...base, hb: 'yes' }))).toBeNull();
   });
 
   it('rejects missing fields', () => {

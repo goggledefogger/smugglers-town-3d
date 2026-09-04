@@ -207,7 +207,8 @@ export class VehicleBody {
     }
     this.jumpHeld = input.jump;
     this.steer = input.steer;
-    this.brake = input.brake;
+    // a held handbrake flares the tail lights too — it's the rear wheels locking
+    this.brake = input.handbrake ? Math.max(input.brake, 0.7) : input.brake;
     if (this.graceS > 0) this.graceS = Math.max(0, this.graceS - dt);
 
     this.integrateAngular(dt);
@@ -248,7 +249,12 @@ export class VehicleBody {
     const dragK = (this.cfg.driveForce * stats.accel) / topSpeed;
     this.vel.multiplyScalar(1 - dragK * dt);
     const sideVel = this.vel.dot(right);
-    this.vel.addScaledVector(right, -sideVel * (1 - Math.pow(0.001, dt * stats.grip ** 4)));
+    // handbrake drops lateral grip so the car slides: the grip bleed is the
+    // only thing keeping the car on its heading, so skipping it lets momentum
+    // carry the tail out. A small residual (0.05×) keeps a held slide from
+    // locking into a permanent sideways drift — it still bleeds, just slowly.
+    const gripScale = input.handbrake ? 0.05 : 1;
+    this.vel.addScaledVector(right, -sideVel * gripScale * (1 - Math.pow(0.001, dt * stats.grip ** 4)));
     if (this.vel.length() > topSpeed) this.vel.setLength(topSpeed);
     this.applySteer(dt, input, up, fwdSpeed);
     if (input.jump && !this.jumpHeld) {

@@ -104,7 +104,7 @@ export class GamepadSource implements InputSource {
   vehicleInput(): VehicleInput {
     const pad = this.snapshot();
     if (!pad) return REST;
-    const out: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0 };
+    const out: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0, handbrake: false };
     for (const action of Object.keys(this.table) as LogicalAction[]) {
       for (const b of this.table[action]) {
         const v = this.bindingValue(pad, b);
@@ -119,7 +119,8 @@ export class GamepadSource implements InputSource {
       brake: out.brake,
       steer: out.steer || 0,
       jump: out.jump,
-      pitch: out.pitch || 0
+      pitch: out.pitch || 0,
+      handbrake: out.handbrake ?? false
     };
   }
 
@@ -180,6 +181,7 @@ function applyDigital(out: VehicleInput, action: LogicalAction): void {
     case 'steerLeft': out.steer = 1; break;
     case 'steerRight': out.steer = -1; break;
     case 'jump': out.jump = true; break;
+    case 'handbrake': out.handbrake = true; break;
     default: break;
   }
 }

@@ -35,4 +35,6 @@ export interface VehicleInput {
   jump: boolean;
   /** [-1, 1] air-control pitch, applied only while airborne. +1 is nose up. */
   pitch?: number;
+  /** Handbrake: held → lateral grip drops so the car slides/drifts. */
+  handbrake?: boolean;
 }

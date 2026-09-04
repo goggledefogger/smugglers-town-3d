@@ -38,7 +38,7 @@ export type Hotkey = 'camera' | 'reset';
 export type LogicalAction =
   | 'accelerate' | 'brake'
   | 'steerLeft' | 'steerRight'
-  | 'jump'
+  | 'jump' | 'handbrake'
   | 'pitchUp' | 'pitchDown'
   | 'camera' | 'reset'
   | 'uiUp' | 'uiDown' | 'uiLeft' | 'uiRight'

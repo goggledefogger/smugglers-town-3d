@@ -22,6 +22,7 @@ function driveContribution(action: LogicalAction): Partial<VehicleInput> | null 
     case 'steerLeft': return { steer: 1 };
     case 'steerRight': return { steer: -1 };
     case 'jump': return { jump: true };
+    case 'handbrake': return { handbrake: true };
     case 'pitchUp': return { pitch: 1 };
     case 'pitchDown': return { pitch: -1 };
     default: return null;
@@ -116,5 +117,6 @@ function mergeDrive(out: VehicleInput, c: Partial<VehicleInput>): void {
   if (c.brake) out.brake = c.brake;
   if (c.steer !== undefined) out.steer = c.steer;
   if (c.jump) out.jump = true;
+  if (c.handbrake) out.handbrake = true;
   if (c.pitch !== undefined) out.pitch = c.pitch;
 }

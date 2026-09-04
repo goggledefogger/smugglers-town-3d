@@ -28,7 +28,7 @@ export type BindingTable = Record<LogicalAction, Binding[]>;
 
 /** Which `LogicalAction`s each binding feeds. */
 export const DRIVING_ACTIONS: readonly LogicalAction[] = [
-  'accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'pitchUp', 'pitchDown'
+  'accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'
 ];
 export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset'];
 export const UI_ACTIONS: readonly LogicalAction[] = [
@@ -45,6 +45,8 @@ const DEFAULTS_KEYBOARD: BindingTable = {
   steerLeft: [{ kind: 'key', code: 'KeyA' }, { kind: 'key', code: 'ArrowLeft' }],
   steerRight: [{ kind: 'key', code: 'KeyD' }, { kind: 'key', code: 'ArrowRight' }],
   jump: [{ kind: 'key', code: 'Space' }],
+  // no keyboard handbrake default; bind one in the Controls screen if wanted
+  handbrake: [],
   // pitch has no dedicated key; the sim reuses accelerate/brake while airborne.
   // These are empty so keyboard pitch falls out of accel/brake in the source.
   pitchUp: [],
@@ -62,15 +64,16 @@ const DEFAULTS_KEYBOARD: BindingTable = {
 };
 
 // Mapped from the original PS2 game's face-button layout (Square=brake,
-// Circle=reverse, X=forward) onto Stadia's same physical positions
-// (X=brake, B=reverse, A=accelerate). RT is jump (Danny's ask) on top of Y.
+// Circle=handbrake/reverse, X=forward) onto Stadia's same physical positions
+// (X=brake, B=handbrake, A=accelerate). RT is jump (Danny's ask) on top of Y.
 // Camera sits on Select, matching the PS2's SELECT=camera.
 const DEFAULTS_GAMEPAD: BindingTable = {
   accelerate: [{ kind: 'button', index: 0 }],                          // A
-  brake: [{ kind: 'button', index: 1 }, { kind: 'button', index: 2 }, { kind: 'button', index: 6 }],  // B + X + LT
+  brake: [{ kind: 'button', index: 2 }, { kind: 'button', index: 6 }],  // X + LT
   steerLeft: [{ kind: 'axis', index: 0, sign: -1 }, { kind: 'button', index: 14 }], // stick L + dpad-left
   steerRight: [{ kind: 'axis', index: 0, sign: 1 }, { kind: 'button', index: 15 }], // stick R + dpad-right
   jump: [{ kind: 'button', index: 3 }, { kind: 'button', index: 7 }],  // Y + RT
+  handbrake: [{ kind: 'button', index: 1 }],                           // B
   pitchUp: [{ kind: 'axis', index: 3, sign: -1 }],   // right stick up = nose up
   pitchDown: [{ kind: 'axis', index: 3, sign: 1 }],  // right stick down = nose down
   camera: [{ kind: 'button', index: 8 }],          // Select
@@ -92,7 +95,7 @@ const STORAGE_KEY = 'stt.bindings';
  * an older default (e.g. the pre-redesign layout that mapped A→jump) can't
  * override the corrected defaults. Forward-compatible: bumping re-invalidates.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 export interface SavedBindings {
   readonly keyboard: BindingTable;

@@ -18,7 +18,7 @@ export type PeerId = string;
 export const PROTOCOL_VERSION = 3;
 
 /** Client → host, ~30 Hz. Latest seq wins. */
-export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: number; j: boolean; p: number }
+export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: number; j: boolean; p: number; hb: boolean }
 
 export interface BodySnap { id: number; p: [number, number, number]; q: [number, number, number, number]; v: [number, number, number]; d: number; g: 0 | 1 }
 
@@ -122,8 +122,9 @@ function decodeInput(r: Record<string, unknown>): InputMsg | null {
   if (!inRange(r.br, 0, 1)) return null;
   if (!inRange(r.st, -1, 1)) return null;
   if (typeof r.j !== 'boolean') return null;
+  if (typeof r.hb !== 'boolean') return null;
   if (!inRange(r.p, -1, 1)) return null;
-  return { t: 'i', seq: r.seq, th: r.th, br: r.br, st: r.st, j: r.j, p: r.p };
+  return { t: 'i', seq: r.seq, th: r.th, br: r.br, st: r.st, j: r.j, p: r.p, hb: r.hb };
 }
 
 function decodeBody(v: unknown): BodySnap | null {
@@ -261,9 +262,9 @@ export function decode(text: unknown): NetMsg | null {
 }
 
 export function inputToMsg(input: VehicleInput, seq: number): InputMsg {
-  return { t: 'i', seq, th: input.throttle, br: input.brake, st: input.steer, j: input.jump, p: input.pitch ?? 0 };
+  return { t: 'i', seq, th: input.throttle, br: input.brake, st: input.steer, j: input.jump, p: input.pitch ?? 0, hb: input.handbrake ?? false };
 }
 
 export function inputFromMsg(m: InputMsg): VehicleInput {
-  return { throttle: m.th, brake: m.br, steer: m.st, jump: m.j, pitch: m.p };
+  return { throttle: m.th, brake: m.br, steer: m.st, jump: m.j, pitch: m.p, handbrake: m.hb };
 }

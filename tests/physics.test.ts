@@ -87,6 +87,21 @@ describe('VehicleBody.step', () => {
     expect(Math.abs(monster.vel.x)).toBeLessThan(Math.abs(suv.vel.x) + 1e-6);
   });
 
+  it('handbrake drops lateral grip so even a high-grip car slides', () => {
+    const suv = makeBody(2);     // grip 1.00 — bites hard normally
+    const suvNoHand = makeBody(2);
+    for (const v of [suv, suvNoHand]) {
+      v.pos.set(0, 1, 0);
+      v.vel.set(20, 0, 0); // pure sideways
+    }
+    run(suv, { ...NO_INPUT, handbrake: true }, 0.5);
+    run(suvNoHand, NO_INPUT, 0.5);
+    // with the handbrake the SUV keeps most of its sideways speed (slides);
+    // without it the grip bleeds it to a near-stop (the test above)
+    expect(Math.abs(suv.vel.x)).toBeGreaterThan(10);
+    expect(Math.abs(suvNoHand.vel.x)).toBeLessThan(1);
+  });
+
   it('accelerates and tops out by type', () => {
     const rally = makeBody(1);
     const monster = makeBody(4);

@@ -48,7 +48,7 @@ describe('GamepadSource', () => {
 
   it('yields all-zero input from an untouched pad', () => {
     padAt({});
-    expect(g.vehicleInput()).toEqual({ throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0 });
+    expect(g.vehicleInput()).toEqual({ throttle: 0, brake: 0, steer: 0, jump: false, pitch: 0, handbrake: false });
   });
 
   it('A button accelerates (Stadia default)', () => {
@@ -99,6 +99,22 @@ describe('GamepadSource', () => {
     buttons[7] = { value: 1, pressed: true };
     padAt({ buttons });
     expect(g.vehicleInput().jump).toBe(true);
+  });
+
+  it('B (index 1) is handbrake, not brake', () => {
+    const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+    buttons[1] = { value: 1, pressed: true };
+    padAt({ buttons });
+    const v = g.vehicleInput();
+    expect(v.handbrake).toBe(true);
+    expect(v.brake).toBe(0);
+  });
+
+  it('X (index 2) brakes', () => {
+    const buttons = Array.from({ length: 16 }, () => ({ value: 0, pressed: false }));
+    buttons[2] = { value: 1, pressed: true };
+    padAt({ buttons });
+    expect(g.vehicleInput().brake).toBe(1);
   });
 
   it('right stick up pitches nose up (positive)', () => {

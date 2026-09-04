@@ -46,16 +46,17 @@ export class InputManager {
 
   /** Merged driving input. Per-channel: any source pushing wins, 0 if none. */
   vehicleInput(): VehicleInput {
-    let throttle = 0, brake = 0, steer = 0, jump = false, pitch = 0;
+    let throttle = 0, brake = 0, steer = 0, jump = false, pitch = 0, handbrake = false;
     for (const s of this.sources) {
       const v = s.vehicleInput();
       if (v.throttle) throttle = maxAbs(throttle, v.throttle);
       if (v.brake) brake = maxAbs(brake, v.brake);
       if (v.steer) steer = maxAbs(steer, v.steer);
       if (v.jump) jump = true;
+      if (v.handbrake) handbrake = true;
       if (v.pitch) pitch = maxAbs(pitch, v.pitch);
     }
-    return { throttle, brake, steer, jump, pitch };
+    return { throttle, brake, steer, jump, pitch, handbrake };
   }
 
   drainUiActions(): UiAction[] {

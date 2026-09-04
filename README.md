@@ -39,8 +39,9 @@ the garage's **Controls** screen.
 
 Gamepad defaults are mapped from the original game's PS2 controller onto the
 same physical positions on a Stadia pad: **A** accelerates, **X** brakes,
-**B** reverses, **Y** and **RT** jump, **Select** cycles the camera, **Start**
-pauses. Left stick or D-pad steers, right stick pitches in the air.
+**B** is the handbrake (slide/drift), **Y** and **RT** jump, **Select** cycles
+the camera, **Start** pauses. Left stick or D-pad steers, right stick pitches
+in the air.
 
 In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` (or gamepad
 **A**) starts. Typing in the search box never leaks into the game.
@@ -98,7 +99,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (258 tests, plain node) |
+| `npm test` | Test suite (262 tests, plain node) |
 | `npm run test:watch` | The same, re-running as you edit |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |

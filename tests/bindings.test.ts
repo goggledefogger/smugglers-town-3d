@@ -34,9 +34,10 @@ describe('Bindings', () => {
     expect(g.jump.some(x => x.kind === 'button' && x.index === 3)).toBe(true);
     // RT (index 7) also jumps (Danny's ask)
     expect(g.jump.some(x => x.kind === 'button' && x.index === 7)).toBe(true);
-    // X (index 2) brakes, B (index 1) reverses — mapped from the PS2 layout
+    // B (index 1) is handbrake; X (index 2) brakes — mapped from the PS2 layout
+    expect(g.handbrake).toEqual([{ kind: 'button', index: 1 }]);
     expect(g.brake.some(x => x.kind === 'button' && x.index === 2)).toBe(true);
-    expect(g.brake.some(x => x.kind === 'button' && x.index === 1)).toBe(true);
+    expect(g.brake.some(x => x.kind === 'button' && x.index === 1)).toBe(false);
     // camera sits on Select (index 8), matching the PS2's SELECT=camera
     expect(g.camera).toEqual([{ kind: 'button', index: 8 }]);
   });
@@ -89,21 +90,22 @@ describe('Bindings', () => {
     expect(reloaded.table('gamepad').jump).toEqual(DEFAULTS_GAMEPAD.jump);
   });
 
-  it('rejects a save from the previous schema version (v:1)', () => {
-    // v:1 had RT on accelerate and X on camera; v:2 moves RT to jump and
-    // camera to Select. A v:1 save must be rejected so the v:2 defaults win.
-    const v1 = {
-      v: 1,
+  it('rejects a save from the previous schema version (v:2)', () => {
+    // v:2 had B on brake (no handbrake); v:3 moves B to handbrake and X to
+    // brake. A v:2 save must be rejected so the v:3 defaults win.
+    const v2 = {
+      v: 2,
       keyboard: structuredClone(DEFAULTS_KEYBOARD),
       gamepad: {
-        accelerate: [{ kind: 'button' as const, index: 0 }, { kind: 'button' as const, index: 7 }],
-        brake: [{ kind: 'button' as const, index: 1 }, { kind: 'button' as const, index: 6 }],
+        accelerate: [{ kind: 'button' as const, index: 0 }],
+        brake: [{ kind: 'button' as const, index: 1 }, { kind: 'button' as const, index: 2 }, { kind: 'button' as const, index: 6 }],
         steerLeft: [{ kind: 'axis' as const, index: 0, sign: -1 as const }, { kind: 'button' as const, index: 14 }],
         steerRight: [{ kind: 'axis' as const, index: 0, sign: 1 as const }, { kind: 'button' as const, index: 15 }],
-        jump: [{ kind: 'button' as const, index: 3 }],
+        jump: [{ kind: 'button' as const, index: 3 }, { kind: 'button' as const, index: 7 }],
+        handbrake: [],
         pitchUp: [{ kind: 'axis' as const, index: 3, sign: -1 as const }],
         pitchDown: [{ kind: 'axis' as const, index: 3, sign: 1 as const }],
-        camera: [{ kind: 'button' as const, index: 2 }],
+        camera: [{ kind: 'button' as const, index: 8 }],
         reset: [{ kind: 'button' as const, index: 9 }],
         uiUp: [{ kind: 'button' as const, index: 12 }, { kind: 'axis' as const, index: 1, sign: -1 as const }],
         uiDown: [{ kind: 'button' as const, index: 13 }, { kind: 'axis' as const, index: 1, sign: 1 as const }],
@@ -115,11 +117,11 @@ describe('Bindings', () => {
         uiPause: [{ kind: 'button' as const, index: 9 }]
       }
     };
-    localStorage.setItem('stt.bindings', JSON.stringify(v1));
+    localStorage.setItem('stt.bindings', JSON.stringify(v2));
     const reloaded = new Bindings();
-    // v:2 defaults win: RT (7) is now jump, camera is on Select (8)
-    expect(reloaded.table('gamepad').jump).toEqual(DEFAULTS_GAMEPAD.jump);
-    expect(reloaded.table('gamepad').camera).toEqual([{ kind: 'button', index: 8 }]);
+    // v:3 defaults win: B (1) is handbrake, brake is X (2) + LT (6) only
+    expect(reloaded.table('gamepad').handbrake).toEqual([{ kind: 'button', index: 1 }]);
+    expect(reloaded.table('gamepad').brake).toEqual(DEFAULTS_GAMEPAD.brake);
   });
 
   it('rejects a save with the wrong schema version', () => {
