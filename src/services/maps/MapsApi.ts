@@ -6,6 +6,7 @@
  * the browser blocks them with a generic "Failed to fetch".
  */
 import type { ElevationGrid } from '../../core/terrain/RealTerrain.ts';
+import { tileCache } from '../tiles/TileCache.ts';
 
 declare global {
   interface Window {
@@ -87,45 +88,80 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
 
 /** A Static Maps satellite image URL. The one place that spells this endpoint. */
 export function satelliteUrl(
-  lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number
+  lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 2
 ): string {
   return 'https://maps.googleapis.com/maps/api/staticmap'
-    + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}`
+    + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}&scale=${scale}`
     + `&maptype=satellite&key=${encodeURIComponent(apiKey)}`;
 }
 
-export async function fetchSatellite(lat: number, lon: number, apiKey: string): Promise<HTMLCanvasElement> {
+export async function fetchSatellite(
+  lat: number,
+  lon: number,
+  apiKey: string,
+  scale = 2
+): Promise<HTMLCanvasElement> {
   // Stitch a grid of Static Maps satellite tiles into one high-res canvas.
-  // A single 640px image over ~5.5km is hopelessly blurry; a 3x3 grid at
-  // zoom 15 keeps sharp detail. Static Maps returns
-  // access-control-allow-origin: *, so an <img> with crossOrigin='anonymous'
-  // stays untainted and uploads cleanly as a GL texture.
+  // With scale=2, a 3x3 grid of 640x640 requests yields 1280x1280 px per tile
+  // (3840x3840 canvas total) over ~5.5km, providing ~1.46m/px sharp ground
+  // detail without consuming any additional API quota.
+  // Static Maps returns access-control-allow-origin: *, so an <img> with
+  // crossOrigin='anonymous' stays untainted and uploads cleanly as a GL texture.
   const TILE = 640, GRID = 3, zoom = 15;
+  const tilePx = TILE * scale;
   const spanDeg = 0.05;
   const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));
   const dlat = spanDeg / 2;
   const dlon = spanDeg / 2 / cosLat;
   const canvas = document.createElement('canvas');
-  canvas.width = TILE * GRID;
-  canvas.height = TILE * GRID;
+  canvas.width = tilePx * GRID;
+  canvas.height = tilePx * GRID;
   const ctx = canvas.getContext('2d')!;
-  const loadImg = (url: string) => new Promise<HTMLImageElement>((res, rej) => {
-    const img = new Image();
-    img.crossOrigin = 'anonymous';
-    img.onload = () => res(img);
-    img.onerror = () => rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
-    img.src = url;
-  });
+
+  const loadImg = async (url: string): Promise<HTMLImageElement> => {
+    let blobUrl = '';
+    const cached = await tileCache.getBuffer(url);
+    if (cached) {
+      blobUrl = URL.createObjectURL(new Blob([cached]));
+    } else {
+      try {
+        const res = await fetch(url);
+        if (res.ok) {
+          const buf = await res.arrayBuffer();
+          await tileCache.putBuffer(url, buf, 'image/jpeg');
+          blobUrl = URL.createObjectURL(new Blob([buf]));
+        }
+      } catch {
+        // Fall back to direct image URL if fetch throws (e.g. CORS edge case)
+      }
+    }
+
+    return new Promise<HTMLImageElement>((res, rej) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        res(img);
+      };
+      img.onerror = () => {
+        if (blobUrl) URL.revokeObjectURL(blobUrl);
+        rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+      };
+      img.src = blobUrl || url;
+    });
+  };
+
   // fetch tiles row by row (limits concurrency)
   for (let r = 0; r < GRID; r++) {
     const rowPromises: Promise<HTMLImageElement>[] = [];
     for (let c = 0; c < GRID; c++) {
       const la = lat + dlat - (r / (GRID - 1)) * spanDeg;
       const lo = lon - dlon + (c / (GRID - 1)) * spanDeg * 2 * cosLat;
-      rowPromises.push(loadImg(satelliteUrl(la, lo, apiKey, zoom, TILE, TILE)));
+      rowPromises.push(loadImg(satelliteUrl(la, lo, apiKey, zoom, TILE, TILE, scale)));
     }
     const imgs = await Promise.all(rowPromises);
-    for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * TILE, r * TILE, TILE, TILE);
+    for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * tilePx, r * tilePx, tilePx, tilePx);
   }
   return canvas;
 }
+
