@@ -45,3 +45,27 @@ describe('TerrainMesh continuous underlay', () => {
     expect(tm.mesh).toBeNull();
   });
 });
+
+describe('PropScatter', () => {
+  it('scatters props in desert terrain, but skips all props and colliders in real cities', async () => {
+    const { PropScatter } = await import('../src/render/PropScatter.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const { Scene } = await import('three');
+
+    const scene = new Scene();
+    const ps = new PropScatter(scene);
+    const hf = new Heightfield(5600, 16, new Float32Array(17 * 17));
+
+    // Real city: 0 props, 0 colliders
+    ps.scatter(hf, 2800, true);
+    expect(ps.colliders.length).toBe(0);
+
+    // Desert terrain: props and colliders generated
+    ps.scatter(hf, 2800, false);
+    expect(ps.colliders.length).toBeGreaterThan(0);
+    expect(ps.colliders.some(c => c.kind === 'prop')).toBe(true);
+
+    ps.dispose();
+    expect(ps.colliders.length).toBe(0);
+  });
+});

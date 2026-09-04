@@ -48,4 +48,27 @@ describe('GroundStreamer', () => {
     streamer.dispose();
     expect(streamer.group.children.length).toBe(0);
   });
+
+  it('computes exact Web Mercator pixel roundtrip and continuous tile centers', async () => {
+    const { latLonToWorldPixel, worldPixelToLatLon } = await import('../src/services/maps/MapsApi.ts');
+    const nyc = { lat: 40.7128, lon: -74.0060 };
+    const zoom = 15;
+
+    const pix = latLonToWorldPixel(nyc.lat, nyc.lon, zoom);
+    expect(pix.x).toBeGreaterThan(0);
+    expect(pix.y).toBeGreaterThan(0);
+
+    const roundtrip = worldPixelToLatLon(pix.x, pix.y, zoom);
+    expect(roundtrip.lat).toBeCloseTo(nyc.lat, 6);
+    expect(roundtrip.lon).toBeCloseTo(nyc.lon, 6);
+
+    // Stepping ±640 pixels gives neighboring tile centers touching with zero gap
+    const eastTilePix = { x: pix.x + 640, y: pix.y };
+    const eastTile = worldPixelToLatLon(eastTilePix.x, eastTilePix.y, zoom);
+    expect(eastTile.lon).toBeGreaterThan(nyc.lon);
+    expect(eastTile.lat).toBeCloseTo(nyc.lat, 6);
+
+    const backPix = latLonToWorldPixel(eastTile.lat, eastTile.lon, zoom);
+    expect(backPix.x).toBeCloseTo(eastTilePix.x, 3);
+  });
 });

@@ -2,7 +2,7 @@ import {
   Group, Mesh, PlaneGeometry, MeshStandardMaterial, Texture, BufferAttribute,
   SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter
 } from 'three';
-import { satelliteUrl } from './MapsApi.ts';
+import { satelliteUrl, latLonToWorldPixel, worldPixelToLatLon } from './MapsApi.ts';
 import { tileCache } from '../tiles/TileCache.ts';
 import { logger } from '../../app/log.ts';
 import { EARTH_RADIUS_M, WORLD_M_PER_M } from '../../core/geo/ecef.ts';
@@ -190,8 +190,10 @@ export class GroundStreamer {
   private async createPatch(
     key: string, col: number, row: number, cellWx: number, cellWz: number
   ): Promise<void> {
-    const lon = this.center.lon + (cellWx / (EARTH_RADIUS_M * this.cosLat * WORLD_M_PER_M)) * (180 / Math.PI);
-    const lat = this.center.lat - (cellWz / (EARTH_RADIUS_M * WORLD_M_PER_M)) * (180 / Math.PI);
+    const centerPix = latLonToWorldPixel(this.center.lat, this.center.lon, this.zoom);
+    const patchPixX = centerPix.x + col * 640;
+    const patchPixY = centerPix.y + row * 640;
+    const { lat, lon } = worldPixelToLatLon(patchPixX, patchPixY, this.zoom);
     const url = satelliteUrl(lat, lon, this.apiKey, this.zoom, 640, 640, 2);
 
     let buf: ArrayBuffer | null = await tileCache.getBuffer(url);
