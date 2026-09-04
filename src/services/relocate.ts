@@ -105,9 +105,11 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
-  // Stream high-resolution (Zoom 18, ~0.25m/px) satellite ground patches with exact
-  // local tangent-plane geodetic alignment matching 3D tiles to the millimeter.
-  const groundStreamer = sat ? new GroundStreamer({
+  // Google Photorealistic 3D Tiles renders the complete physical world (streets, curbs,
+  // bridges, river surfaces, seawalls). Only stream secondary 2D satellite patches if
+  // 3D tiles are unavailable (terrain-only mode), preventing floating sheets over rivers
+  // and shoreline seawall clipping.
+  const groundStreamer = (sat && !tiles) ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
     heightfield: terrain.heightfield,

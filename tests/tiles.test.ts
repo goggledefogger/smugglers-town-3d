@@ -43,12 +43,12 @@ describe('allowedErrorM', () => {
     expect(allowedErrorM(3000, DEFAULT_LOD)).toBe(60);
   });
 
-  it('allows high-resolution ~1.5m error near the vehicle for STREAM_LOD', () => {
-    expect(allowedErrorM(0, STREAM_LOD)).toBe(1.5);
-    expect(allowedErrorM(60, STREAM_LOD)).toBe(1.5);
-    expect(allowedErrorM(180, STREAM_LOD)).toBe(3.0);
-    expect(allowedErrorM(480, STREAM_LOD)).toBe(8.0);
-    expect(allowedErrorM(3000, STREAM_LOD)).toBe(40);
+  it('allows high-resolution sub-meter error near the vehicle for STREAM_LOD', () => {
+    expect(allowedErrorM(0, STREAM_LOD)).toBe(0.6);
+    expect(allowedErrorM(30, STREAM_LOD)).toBe(0.6);
+    expect(allowedErrorM(160, STREAM_LOD)).toBe(2.0);
+    expect(allowedErrorM(400, STREAM_LOD)).toBe(5.0);
+    expect(allowedErrorM(3000, STREAM_LOD)).toBe(35);
   });
 });
 
