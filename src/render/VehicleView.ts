@@ -13,6 +13,7 @@ import {
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
+import type { SurfaceElevationFn } from '../core/physics/VehicleBody.ts';
 import { buildVehicle, type VehicleMesh } from './vehicleMeshes.ts';
 
 export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
@@ -47,7 +48,8 @@ export class VehicleView {
 
   constructor(
     readonly actor: VehicleActor,
-    private readonly ground: () => Heightfield
+    private readonly ground: () => Heightfield,
+    private readonly surfaceProvider?: SurfaceElevationFn | undefined
   ) {
     this.car = buildVehicle(actor.body.stats, actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1]);
     this.carRoot.add(this.car.root);
@@ -117,10 +119,25 @@ export class VehicleView {
     const { x, z } = this.group.position;
     const f = this._fwd.set(0, 0, -1).applyQuaternion(quat);
     const r = this._right.set(1, 0, 0).applyQuaternion(quat);
-    const hF = hf.sample(x + f.x * WHEELBASE / 2, z + f.z * WHEELBASE / 2);
-    const hB = hf.sample(x - f.x * WHEELBASE / 2, z - f.z * WHEELBASE / 2);
-    const hR = hf.sample(x + r.x * TRACK / 2, z + r.z * TRACK / 2);
-    const hL = hf.sample(x - r.x * TRACK / 2, z - r.z * TRACK / 2);
+    const xF = x + f.x * WHEELBASE / 2, zF = z + f.z * WHEELBASE / 2;
+    const xB = x - f.x * WHEELBASE / 2, zB = z - f.z * WHEELBASE / 2;
+    const xR = x + r.x * TRACK / 2, zR = z + r.z * TRACK / 2;
+    const xL = x - r.x * TRACK / 2, zL = z - r.z * TRACK / 2;
+
+    const gF = hf.sample(xF, zF);
+    const gB = hf.sample(xB, zB);
+    const gR = hf.sample(xR, zR);
+    const gL = hf.sample(xL, zL);
+
+    let hF = gF, hB = gB, hR = gR, hL = gL;
+    if (this.surfaceProvider) {
+      const cy = this.group.position.y;
+      hF = this.surfaceProvider(xF, zF, cy, gF) ?? gF;
+      hB = this.surfaceProvider(xB, zB, cy, gB) ?? gB;
+      hR = this.surfaceProvider(xR, zR, cy, gR) ?? gR;
+      hL = this.surfaceProvider(xL, zL, cy, gL) ?? gL;
+    }
+
     const grounded = MathUtils.clamp(1 - height / 2, 0, 1);
     const k = 1 - Math.exp(-dt * 10);
     this.pitch += (MathUtils.clamp(Math.atan2(hF - hB, WHEELBASE), -MAX_TILT, MAX_TILT) * grounded - this.pitch) * k;

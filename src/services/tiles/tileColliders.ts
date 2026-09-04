@@ -222,7 +222,7 @@ function windowExtreme(src: Float32Array, n: number, k: number, min: boolean, sk
   return out;
 }
 
-const NO_DATA = -Infinity;
+export const NO_DATA = -Infinity;
 
 /**
  * Ground level under the photogrammetry surface: a morphological opening
@@ -358,7 +358,8 @@ export function collidersFromRasters(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
   terrainTop: Float32Array,
-  reliefBoost = 1
+  reliefBoost = 1,
+  outDeckGrid?: Float32Array
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -366,6 +367,10 @@ export function collidersFromRasters(
   const ground = groundEstimate(top, n);
   const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
   const BIN_SIZE = 1.5;
+
+  if (outDeckGrid) {
+    outDeckGrid.fill(NO_DATA);
+  }
 
   /**
    * Check if the vehicle driving zone above the ground [g + 1.2m, min(g + 4.5m, t - 1.5m)]
@@ -398,18 +403,68 @@ export function collidersFromRasters(
     return foundRaster;
   };
 
-  const isBuilding = (c: number): boolean => {
+  // Pre-classify elevated bridge decks and overhead underpass spans
+  const isDeck = new Uint8Array(n * n);
+  const isRamp = new Uint8Array(n * n);
+  const queue: number[] = [];
+
+  for (let c = 0; c < n * n; c++) {
     const t = top[c]!;
     const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
     const l = low[c]!;
-    if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
-    // An elevated roadway, bridge deck, or overpass has substantial open clearance
-    // between its underside (l) and the ground/water (g), AND is a thin deck slab
-    // (not a massive vertical structure like a bridge tower, pier, or building).
+    if (t === NO_DATA || g === NO_DATA || t - g < rise) continue;
     const isThinElevatedDeck = l !== Infinity && l - g >= 5.0 && t - l <= 7.0;
-    if (isThinElevatedDeck) return false;
-    // An underpass or bridge span over a street has open driving clearance between ground and overhead deck
-    if (t - g >= 13.0 && hasGroundClearance(c, g, t)) return false;
+    // Underpass check: overhead deck at t - g >= 13.0 with open vehicle driving clearance below
+    const isUnderpassDeck = t - g >= 13.0 && hasGroundClearance(c, g, t);
+    if (isThinElevatedDeck || isUnderpassDeck) {
+      isDeck[c] = 1;
+      if (outDeckGrid) outDeckGrid[c] = t;
+      queue.push(c);
+    }
+  }
+
+  // Ramp Continuity Rule: Flood-fill from elevated decks along continuous road slopes
+  // to unblock solid earthen/stone approach ramps (e.g. Brooklyn Bridge approach viaducts)
+  let head = 0;
+  while (head < queue.length) {
+    const curr = queue[head++]!;
+    const cx = curr % n;
+    const cz = Math.floor(curr / n);
+    const currT = top[curr]!;
+
+    const neighbors = [
+      cx > 0 ? curr - 1 : -1,
+      cx < n - 1 ? curr + 1 : -1,
+      cz > 0 ? curr - n : -1,
+      cz < n - 1 ? curr + n : -1,
+    ];
+
+    for (const nb of neighbors) {
+      if (nb < 0 || isDeck[nb] || isRamp[nb]) continue;
+      const tNb = top[nb]!;
+      const gNb = ground[nb] !== NO_DATA ? ground[nb]! : terrainTop[nb]!;
+      const lNb = low[nb]!;
+      if (tNb === NO_DATA || gNb === NO_DATA) continue;
+      // Only road surface layers (thickness <= 6.0m), NOT thick vertical columns/piers (t - l >= 10m)
+      if (lNb !== Infinity && tNb - lNb > 6.0) continue;
+
+      // Continuous road grade: slope <= 2.8m per 10m cell (approx 28% grade)
+      if (Math.abs(tNb - currT) <= 2.8 && tNb >= gNb) {
+        isRamp[nb] = 1;
+        if (outDeckGrid) outDeckGrid[nb] = tNb;
+        // Continue downward towards ground; stop once ground level is reached
+        if (tNb > gNb + 0.5) {
+          queue.push(nb);
+        }
+      }
+    }
+  }
+
+  const isBuilding = (c: number): boolean => {
+    const t = top[c]!;
+    const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+    if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
+    if (isDeck[c] || isRamp[c]) return false;
     return true;
   };
 

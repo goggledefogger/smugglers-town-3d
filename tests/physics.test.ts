@@ -229,4 +229,56 @@ describe('VehicleBody.step', () => {
     expect(Math.abs(v.pos.z)).toBeLessThanOrEqual(DEFAULT_PHYSICS.worldHalf - 8 + 1e-3);
     expect(Math.abs(v.pos.x)).toBeLessThanOrEqual(DEFAULT_PHYSICS.worldHalf - 8 + 1e-3);
   });
+
+  it('climbs steep hills smoothly without sustaining crash damage or bouncing into the air', () => {
+    // 30% upward incline along -Z: y = -z * 0.3
+    const rampData = new Float32Array(25);
+    // 5x5 grid from z = 50 to z = -50 (size = 100, 4 segments)
+    // row 0 is z = -50 (high), row 4 is z = +50 (low)
+    for (let j = 0; j < 5; j++) {
+      const z = -50 + j * 25;
+      const h = Math.max(0, -z * 0.3);
+      for (let i = 0; i < 5; i++) rampData[j * 5 + i] = h;
+    }
+    const ramp = new Heightfield(100, 4, rampData);
+    const v = makeBody();
+    v.pos.set(0, 1, 10);
+    v.vel.set(0, 0, -35); // driving forward fast into the hill
+
+    // Step for 0.5s onto the hill
+    for (let t = 0; t < 0.5; t += 1 / 60) {
+      v.step(1 / 60, { ...NO_INPUT, throttle: 1 }, ramp, NO_BUILDINGS);
+    }
+
+    // Must have taken ZERO crash impact damage from driving into the hill
+    expect(v.damage).toBe(0);
+    // Must remain firmly on the ground, not bounced into the sky
+    expect(v.onGround).toBe(true);
+    // Must have climbed the hill smoothly
+    expect(v.pos.y).toBeGreaterThan(1.5);
+  });
+
+  it('smoothly recovers small tilt angles without getting stuck leaning', () => {
+    const v = makeBody();
+    v.pos.set(0, 1, 0);
+    // Tilt the car 8 degrees to the right
+    v.quat.setFromAxisAngle(new Vector3(0, 0, 1), 8 * Math.PI / 180);
+    run(v, NO_INPUT, 0.6);
+    // Car should have righted itself back to upright (tilt angle < 1 degree)
+    const upW = new Vector3(0, 1, 0).applyQuaternion(v.quat);
+    const tiltAngDeg = Math.acos(Math.min(1, upW.y)) * (180 / Math.PI);
+    expect(tiltAngDeg).toBeLessThan(1.0);
+  });
+
+  it('averages elevated surface elevation across all 4 wheel contacts', () => {
+    const v = makeBody();
+    v.pos.set(0, 1, 0);
+    // surfaceProvider returns 10m only on the front half (z < 0), null behind
+    const surfFn = (_x: number, z: number) => (z < 0 ? 10 : null);
+    v.step(1 / 60, NO_INPUT, FLAT, NO_BUILDINGS, surfFn);
+    // Front contact point is at z = -1.3 (returns 10), rear at z = +1.3 (returns 0),
+    // right at z = 0 (returns 0), left at z = 0 (returns 0)
+    // 0.25 * (10 + 0 + 0 + 0) = 2.5
+    expect(v.groundY).toBeCloseTo(2.5, 1);
+  });
 });

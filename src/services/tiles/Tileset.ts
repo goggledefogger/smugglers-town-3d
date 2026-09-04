@@ -32,7 +32,7 @@ import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
 import {
-  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP,
+  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP, NO_DATA,
   type Grid, type TileRaster
 } from './tileColliders.ts';
 
@@ -428,6 +428,8 @@ export class TileStreamer {
     return false;
   }
 
+  private deckGrid: Float32Array | null = null;
+
   /**
    * Downward raycast against loaded 3D tile meshes to find elevated drivable surfaces
    * (e.g. bridge decks, overpasses) above the base heightfield.
@@ -438,6 +440,10 @@ export class TileStreamer {
     const i = Math.floor((x + half) / cell);
     const j = Math.floor((z + half) / cell);
     if (i < 0 || i >= this.grid.n || j < 0 || j >= this.grid.n) return null;
+
+    const c = j * this.grid.n + i;
+    // O(1) Fast Reject: if this cell does not contain an elevated deck or ramp corridor, return null immediately
+    if (this.deckGrid && this.deckGrid[c] === NO_DATA) return null;
 
     _rayOrigin.set(x, currentY + 1.5, z);
     _raycaster.set(_rayOrigin, _rayDir);
@@ -456,14 +462,22 @@ export class TileStreamer {
       for (const h of hits) {
         if (h.face && h.face.normal) {
           _faceNormal.copy(h.face.normal).transformDirection(h.object.matrixWorld);
-          if (_faceNormal.y < 0.35) continue;
+          // Roadway deck surface normal must be upward-facing (>= 0.70 rejects 45° trusses and wall framework)
+          if (_faceNormal.y < 0.70) continue;
         }
-        if (h.point.y <= groundY + 1.5) continue;
+        if (h.point.y <= groundY + 1.2) continue;
 
         if (h.distance < closestDist) {
           closestDist = h.distance;
           bestY = h.point.y + TILE_GROUND_GAP;
         }
+      }
+    }
+    // If raycast didn't hit but cell is a known drivable deck/ramp, fall back to deckGrid height
+    if (bestY === null && this.deckGrid && this.deckGrid[c] !== NO_DATA) {
+      const deckH = this.deckGrid[c]! + TILE_GROUND_GAP;
+      if (Math.abs(currentY - deckH) <= maxDrop) {
+        bestY = deckH;
       }
     }
     return bestY;
@@ -567,7 +581,16 @@ export class TileStreamer {
   /** Rebuild building colliders from the current tiles (~15 ms for a city). */
   colliders(): BuildingCollider[] {
     this.dirty = false;
-    return collidersFromRasters(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+    if (!this.deckGrid || this.deckGrid.length !== this.grid.n * this.grid.n) {
+      this.deckGrid = new Float32Array(this.grid.n * this.grid.n);
+    }
+    return collidersFromRasters(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost,
+      this.deckGrid
+    );
   }
 
   dispose(): void {

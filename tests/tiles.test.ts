@@ -4,7 +4,8 @@ import {
   boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, STREAM_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
 import {
-  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP
+  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP,
+  collidersFromRasters, NO_DATA
 } from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
@@ -386,4 +387,36 @@ describe('one shared ground', () => {
     expect(hf.sample(10, 0)).toBeCloseTo(1, 6);
     expect(() => hf.copyFrom(new Heightfield(20, 1, new Float32Array(4)))).toThrow();
   });
+
+  it('identifies continuous ramps connecting to elevated bridge decks and records them in deckGrid', () => {
+    const top = flat(0), low = flat(0);
+    // Elevated bridge deck sits at column 20, rows 15..25 at height 14 (thin road slab: low=12.5, top=14)
+    for (let j = 15; j <= 25; j++) {
+      const c = j * N + 20;
+      top[c] = 14;
+      low[c] = 12.5;
+    }
+    // Ramp cells leading up to row 15:
+    top[14 * N + 20] = 12.0; low[14 * N + 20] = 10.5;
+    top[13 * N + 20] = 9.5; low[13 * N + 20] = 8.0;
+    top[12 * N + 20] = 7.0; low[12 * N + 20] = 5.5;
+    top[11 * N + 20] = 4.5; low[11 * N + 20] = 3.0;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Elevated bridge deck should be marked in deckGrid
+    expect(deckGrid[20 * N + 20]).toBeCloseTo(14, 5);
+    // Ramp cells should also be connected and populated into deckGrid
+    expect(deckGrid[14 * N + 20]).toBeCloseTo(12.0, 5);
+    expect(deckGrid[13 * N + 20]).toBeCloseTo(9.5, 5);
+    expect(deckGrid[12 * N + 20]).toBeCloseTo(7.0, 5);
+    expect(deckGrid[11 * N + 20]).toBeCloseTo(4.5, 5);
+    // Neither the deck nor the approach ramp should be boxed as building colliders
+    expect(colliders).toHaveLength(0);
+    // Unrelated flat ground cell has NO_DATA in deckGrid
+    expect(deckGrid[10 * N + 10]).toBe(NO_DATA);
+  });
 });
+
