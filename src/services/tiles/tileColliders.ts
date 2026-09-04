@@ -104,14 +104,21 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
   const top = new Float32Array(w * h).fill(-Infinity);
   const low = new Float32Array(w * h).fill(Infinity);
   const mask = new Uint32Array(w * h);
-  const stamp = (i: number, j: number, y: number): void => {
+  const stampRange = (i: number, j: number, yA: number, yB: number): void => {
     if (i < i0 || i > i1 || j < j0 || j > j1) return;
     const idx = (j - j0) * w + (i - i0);
-    if (y > top[idx]!) top[idx] = y;
-    if (y < low[idx]!) low[idx] = y;
-    const bin = Math.min(31, Math.max(0, Math.floor((y - y0) / BIN_SIZE)));
-    mask[idx] = (mask[idx]! | (1 << bin)) >>> 0;
+    const minY = Math.min(yA, yB);
+    const maxY = Math.max(yA, yB);
+    if (maxY > top[idx]!) top[idx] = maxY;
+    if (minY < low[idx]!) low[idx] = minY;
+    const b0 = Math.min(31, Math.max(0, Math.floor((minY - y0) / BIN_SIZE)));
+    const b1 = Math.min(31, Math.max(0, Math.floor((maxY - y0) / BIN_SIZE)));
+    if (b0 <= b1) {
+      const rangeBits = (0xFFFFFFFF >>> (31 - (b1 - b0))) << b0;
+      mask[idx] = (mask[idx]! | (rangeBits >>> 0)) >>> 0;
+    }
   };
+  const stamp = (i: number, j: number, y: number): void => stampRange(i, j, y, y);
   const [a, b, c] = _tri;
   obj.traverse(o => {
     const mesh = o as Mesh;
@@ -124,18 +131,41 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
         const vi = index ? index.getX(t * 3 + k) : t * 3 + k;
         _tri[k]!.fromBufferAttribute(pos, vi).applyMatrix4(mesh.matrixWorld);
       }
+      const minY = Math.min(a.y, b.y, c.y), maxY = Math.max(a.y, b.y, c.y);
       const det = (b.x - a.x) * (c.z - a.z) - (c.x - a.x) * (b.z - a.z);
+      const nx = (b.y - a.y) * (c.z - a.z) - (c.y - a.y) * (b.z - a.z);
+      const nz = (b.x - a.x) * (c.y - a.y) - (c.x - a.x) * (b.y - a.y);
+      const nHoriz = Math.hypot(nx, nz);
+      // A steep wall, pier face, or facade has normal pointing mostly horizontally (slope > 63°: nHoriz > 2.0 * |det|)
+      const isSteepWall = Math.abs(det) < 1e-9 || (nHoriz > 2.0 * Math.abs(det) && maxY - minY >= BIN_SIZE);
+
       if (Math.abs(det) < 1e-9) {
-        // vertical wall: stamp vertices
+        // vertical wall: stamp full height range at each vertex cell
         for (const q of _tri) {
-          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) stamp(cellOf(q.x), cellOf(q.z), q.y);
+          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
+            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
+          }
         }
         continue;
       }
-      // non-vertical: stamp the centroid so small triangles register without bleeding into neighbor cells
-      const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3, midY = (a.y + b.y + c.y) / 3;
-      if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-        stamp(cellOf(midX), cellOf(midZ), midY);
+
+      if (isSteepWall) {
+        // Stamp the full vertical range at centroid and vertices for steep wall/pier faces
+        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
+        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+          stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
+        }
+        for (const q of _tri) {
+          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
+            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
+          }
+        }
+      } else {
+        // Gentle slope, roadway, roof, or ground terrain: stamp centroid height
+        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3, midY = (a.y + b.y + c.y) / 3;
+        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+          stamp(cellOf(midX), cellOf(midZ), midY);
+        }
       }
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
       const minZ = Math.min(a.z, b.z, c.z), maxZ = Math.max(a.z, b.z, c.z);
@@ -342,9 +372,7 @@ export function collidersFromRasters(
    * has no geometry in any tile raster covering cell c. If clear, the space is an open underpass / bridge span.
    */
   const hasGroundClearance = (c: number, g: number, t: number): boolean => {
-    const y1 = g + 1.2;
     const y2 = Math.min(g + 4.5, t - 1.5);
-    if (y1 >= y2) return false;
     let foundRaster = false;
     for (const r of rasters) {
       if (!r || !r.mask || r.y0 === undefined) continue;
@@ -355,7 +383,9 @@ export function collidersFromRasters(
       const idx = j * r.w + i;
       const m = r.mask[idx]!;
       if (!m) continue;
-      const b1 = Math.max(0, Math.ceil((y1 - r.y0) / BIN_SIZE));
+      // Clearance begins above the ground road surface (at least 1 full height bin above ground)
+      const gBin = Math.floor((g - r.y0) / BIN_SIZE);
+      const b1 = Math.max(0, gBin + 1);
       const b2 = Math.min(31, Math.floor((y2 - r.y0) / BIN_SIZE));
       if (b1 <= b2) {
         const rangeMask = (0xFFFFFFFF >>> (31 - (b2 - b1))) << b1;
@@ -370,13 +400,14 @@ export function collidersFromRasters(
 
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
-    const g = ground[c]!;
+    const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
     const l = low[c]!;
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
     // An elevated roadway, bridge deck, or overpass has substantial open clearance
-    // between its underside (l) and the ground/water (g). It is a drivable surface,
-    // not an impenetrable ground-to-sky building obstacle.
-    if (l !== Infinity && l - g >= 5.0) return false;
+    // between its underside (l) and the ground/water (g), AND is a thin deck slab
+    // (not a massive vertical structure like a bridge tower, pier, or building).
+    const isThinElevatedDeck = l !== Infinity && l - g >= 5.0 && t - l <= 7.0;
+    if (isThinElevatedDeck) return false;
     // An underpass or bridge span over a street has open driving clearance between ground and overhead deck
     if (t - g >= 13.0 && hasGroundClearance(c, g, t)) return false;
     return true;

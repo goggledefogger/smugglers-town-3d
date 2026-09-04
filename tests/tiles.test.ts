@@ -242,6 +242,27 @@ describe('buildingCollidersFrom', () => {
     }
   });
 
+  /** A 4-sided vertical pillar/column spanning [x0,x1]×[z0,z1] from y0 to y1. */
+  function pillar(x0: number, z0: number, x1: number, z1: number, y0: number, y1: number): Mesh {
+    const geo = new BufferGeometry();
+    const pos = [
+      // South wall (z = z0)
+      x0, y0, z0,  x1, y0, z0,  x1, y1, z0,
+      x0, y0, z0,  x1, y1, z0,  x0, y1, z0,
+      // North wall (z = z1)
+      x0, y0, z1,  x1, y1, z1,  x1, y0, z1,
+      x0, y0, z1,  x0, y1, z1,  x1, y1, z1,
+      // West wall (x = x0)
+      x0, y0, z0,  x0, y1, z0,  x0, y1, z1,
+      x0, y0, z0,  x0, y1, z1,  x0, y0, z1,
+      // East wall (x = x1)
+      x1, y0, z0,  x1, y1, z1,  x1, y1, z0,
+      x1, y0, z0,  x1, y0, z1,  x1, y1, z1,
+    ];
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3));
+    return new Mesh(geo);
+  }
+
   it('exempts elevated bridge decks and underpasses with open driving clearance', () => {
     const g = new Group();
     g.add(slab(0, 0)); // ground roadway at Y = 0
@@ -249,6 +270,37 @@ describe('buildingCollidersFrom', () => {
     const boxes = buildingCollidersFrom(g, flat);
     // Because the driving zone [1.2m, 4.5m] is completely clear, it is an underpass roadway, not a building
     expect(boxes).toHaveLength(0);
+  });
+
+  it('detects ground-hitting bridge piers as solid colliders while leaving underpasses open', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // ground roadway at Y = 0
+    g.add(roof(-12, -6, 12, 6, 20)); // elevated bridge deck at Y = 20m from X = -12 to 12
+    // Solid bridge pier column on the east side: X in [4.5, 9], Z in [-3, 3], Y from 0 to 20
+    g.add(pillar(4.5, -3, 9, 3, 0, 20));
+
+    const boxes = buildingCollidersFrom(g, flat);
+
+    // There should be a solid collider for the pier column, but NOT for the open underpass lane on the west side
+    expect(boxes.length).toBeGreaterThan(0);
+    for (const b of boxes) {
+      // The box must sit over the pier (X > 0), not over the open underpass roadway (X < 0)
+      expect(b.min.x).toBeGreaterThanOrEqual(0);
+      expect(b.max.y).toBeCloseTo(20, 1);
+    }
+  });
+
+  it('keeps tall bridge towers in the water as solid colliders (not thin elevated decks)', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // water surface at Y = 0
+    // A massive 50m stone tower standing in the water from Y = 0 to 50
+    g.add(pillar(-6, -6, 6, 6, 0, 50));
+    g.add(roof(-6, -6, 6, 6, 50));
+
+    const boxes = buildingCollidersFrom(g, flat);
+    expect(boxes.length).toBeGreaterThan(0);
+    const top = Math.max(...boxes.map(b => b.max.y));
+    expect(top).toBeCloseTo(50, 1);
   });
 });
 
