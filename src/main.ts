@@ -44,6 +44,7 @@ import { IntroScreen } from './ui/screens/IntroScreen.ts';
 import { EndScreen } from './ui/screens/EndScreen.ts';
 import { LoaderOverlay } from './ui/screens/LoaderOverlay.ts';
 import { RelocateBar } from './ui/screens/RelocateBar.ts';
+import { SettingsScreen } from './ui/screens/SettingsScreen.ts';
 import type { LobbyScreen } from './ui/screens/LobbyScreen.ts';
 
 const log = logger('app');
@@ -64,6 +65,7 @@ app.innerHTML = `
   <sr-lobby id="lobby" hidden></sr-lobby>
   <sr-loader id="loader" hidden></sr-loader>
   <sr-end id="end" hidden></sr-end>
+  <sr-settings id="settings" hidden></sr-settings>
   <sr-intro id="intro"></sr-intro>
 `;
 
@@ -72,6 +74,7 @@ const hudEl = document.getElementById('hud')!;
 const loaderEl = document.querySelector('sr-loader') as LoaderOverlay;
 const introEl = document.querySelector('sr-intro') as IntroScreen;
 const endEl = document.querySelector('sr-end') as EndScreen;
+const settingsEl = document.querySelector('sr-settings') as SettingsScreen;
 const bannerEl = document.querySelector('sr-banner') as Banner;
 const relocateBarEl = document.querySelector('sr-relocate') as RelocateBar;
 const dirArrowEl = document.querySelector('sr-dirarrow') as DirArrow;
@@ -269,6 +272,16 @@ introEl.onStart = (type) => {
 introEl.onOnline = (type) => {
   void openOnline(type);
 };
+
+// controls/rebind screen: opened from the garage, owns UI actions while open
+settingsEl.inputManager = input;
+introEl.onControls = () => {
+  settingsEl.hidden = false;
+  uiHandler = (a) => settingsEl.handleUiAction(a);
+};
+settingsEl.addEventListener('settings-close', () => {
+  uiHandler = (a) => introEl.handleUiAction(a);
+});
 
 /** The lobby and its network code load on first use, so single player never pays for Firebase. */
 async function openOnline(type: number): Promise<void> {

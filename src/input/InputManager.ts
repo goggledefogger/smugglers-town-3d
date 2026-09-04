@@ -12,9 +12,12 @@
 
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { UiAction, Hotkey, InputSource } from './types.ts';
+import type { Binding, DeviceKind } from './bindings.ts';
 import { Bindings } from './bindings.ts';
 import { KeyboardSource } from './KeyboardSource.ts';
 import { GamepadSource } from './GamepadSource.ts';
+
+export type CapturedBinding = { device: DeviceKind; binding: Binding };
 
 export class InputManager {
   readonly bindings: Bindings;
@@ -60,6 +63,60 @@ export class InputManager {
     const out: Hotkey[] = [];
     for (const s of this.sources) out.push(...s.drainHotkeys());
     return out;
+  }
+
+  /**
+   * Capture the next physical input from any source, as a binding. Used by
+   * the rebind screen: call this, and the callback fires once with whatever
+   * key or button the player presses next. Returns a cancel function.
+   */
+  captureNext(onCapture: (c: CapturedBinding) => void): () => void {
+    let cancelled = false;
+
+    // keyboard: a one-shot keydown listener
+    const onKey = (e: KeyboardEvent) => {
+      if (cancelled) return;
+      // ignore pure modifier presses; they're not useful as bindings alone
+      if (e.code.startsWith('Shift') || e.code.startsWith('Control') || e.code.startsWith('Alt') || e.code.startsWith('Meta')) return;
+      window.removeEventListener('keydown', onKey);
+      cancelPad();
+      onCapture({ device: 'keyboard', binding: { kind: 'key', code: e.code } });
+    };
+    window.addEventListener('keydown', onKey, { once: true });
+
+    // gamepad: poll for the first newly-pressed button or axis past a threshold
+    let raf = 0;
+    const prevBtn = new Map<number, boolean>();
+    const poll = () => {
+      if (cancelled) return;
+      const pads = (navigator.getGamepads?.() ?? []);
+      for (const g of pads) {
+        if (!g?.connected) continue;
+        for (let i = 0; i < g.buttons.length; i++) {
+          const pressed = g.buttons[i]?.pressed ?? false;
+          if (pressed && !prevBtn.get(i)) {
+            cancelKey();
+            onCapture({ device: 'gamepad', binding: { kind: 'button', index: i } });
+            return;
+          }
+          prevBtn.set(i, pressed);
+        }
+        for (let i = 0; i < g.axes.length; i++) {
+          const v = g.axes[i] ?? 0;
+          if (Math.abs(v) > 0.6) {
+            cancelKey();
+            onCapture({ device: 'gamepad', binding: { kind: 'axis', index: i, sign: v > 0 ? 1 : -1 } });
+            return;
+          }
+        }
+      }
+      raf = requestAnimationFrame(poll);
+    };
+    raf = requestAnimationFrame(poll);
+
+    const cancelKey = () => window.removeEventListener('keydown', onKey);
+    const cancelPad = () => cancelAnimationFrame(raf);
+    return () => { cancelled = true; cancelKey(); cancelAnimationFrame(raf); };
   }
 
   dispose(): void {

@@ -75,6 +75,9 @@ export class IntroScreen extends LitElement {
     .online { padding:13px 22px; background:transparent; color:var(--accent); font-family:'Russo One',sans-serif;
       font-size:14px; border:2px solid var(--accent); border-radius:10px; cursor:pointer; letter-spacing:.04em; }
     .online:hover { background:rgba(255,120,60,.12); }
+    .controls { padding:13px 22px; background:transparent; color:var(--muted); font-family:'Russo One',sans-serif;
+      font-size:14px; border:2px solid var(--line); border-radius:10px; cursor:pointer; letter-spacing:.04em; }
+    .controls:hover { border-color:var(--sand); color:var(--sand); }
     .play:hover { transform:translateY(-2px); box-shadow:0 8px 0 #b0390f; }
     .play:active { transform:translateY(4px); box-shadow:0 2px 0 #b0390f; }
     @media (max-width: 760px) {
@@ -92,13 +95,15 @@ export class IntroScreen extends LitElement {
   /** The multiplayer lobby, with the same garage pick. */
   onOnline?: (typeIdx: number) => void;
   onSelect?: (typeIdx: number) => void;
+  /** Open the controls/rebind screen. */
+  onControls?: () => void;
 
   /** Focus index across all data-focusable elements: vehicle cards then buttons. */
   private focusIdx = 0;
 
   /** Handle a UI action from the InputManager. Returns true if consumed. */
   handleUiAction(action: 'up' | 'down' | 'left' | 'right' | 'confirm' | 'back' | 'tab' | 'pause'): boolean {
-    const count = VEHICLE_TYPES.length + 2; // cards + PLAY ONLINE + START ENGINE
+    const count = VEHICLE_TYPES.length + 3; // cards + PLAY ONLINE + START ENGINE + CONTROLS
     if (action === 'up' || action === 'left') { this.moveFocus(this.focusIdx - 1, count); return true; }
     if (action === 'down' || action === 'right') { this.moveFocus(this.focusIdx + 1, count); return true; }
     if (action === 'confirm') { this.activateFocus(); return true; }
@@ -115,7 +120,8 @@ export class IntroScreen extends LitElement {
   private activateFocus(): void {
     if (this.focusIdx < VEHICLE_TYPES.length) this.onStart?.(this.focusIdx);
     else if (this.focusIdx === VEHICLE_TYPES.length) this.onOnline?.(this.selected);
-    else this.onStart?.(this.selected);
+    else if (this.focusIdx === VEHICLE_TYPES.length + 1) this.onStart?.(this.selected);
+    else this.onControls?.();
   }
 
   /** Repaint the data-focused attribute onto the current focus target. */
@@ -187,6 +193,7 @@ export class IntroScreen extends LitElement {
         <span class="actions">
           <button class="online" data-focusable @click=${() => this.onOnline?.(this.selected)}>PLAY ONLINE</button>
           <button class="play" data-focusable @click=${() => this.onStart?.(this.selected)}>START ENGINE</button>
+          <button class="controls" data-focusable @click=${() => this.onControls?.()}>CONTROLS</button>
         </span>
       </footer>
     `;
