@@ -23,7 +23,9 @@ npm install
 npm run dev        # → http://localhost:5173
 ```
 
-Pick a ride in the garage, then drive.
+Pick a ride in the garage, then drive. Keyboard and gamepad are peers — both
+work through the menus and in the match, and every binding is rebindable from
+the garage's **Controls** screen.
 
 | Key | Action |
 |---|---|
@@ -35,8 +37,13 @@ Pick a ride in the garage, then drive.
 | `C` | Camera: chase, wide, hood |
 | `1`–`5` | Change vehicle mid-match |
 
-In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` starts.
-Typing in the search box never leaks into the game.
+Gamepad defaults are mapped from the original game's PS2 controller onto the
+same physical positions on a Stadia pad: **A** accelerates, **X** brakes,
+**B** reverses, **Y** and **RT** jump, **Select** cycles the camera, **Start**
+pauses. Left stick or D-pad steers, right stick pitches in the air.
+
+In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` (or gamepad
+**A**) starts. Typing in the search box never leaks into the game.
 
 ## The roster
 
@@ -91,7 +98,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (228 tests, plain node) |
+| `npm test` | Test suite (258 tests, plain node) |
 | `npm run test:watch` | The same, re-running as you edit |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
@@ -105,6 +112,7 @@ src/
 ├── main.ts          wiring and the frame loop
 ├── app/             game loop, state, events, tuning
 ├── core/            simulation: physics, AI, rules, terrain, geo math
+├── input/           input sources (keyboard, gamepad), rebindable bindings
 ├── render/          three.js views
 ├── services/        Google Maps and 3D Tiles
 └── ui/              Lit HUD and screens

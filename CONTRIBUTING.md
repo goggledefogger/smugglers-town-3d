@@ -31,6 +31,7 @@ Useful scripts:
 
 ```
 src/core/       the simulation: physics, gameplay rules, AI, spawning, geo math
+src/input/      keyboard and gamepad sources, rebindable bindings, InputManager
 src/app/        glue: the game loop, config, events, the store the HUD reads
 src/render/     three.js scene, meshes, textures, camera
 src/ui/         Lit components for the HUD and menus

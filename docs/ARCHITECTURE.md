@@ -4,7 +4,10 @@
 
 ```
 ┌─────────────────────────────────────────────────┐
-│ ui/          Lit components, keyboard input      │  DOM
+│ ui/          Lit components for HUD and screens  │  DOM
+├─────────────────────────────────────────────────┤
+│ input/       keyboard + gamepad sources,         │  devices
+│              rebindable bindings, InputManager   │
 ├─────────────────────────────────────────────────┤
 │ app/         Game loop, store, events, config    │  orchestration
 ├──────────────────────┬──────────────────────────┤
@@ -37,16 +40,16 @@ Dependency rules (enforced by review, not tooling):
 ## Frame data flow
 
 ```
-KeyboardState ─► Game.update(dt) ─► VehicleBody.step ×8 ─► resolveVehicleCollisions
-                                       │                        │
-                                       │                        ▼
-                                       │                  MatchRules (pickup/steal/deliver)
-                                       ▼                        │
-                                 MatchEvents ──► EventBus ──► Banner / EndScreen
-                                       │
-                                       ▼
+InputManager ─► Game.update(dt) ─► VehicleBody.step ×8 ─► resolveVehicleCollisions
+   (poll() every frame;                 │                        │
+    vehicleInput() only                  │                        ▼
+    while playing)                       │                  MatchRules (pickup/steal/deliver)
+                                        ▼                        │
+                                  MatchEvents ──► EventBus ──► Banner / EndScreen
+                                        │
+                                        ▼
                        store.set(snapshot) ─► Lit HUD re-render
-                                       │
+                                        │
 VehicleView.sync() ◄────────────────────┤
 Pickups.sync()     ◄────────────────────┤
 CameraRig.update() ◄───────────────────┤
@@ -62,6 +65,40 @@ Without that, a 120 Hz display shows the sim advancing every other frame,
 which reads as the car stuttering against a smoothly gliding camera. The HUD
 snapshot is pushed at 10 Hz — high-frequency values (speed) interpolate
 visually, no one misses them.
+
+## Input (`input/`)
+
+Keyboard and gamepad are peers behind one `InputManager`, each implementing
+the `InputSource` interface. A mouse or touch source can plug in later without
+the sim or screens changing — they never branch on which device is active.
+
+`InputSource` splits its output into three kinds, deliberately separated so a
+menu and the sim read from different taps:
+
+- `poll()` runs every frame, menus or gameplay. The gamepad has no keydown
+  event, so its down-edges (UI nav, hotkeys) are detected here, not in
+  `vehicleInput`. This is load-bearing: `main.ts` only calls `vehicleInput()`
+  while a match is running, so an edge scan that lived there would never run
+  while a menu is open and the gamepad would be dead in menus. The keyboard's
+  `poll()` is a no-op — its edges fire from a `keydown` listener.
+- `vehicleInput()` returns the continuous analog driving state (throttle,
+  steer, pitch, jump), polled each frame while a match runs. Per-channel
+  max-magnitude merge: whichever source is pushing a channel wins, a resting
+  gamepad never steals the keyboard.
+- `drainUiActions()` / `drainHotkeys()` drain the edge buffers accumulated by
+  `poll()`. UI actions route to the active screen's handler; hotkeys (camera,
+  reset) route to the sim.
+
+Bindings are data, not code: a table maps a `LogicalAction` (accelerate,
+uiConfirm, …) to one or more physical controls per device. Defaults are
+Stadia-friendly, mapped from the original PS2 game's face-button layout onto
+the same physical positions (A=accelerate, X=brake, B=reverse, Y+RT=jump,
+Select=camera). The table persists to `localStorage` under `stt.bindings` with
+a `SCHEMA_VERSION` stamp; a save whose version doesn't match is rejected and
+defaults load, so a stale layout from an older default can't override a
+correction. `InputManager.captureNext()` is the one-shot listener the rebind
+screen (`ui/screens/SettingsScreen.ts`, opened from the garage's CONTROLS
+button) uses to grab the next key or button a player presses.
 
 ## Core modules
 
@@ -396,7 +433,9 @@ base you can no longer deliver to. Which of the four it picks is
 Keyboard guards go through `isTypingInField()` in `ui/controls.ts`, never
 `document.activeElement` directly: that retargets to the shadow *host*, so a
 field inside a Lit component reads as `<SR-LOBBY>` and every naive guard
-concludes the player is not typing.
+concludes the player is not typing. The guard lives in `ui/` (not `input/`)
+because the keyboard source consumes it to suppress gameplay keys while a
+field has focus, and `input/` keeps no dependency on `ui/`.
 
 ## Render notes
 
@@ -464,6 +503,9 @@ Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
   brain only produces a `VehicleInput`; no other layer changes.
 - **New terrain source** — implement `TerrainProvider` (e.g. an offline
   DEM file) and pass it to `Game.reset()`.
+- **New input source** — implement `InputSource` (e.g. `TouchSource`) and add
+  it to `InputManager`'s sources. The merge and edge routing take it up
+  automatically; the sim and screens don't change.
 - **Tuning** — every constant lives in `app/config.ts` in sections. The
   prototype's hardcoded numbers are all there.
 

@@ -168,8 +168,10 @@ host chooses:
 - [ ] Split `Game` into a `Simulation` (bodies, brains, rules, step) and the
       app glue (views, camera, events). The host runs a sim without a
       renderer; a client runs views without a sim
-- [ ] A per-driver input source interface, so keyboard, bot, and remote
-      packet are interchangeable
+- [x] A per-driver input source interface, so keyboard, bot, and remote
+      packet are interchangeable — `InputSource` in `src/input/types.ts`,
+      with `KeyboardSource` and `GamepadSource` live; a remote packet is a
+      third `InputSource` to add
 - [ ] `serialize()` / `apply()` on `VehicleBody` and match state, which is the
       snapshot
 - [x] The ground is cut from the tiles, and each client streams tiles at

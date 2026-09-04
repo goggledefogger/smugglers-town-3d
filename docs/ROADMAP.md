@@ -37,10 +37,12 @@ the original, but it changes pacing enough to warrant a round timer (item 2).
 ## 1b. Menus
 
 The garage (vehicle pick) exists, and the online lobby now sets the location
-(desert or any place on Earth, with presets and a cheap check). Left: the rest
-of game setup (round length, team size, bot difficulty) including for single
-player, a pause menu, and options (key bindings, audio). Mid-match `1`–`5` vehicle switching should go
-once setup exists; it is a debug leftover.
+(desert or any place on Earth, with presets and a cheap check). A rebind
+screen (`SettingsScreen`, opened from the garage's CONTROLS button) covers
+keyboard and gamepad, with press-to-bind capture and reset-to-defaults. Left:
+the rest of game setup (round length, team size, bot difficulty) including for
+single player, a pause menu, and audio options. Mid-match `1`–`5` vehicle
+switching should go once setup exists; it is a debug leftover.
 
 ## 2. Round structure — mostly done
 
@@ -82,12 +84,17 @@ bots follow waypoints around buildings and props. Left:
 
 ## 5. Input and platforms
 
-- Gamepad via the Gamepad API (analog steer/throttle, triggers) merged into
-  `KeyboardState.toVehicleInput`.
+Done: gamepad is a first-class `InputSource` (analog steer/throttle/triggers)
+alongside the keyboard, merged through one `InputManager`; both work through
+the menus and the match, and every binding is rebindable from the Controls
+screen. Defaults are mapped from the original PS2 layout onto a Stadia pad.
+
+Left:
+
 - Touch controls. The HUD is responsive already — safe-area insets, a radar
   and corners that scale, no overflow down to 390 px — but there is no way to
-  steer without a keyboard, so a phone can watch and not play.
-- Rebindable keys.
+  steer without a keyboard or gamepad, so a phone can watch and not play.
+  The `InputSource` seam is there for a `TouchSource` to plug into.
 
 ## 6. Audio
 
@@ -101,8 +108,9 @@ Version 1 is live: host-authoritative over WebRTC (Trystero), Firebase for
 lobby, signalling and anonymous auth, bots in empty seats, and rooms that play
 anywhere on Earth. Left: client prediction, host migration, quick-match, and a
 decision on TURN. The remaining internal prerequisites (a `Simulation` split
-out of `Game`, an input-source interface, body snapshots) are listed in
-`docs/MULTIPLAYER.md` with the phase plan.
+out of `Game`, body snapshots) are listed in `docs/MULTIPLAYER.md` with the
+phase plan. The per-driver input-source interface now exists
+(`InputSource` in `src/input/types.ts`).
 
 ## 8. Tooling and code quality
 
