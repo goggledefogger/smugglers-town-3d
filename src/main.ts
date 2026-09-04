@@ -150,6 +150,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 }
 
 function clearTiles(): void {
+  game.setSurfaceProvider(undefined);
   if (groundStreamer) {
     renderer.scene.remove(groundStreamer.group);
     groundStreamer.dispose();
@@ -173,6 +174,7 @@ function swapTerrainMesh(terrain: TerrainProvider): void {
 /** New terrain or rematch: props, colliders, then spawn everything clear of them. */
 function startMatch(terrain: TerrainProvider): void {
   prepareTerrain(terrain);
+  game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
   game.reset(terrain);
   rebuildViews();
 }
@@ -329,6 +331,7 @@ async function openOnline(type: number): Promise<void> {
       },
       makeHostGame: (seed, terrain, seats) => {
         game = new Game(terrain, { events, store, seed });
+        game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
         prepareTerrain(terrain, mulberry32(seed));
         game.reset(terrain, seats);
         return game;

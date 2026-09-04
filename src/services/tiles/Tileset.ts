@@ -20,7 +20,7 @@
  *   ~5k triangles, 100–450 KB.
  */
 import {
-  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
+  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter, Raycaster,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -86,6 +86,10 @@ const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
 const GLTF_TO_ECEF = new Matrix4().makeRotationX(Math.PI / 2);
+const _rayOrigin = new Vector3();
+const _rayDir = new Vector3(0, -1, 0);
+const _raycaster = new Raycaster();
+const _faceNormal = new Vector3();
 
 function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
@@ -422,6 +426,47 @@ export class TileStreamer {
       }
     }
     return false;
+  }
+
+  /**
+   * Downward raycast against loaded 3D tile meshes to find elevated drivable surfaces
+   * (e.g. bridge decks, overpasses) above the base heightfield.
+   */
+  surfaceElevation(x: number, z: number, currentY: number, groundY: number, maxDrop = 4.0): number | null {
+    const half = this.grid.half;
+    const cell = this.grid.cell;
+    const i = Math.floor((x + half) / cell);
+    const j = Math.floor((z + half) / cell);
+    if (i < 0 || i >= this.grid.n || j < 0 || j >= this.grid.n) return null;
+
+    _rayOrigin.set(x, currentY + 1.5, z);
+    _raycaster.set(_rayOrigin, _rayDir);
+    _raycaster.near = 0.05;
+    _raycaster.far = maxDrop + 1.5;
+
+    let bestY: number | null = null;
+    let closestDist = Infinity;
+
+    for (const t of this.tiles) {
+      const r = t.raster;
+      if (!r) continue;
+      if (i < r.i0 || i > r.i0 + r.w || j < r.j0 || j > r.j0 + r.h) continue;
+
+      const hits = _raycaster.intersectObjects(t.group.children, true);
+      for (const h of hits) {
+        if (h.face && h.face.normal) {
+          _faceNormal.copy(h.face.normal).transformDirection(h.object.matrixWorld);
+          if (_faceNormal.y < 0.35) continue;
+        }
+        if (h.point.y <= groundY + 1.5) continue;
+
+        if (h.distance < closestDist) {
+          closestDist = h.distance;
+          bestY = h.point.y + TILE_GROUND_GAP;
+        }
+      }
+    }
+    return bestY;
   }
 
   /**

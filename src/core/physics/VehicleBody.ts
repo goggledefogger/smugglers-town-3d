@@ -23,6 +23,9 @@ export interface BuildingCollider {
   readonly kind?: CollisionLayer;
 }
 
+/** Query an elevated drivable surface (e.g. 3D bridge deck) above the base heightfield. */
+export type SurfaceElevationFn = (x: number, z: number, currentY: number, groundY: number) => number | null;
+
 export interface VehiclePhysicsConfig {
   readonly gravity: number;
   readonly driveForce: number;
@@ -172,13 +175,14 @@ export class VehicleBody {
     dt: number,
     input: VehicleInput,
     ground: Heightfield,
-    buildings: readonly BuildingCollider[]
+    buildings: readonly BuildingCollider[],
+    surfaceProvider?: SurfaceElevationFn | undefined
   ): void {
     this.snapPrev();
     const fwd = this.forward(this._fwd);
     const right = this._right.set(1, 0, 0).applyQuaternion(this.quat);
     const up = this._up.set(0, 1, 0).applyQuaternion(this.quat);
-    const gh = this.groundUnder(ground);
+    const gh = this.groundUnder(ground, surfaceProvider);
     if (this.launchLockS > 0) this.launchLockS = Math.max(0, this.launchLockS - dt);
     // Grounded = within the suspension's reach, not mid-launch, not falling
     // hard. Vertical speed is deliberately not part of this: climbing a ramp at
@@ -212,7 +216,7 @@ export class VehicleBody {
     if (this.graceS > 0) this.graceS = Math.max(0, this.graceS - dt);
 
     this.integrateAngular(dt);
-    this.integratePosition(dt, ground);
+    this.integratePosition(dt, ground, surfaceProvider);
     this.resolveBuildings(buildings);
     // integrity heals slowly; a wreck (damage 1) stays a wreck until the game handles it
     if (this.damage < 1) this.damage = Math.max(0, this.damage - 0.02 * dt);
@@ -272,13 +276,21 @@ export class VehicleBody {
    * sampling the center alone had the car (and the camera on it) bobbing at
    * ~6 Hz over the terrain's finest noise.
    */
-  private groundUnder(ground: Heightfield): number {
+  private groundUnder(
+    ground: Heightfield,
+    surfaceProvider?: SurfaceElevationFn | undefined
+  ): number {
     const { x, z } = this.pos;
     const f = this._fwd, r = this._right;
-    return 0.25 * (
+    const baseGround = 0.25 * (
       ground.sample(x + f.x * 1.3, z + f.z * 1.3) + ground.sample(x - f.x * 1.3, z - f.z * 1.3) +
       ground.sample(x + r.x * 0.95, z + r.z * 0.95) + ground.sample(x - r.x * 0.95, z - r.z * 0.95)
     );
+    if (surfaceProvider) {
+      const surf = surfaceProvider(x, z, this.pos.y, baseGround);
+      if (surf !== null) return surf;
+    }
+    return baseGround;
   }
 
   /** Direct yaw about the body's up axis, scaled down at crawling speeds. */
@@ -365,10 +377,14 @@ export class VehicleBody {
     this.quat.premultiply(this._q);
   }
 
-  private integratePosition(dt: number, ground: Heightfield): void {
+  private integratePosition(
+    dt: number,
+    ground: Heightfield,
+    surfaceProvider?: SurfaceElevationFn | undefined
+  ): void {
     this.pos.addScaledVector(this.vel, dt);
     // resample under the new position: at speed the ground moves a lot in a step
-    const gh = this.groundUnder(ground);
+    const gh = this.groundUnder(ground, surfaceProvider);
     this.groundY = gh;
     const target = gh + this.cfg.groundClearance;
 
@@ -454,6 +470,9 @@ export class VehicleBody {
     for (const s of this.stats.collider.spheres) {
       const c = this._sphere.set(s.x, s.y, s.z).applyQuaternion(this.quat).add(this.pos);
       for (const b of buildings) {
+        // If the obstacle does not rise above the driving surface under the vehicle,
+        // it is the roadway/deck beneath the wheels, not a wall blocking travel.
+        if (b.max.y <= this.groundY + 0.5) continue;
         if (!sphereVsAabb(c.x, c.y, c.z, s.r, b.min, b.max, hit)) continue;
         const push = hit.push + 0.05;
         this.pos.x += hit.nx * push;

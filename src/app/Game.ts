@@ -23,6 +23,7 @@ import { navMarkerFor } from './navTarget.ts';
 import { buildHudSnapshot } from './hudSnapshot.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
+import type { SurfaceElevationFn } from '../core/physics/VehicleBody.ts';
 import type { GameEvents } from './events.ts';
 import type { HudSnapshot, Store } from './store.ts';
 
@@ -116,6 +117,11 @@ export class Game {
   private readonly remoteInputs = new Map<string, VehicleInput>();
   /** Sim steps since the match started; the host stamps snapshots with it. */
   private tickCount = 0;
+  private surfaceProvider?: SurfaceElevationFn | undefined;
+
+  setSurfaceProvider(fn: SurfaceElevationFn | undefined): void {
+    this.surfaceProvider = fn;
+  }
 
   constructor(
     private terrain: TerrainProvider,
@@ -401,7 +407,7 @@ export class Game {
       } else {
         input = this.remoteInputs.get(actor.control) ?? NEUTRAL_INPUT;
       }
-      actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos));
+      actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
     }
     resolveVehicleCollisions(this.bodies, (a, b) => this.match.onRam(a, b, this.timeS), this.rng);
     for (const actor of this.vehicles) {
@@ -420,7 +426,7 @@ export class Game {
       this.deps.events.emit('match:countdown', { n });
     }
     for (const actor of this.vehicles) {
-      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.collidersNear(actor.body.pos));
+      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
     }
     this.countdownLeft -= dt;
     if (this.countdownLeft <= 0) {
