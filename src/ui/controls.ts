@@ -4,6 +4,7 @@
  * so Space/WASD never leak into the game while someone is searching.
  */
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
+import { activeGamepad, readGamepad } from './gamepad.ts';
 
 /**
  * The focused element, reached through shadow roots.
@@ -64,6 +65,26 @@ export class KeyboardState {
   }
 
   toVehicleInput(): VehicleInput {
+    // keyboard is the baseline; a gamepad overrides a channel only when its
+    // stick/trigger is actually off-centre, so a resting pad never steals
+    // input from the keyboard
+    const k = this.keyboardInput();
+    const pad = activeGamepad();
+    if (!pad) return k;
+    const g = readGamepad(pad);
+    const gp = g.pitch ?? 0;
+    const padActive = g.throttle > 0 || g.brake > 0 || g.steer !== 0 || g.jump || gp !== 0;
+    if (!padActive) return k;
+    return {
+      throttle: g.throttle > 0 ? g.throttle : k.throttle,
+      brake: g.brake > 0 ? g.brake : k.brake,
+      steer: g.steer !== 0 ? g.steer : k.steer,
+      jump: g.jump || k.jump,
+      pitch: gp !== 0 ? gp : (k.pitch ?? 0)
+    };
+  }
+
+  private keyboardInput(): VehicleInput {
     return {
       throttle: this.isDown('KeyW') || this.isDown('ArrowUp') ? 1 : 0,
       brake: this.isDown('KeyS') || this.isDown('ArrowDown') ? 1 : 0,
