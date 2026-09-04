@@ -107,7 +107,8 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
   const groundStreamer = sat ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
-    canvas: sat,
+    heightfield: terrain.heightfield,
+    anisotropy: opts.anisotropy,
     zoom: 18
   }) : null;
   log.info('relocated', {

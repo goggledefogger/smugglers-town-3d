@@ -151,6 +151,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 
 function clearTiles(): void {
   if (groundStreamer) {
+    renderer.scene.remove(groundStreamer.group);
     groundStreamer.dispose();
     groundStreamer = null;
   }
@@ -316,9 +317,7 @@ async function openOnline(type: number): Promise<void> {
           clearTiles();
           tiles = newTiles;
           groundStreamer = newGround ?? null;
-          if (groundStreamer) {
-            groundStreamer.onUpdate = () => terrainMesh.markTextureNeedsUpdate();
-          }
+          if (groundStreamer) renderer.scene.add(groundStreamer.group);
           if (tiles) renderer.scene.add(tiles.group);
           // one ground for everything, cut from the tiles — same as single player
           return tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
@@ -396,9 +395,7 @@ relocateBarEl.onSearch = async (q, key) => {
     clearTiles();
     tiles = newTiles;
     groundStreamer = newGround ?? null;
-    if (groundStreamer) {
-      groundStreamer.onUpdate = () => terrainMesh.markTextureNeedsUpdate();
-    }
+    if (groundStreamer) renderer.scene.add(groundStreamer.group);
     if (tiles) renderer.scene.add(tiles.group);
     swapTerrainMesh(terrain);
     startMatch(terrain);
@@ -468,6 +465,7 @@ function frame(now: number): void {
         groundDirty = false;
         game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
         terrainMesh.refresh(game.terrainProvider.heightfield);
+        groundStreamer?.refresh();
         minimapEl.setTerrain(game.terrainProvider.heightfield, config.world.mapHalf);
       }
     }
