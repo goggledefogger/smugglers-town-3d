@@ -398,19 +398,57 @@ export function collidersFromRasters(
     return foundRaster;
   };
 
+  const getGroundY = (c: number): number => {
+    return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+  };
+
+  /** Check if an elevated span is a narrow roadway ribbon (within 2 cells in X or Z, drops to ground). */
+  const isNarrowSpan = (c: number): boolean => {
+    const cx = c % n;
+    const cz = Math.floor(c / n);
+    let dropsX = false;
+    for (const dx of [-2, -1, 1, 2]) {
+      const x = cx + dx;
+      if (x < 0 || x >= n) { dropsX = true; break; }
+      const nb = cz * n + x;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsX = true; break; }
+    }
+    let dropsZ = false;
+    for (const dz of [-2, -1, 1, 2]) {
+      const z = cz + dz;
+      if (z < 0 || z >= n) { dropsZ = true; break; }
+      const nb = z * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsZ = true; break; }
+    }
+    return dropsX || dropsZ;
+  };
+
   // Pre-classify elevated bridge decks and overhead underpass spans
   const isDeck = new Uint8Array(n * n);
   const isRamp = new Uint8Array(n * n);
   const queue: number[] = [];
+  const hasMask = rasters.some(r => r && r.mask);
 
   for (let c = 0; c < n * n; c++) {
     const t = top[c]!;
-    const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+    const g = getGroundY(c);
     const l = low[c]!;
     if (t === NO_DATA || g === NO_DATA || t - g < rise) continue;
-    const isThinElevatedDeck = l !== Infinity && l - g >= 5.0 && t - l <= 7.0;
-    // Underpass check: overhead deck at t - g >= 13.0 with open vehicle driving clearance below
-    const isUnderpassDeck = t - g >= 13.0 && hasGroundClearance(c, g, t);
+
+    const clearanceOk = !hasMask || hasGroundClearance(c, g, t);
+    // Bridge deck / viaduct: elevated roadway structure with clear slab thickness (0.8m - 7.0m) and clearance below
+    const isThinElevatedDeck = l !== Infinity && t - l >= 0.8 && t - l <= 7.0 && l - g >= 4.0 && clearanceOk;
+    // High overhead underpass span: at least 13m high, narrow span, with confirmed open driving clearance below from mesh mask
+    const isUnderpassDeck =
+      hasMask &&
+      t - g >= 13.0 &&
+      hasGroundClearance(c, g, t) &&
+      isNarrowSpan(c);
+
     if (isThinElevatedDeck || isUnderpassDeck) {
       isDeck[c] = 1;
       if (outDeckGrid) outDeckGrid[c] = t;
@@ -451,11 +489,11 @@ export function collidersFromRasters(
     for (const nb of neighbors) {
       if (nb < 0 || isDeck[nb] || isRamp[nb]) continue;
       const tNb = top[nb]!;
-      const gNb = ground[nb] !== NO_DATA ? ground[nb]! : terrainTop[nb]!;
-      const lNb = low[nb]!;
+      const gNb = getGroundY(nb);
       if (tNb === NO_DATA || gNb === NO_DATA) continue;
       // Only road surface layers (thickness <= 6.0m), NOT thick vertical columns/piers (t - l >= 10m)
-      if (lNb !== Infinity && tNb - lNb > 6.0) continue;
+      const lNb = low[nb];
+      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0) continue;
 
       // Ramp MUST descend strictly towards the ground: road grade between 0.05m and 2.8m per 10m cell
       const drop = currT - tNb;
@@ -472,7 +510,7 @@ export function collidersFromRasters(
 
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
-    const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+    const g = ground[c]!;
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
     return true;
@@ -493,10 +531,8 @@ export function collidersFromRasters(
           lo = Infinity;
         }
         hi = Math.max(hi, top[c]!);
-        // the box floor follows the estimated ground, which tracks a hill far
-        // better than the smoothed elevation grid; fall back to it when a
-        // cell has no tile coverage nearby
-        lo = Math.min(lo, ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!);
+        // Box floor follows true ground level so buildings extend all the way down to the terrain
+        lo = Math.min(lo, getGroundY(c));
         continue;
       }
       if (start < 0) continue;
@@ -519,11 +555,6 @@ export function collidersFromRasters(
     }
     above = row;
   }
-  // Inset building colliders horizontally so 10m quantization steps and
-  // facade overshoots do not protrude into roadway lanes and sidewalks.
-  // Isolated single-cell pillars/piers (width <= cell && depth <= cell) get a tighter
-  // inset (2.8m each side -> ~4.4m column) so they snugly wrap bridge supports without
-  // blocking adjacent open lanes or water channels.
   for (const b of out) {
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;

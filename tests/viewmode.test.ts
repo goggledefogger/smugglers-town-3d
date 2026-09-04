@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { Vector3 } from 'three';
 import { BuildingMeshView } from '../src/render/BuildingMeshView.ts';
-import { Bindings, DEFAULTS_KEYBOARD } from '../src/input/bindings.ts';
+import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
 import { createDesertTerrain } from '../src/core/terrain/ProceduralTerrain.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
@@ -26,16 +27,16 @@ describe('BuildingMeshView', () => {
     const view = new BuildingMeshView();
     const mockColliders: BuildingCollider[] = [
       {
-        min: { x: 10, y: 0, z: 10 },
-        max: { x: 30, y: 50, z: 30 }
+        min: new Vector3(10, 0, 10),
+        max: new Vector3(30, 50, 30)
       },
       {
-        min: { x: -20, y: 0, z: -20 },
-        max: { x: -10, y: 15, z: -10 }
+        min: new Vector3(-20, 0, -20),
+        max: new Vector3(-10, 15, -10)
       },
       {
-        min: { x: 50, y: 0, z: 50 },
-        max: { x: 55, y: 4, z: 55 },
+        min: new Vector3(50, 0, 50),
+        max: new Vector3(55, 4, 55),
         kind: 'prop'
       }
     ];

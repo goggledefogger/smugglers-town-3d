@@ -54,8 +54,14 @@ export class BuildingMeshView {
 
   /**
    * Rebuild instances from the exact active colliders and deck grid.
+   * If sampleGround is provided, each building box is firmly anchored into the terrain.
    */
-  update(colliders: readonly BuildingCollider[], deckGrid?: Float32Array, grid?: Grid): void {
+  update(
+    colliders: readonly BuildingCollider[],
+    deckGrid?: Float32Array,
+    grid?: Grid,
+    sampleGround?: (x: number, z: number) => number
+  ): void {
     this.dispose();
 
     // 1. Build building boxes
@@ -67,13 +73,21 @@ export class BuildingMeshView {
 
       for (let i = 0; i < count; i++) {
         const b = colliders[i]!;
-        const sx = Math.max(0.2, b.max.x - b.min.x);
-        const sy = Math.max(0.2, b.max.y - b.min.y);
-        const sz = Math.max(0.2, b.max.z - b.min.z);
-
         const cx = (b.min.x + b.max.x) / 2;
-        const cy = (b.min.y + b.max.y) / 2;
         const cz = (b.min.z + b.max.z) / 2;
+
+        let minY = b.min.y;
+        if (sampleGround) {
+          const groundY = sampleGround(cx, cz);
+          // Firmly embed building base into ground so buildings never hover as floating roofs
+          minY = Math.min(minY, groundY - 1.5);
+        }
+        const maxY = b.max.y;
+
+        const sx = Math.max(0.2, b.max.x - b.min.x);
+        const sy = Math.max(0.2, maxY - minY);
+        const sz = Math.max(0.2, b.max.z - b.min.z);
+        const cy = (minY + maxY) / 2;
 
         _pos.set(cx, cy, cz);
         _scale.set(sx, sy, sz);

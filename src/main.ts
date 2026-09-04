@@ -169,7 +169,12 @@ viewModeBtn?.addEventListener('click', () => {
 function applyColliders(): void {
   const colliders = [...(tiles?.colliders() ?? []), ...propScatter.colliders];
   game.setBuildingColliders(colliders);
-  buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid);
+  buildingMeshView.update(
+    colliders,
+    tiles?.activeDeckGrid,
+    tiles?.activeGrid,
+    (x, z) => world.terrainProvider.heightfield.sample(x, z)
+  );
 }
 
 function rebuildViews(): void {
