@@ -197,7 +197,7 @@ export class VehicleBody {
     const rising = this.vel.y - this.climbRate;
     this.onGround = this.launchLockS === 0
       && this.pos.y < gh + this.cfg.groundClearance + GROUND_SNAP
-      && rising < LAUNCH_SEPARATION
+      && (rising < LAUNCH_SEPARATION || this.pos.y <= gh + this.cfg.groundClearance + 0.1)
       && (rising >= -HARD_LANDING_V || this.vel.y >= -HARD_LANDING_V);
     this.airTime = this.onGround ? 0 : this.airTime + dt;
 
@@ -452,6 +452,14 @@ export class VehicleBody {
       this.pos.y = MathUtils.clamp(this.pos.y, target - 0.25, target + RIDE_TRAVEL);
       // the car's vertical speed follows the climb rate of the slope
       this.vel.y = this.climbRate;
+    } else if (this.pos.y <= target) {
+      // Soft touchdown for airborne vehicles: touch down on surface without sinking underground
+      this.pos.y = target;
+      this.vel.y = Math.max(this.vel.y, this.climbRate);
+      if (this.launchLockS === 0) {
+        this.onGround = true;
+        this.airTime = 0;
+      }
     }
     this.keepInBounds();
   }

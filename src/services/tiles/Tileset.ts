@@ -452,7 +452,9 @@ export class TileStreamer {
       const h = this.deckGrid[j * n + i]!;
       if (h === NO_DATA) return null;
       const deckH = h + TILE_GROUND_GAP;
-      return Math.abs(currentY - deckH) <= maxDrop && deckH > groundY + 1.2 ? deckH : null;
+      if (Math.abs(currentY - deckH) > maxDrop) return null;
+      if (deckH < groundY - 0.5) return null;
+      return Math.max(deckH, groundY);
     }
 
     const c00 = j0 * n + i0;
@@ -490,8 +492,8 @@ export class TileStreamer {
     }
 
     if (Math.abs(currentY - deckH) > maxDrop) return null;
-    if (deckH <= groundY + 1.2) return null;
-    return deckH;
+    if (deckH < groundY - 0.5) return null;
+    return Math.max(deckH, groundY);
   }
 
   /**
@@ -610,7 +612,7 @@ export class TileStreamer {
     this.group.clear();
   }
 
-  private async add(tile: CollectedTile): Promise<LoadedTile | null> {
+  private async loadChild(tile: CollectedTile): Promise<LoadedTile | null> {
     let g: Group | null = null;
     try {
       g = await loadTileGlb(tile, this.placement, this.apiKey, this.anisotropy);
@@ -618,8 +620,13 @@ export class TileStreamer {
       noteFailure('parse failed', e);
     }
     if (!g) return null;
-    this.group.add(g);
-    const loaded: LoadedTile = { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+    return { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+  }
+
+  private async add(tile: CollectedTile): Promise<LoadedTile | null> {
+    const loaded = await this.loadChild(tile);
+    if (!loaded) return null;
+    this.group.add(loaded.group);
     this.tiles.push(loaded);
     this.dirty = true;
     return loaded;
@@ -638,12 +645,23 @@ export class TileStreamer {
     tile.done = true;
     const kids = await nextLevel(tile.node, tile.session, this.apiKey);
     if (kids.length === 0) return;
-    const loaded = await Promise.all(kids.map(k => this.add(k)));
+    const loaded = await Promise.all(kids.map(k => this.loadChild(k)));
     if (loaded.some(l => l === null)) {
-      for (const l of loaded) if (l) this.remove(l);
+      for (const l of loaded) {
+        if (l) disposeTiles(l.group);
+      }
       return;
     }
-    this.remove(tile);
+    // Atomic swap: remove parent and add children in the exact same frame
+    // so parent and child meshes never co-exist in the scene fighting/flickering
+    this.group.remove(tile.group);
+    disposeTiles(tile.group);
+    const i = this.tiles.indexOf(tile);
+    if (i >= 0) this.tiles.splice(i, 1, ...(loaded as LoadedTile[]));
+    for (const l of loaded as LoadedTile[]) {
+      this.group.add(l.group);
+    }
+    this.dirty = true;
   }
 }
 

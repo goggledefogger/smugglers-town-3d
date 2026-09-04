@@ -301,7 +301,7 @@ export function groundField(
   for (let c = 0; c < n * n; c++) {
     const t = top[c]!, b = base[c]!;
     if (t === NO_DATA || b === NO_DATA) raw[c] = terrainTop[c]!;
-    else raw[c] = (t - b >= rise ? b : low[c]!) + TILE_GROUND_GAP;
+    else raw[c] = (t - b >= rise ? b : Math.max(b - 0.5, Math.min(t, low[c]!))) + TILE_GROUND_GAP;
   }
   const out = new Float32Array(n * n);
   for (let j = 0; j < n; j++) {
@@ -419,12 +419,26 @@ export function collidersFromRasters(
     if (isThinElevatedDeck || isUnderpassDeck) {
       isDeck[c] = 1;
       if (outDeckGrid) outDeckGrid[c] = t;
+    }
+  }
+
+  // Find terminal boundary cells of elevated decks to seed approach ramps
+  for (let c = 0; c < n * n; c++) {
+    if (!isDeck[c]) continue;
+    const cx = c % n;
+    const cz = Math.floor(c / n);
+    const hasNonDeckNeighbor =
+      (cx > 0 && !isDeck[c - 1]) ||
+      (cx < n - 1 && !isDeck[c + 1]) ||
+      (cz > 0 && !isDeck[c - n]) ||
+      (cz < n - 1 && !isDeck[c + n]);
+    if (hasNonDeckNeighbor) {
       queue.push(c);
     }
   }
 
-  // Ramp Continuity Rule: Flood-fill from elevated decks along continuous road slopes
-  // to unblock solid earthen/stone approach ramps (e.g. Brooklyn Bridge approach viaducts)
+  // Ramp Continuity Rule: Trace descending road slopes from elevated deck terminals
+  // down to ground level to unblock solid approach viaducts (e.g. Brooklyn Bridge earthen approaches)
   let head = 0;
   while (head < queue.length) {
     const curr = queue[head++]!;
@@ -448,12 +462,13 @@ export function collidersFromRasters(
       // Only road surface layers (thickness <= 6.0m), NOT thick vertical columns/piers (t - l >= 10m)
       if (lNb !== Infinity && tNb - lNb > 6.0) continue;
 
-      // Continuous road grade: slope <= 2.8m per 10m cell (approx 28% grade)
-      if (Math.abs(tNb - currT) <= 2.8 && tNb >= gNb) {
+      // Ramp MUST descend strictly towards the ground: road grade between 0.05m and 2.8m per 10m cell
+      const drop = currT - tNb;
+      if (drop > 0.05 && drop <= 2.8 && tNb >= gNb) {
         isRamp[nb] = 1;
         if (outDeckGrid) outDeckGrid[nb] = tNb;
-        // Continue downward towards ground; stop once ground level is reached
-        if (tNb > gNb + 0.5) {
+        // Continue downward towards ground; stop once ground level is reached (within 1m of ground)
+        if (tNb > gNb + 1.0) {
           queue.push(nb);
         }
       }

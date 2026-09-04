@@ -133,7 +133,7 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     heightfield: terrain.heightfield,
     anisotropy: opts.anisotropy,
     zoom: 18,
-    isTileCovered: (wx, wz) => tiles?.hasTileNear(wx, wz, 150) ?? false
+    isTileCovered: (wx, wz) => tiles?.hasTileNear(wx, wz, 300) ?? false
   }) : null;
   log.info('relocated', {
     label, lat, lon, tiles: tiles?.tileCount ?? 0, ms: Date.now() - startedAt

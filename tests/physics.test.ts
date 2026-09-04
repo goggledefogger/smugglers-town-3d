@@ -281,4 +281,23 @@ describe('VehicleBody.step', () => {
     // 0.25 * (10 + 0 + 0 + 0) = 2.5
     expect(v.groundY).toBeCloseTo(2.5, 1);
   });
+
+  it('performs soft touchdown cleanly on ground surface without sinking underground', () => {
+    const v = makeBody();
+    // Drop gently from 1.5m (target is 1.0m) with mild downward velocity -2 m/s
+    v.pos.set(0, 1.5, 0);
+    v.vel.set(0, -2, 0);
+    v.onGround = false;
+
+    // Step until it reaches the ground
+    for (let t = 0; t < 0.4; t += 1 / 60) {
+      v.step(1 / 60, NO_INPUT, FLAT, NO_BUILDINGS);
+    }
+
+    // Must be grounded, damage = 0, and pos.y firmly at or above target (1.0m)
+    expect(v.onGround).toBe(true);
+    expect(v.damage).toBe(0);
+    expect(v.pos.y).toBeGreaterThanOrEqual(0.99);
+    expect(v.pos.y).toBeLessThanOrEqual(1.05);
+  });
 });

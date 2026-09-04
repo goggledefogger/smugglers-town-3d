@@ -418,5 +418,29 @@ describe('one shared ground', () => {
     // Unrelated flat ground cell has NO_DATA in deckGrid
     expect(deckGrid[10 * N + 10]).toBe(NO_DATA);
   });
+
+  it('keeps adjacent building roofs as solid colliders and never treats them as ramps', () => {
+    const top = flat(0), low = flat(0);
+    // Elevated bridge deck at column 20, rows 15..25, height 14 (thin slab)
+    for (let j = 15; j <= 25; j++) {
+      const c = j * N + 20;
+      top[c] = 14;
+      low[c] = 12.5;
+    }
+    // A 14m tall building right next to the bridge deck at column 21, row 20 (thick structure: low = 0, top = 14)
+    top[20 * N + 21] = 14;
+    low[20 * N + 21] = 0;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // The bridge deck itself is in deckGrid
+    expect(deckGrid[20 * N + 20]).toBeCloseTo(14, 5);
+    // The adjacent building roof is NOT in deckGrid
+    expect(deckGrid[20 * N + 21]).toBe(NO_DATA);
+    // The adjacent building REMAINS a solid building collider
+    expect(colliders.length).toBeGreaterThan(0);
+  });
 });
 
