@@ -119,6 +119,11 @@ export class SettingsScreen extends LitElement {
   private offChange: (() => void) | null = null;
   private cancelCapture: (() => void) | null = null;
 
+  constructor() {
+    super();
+    this.listening = null;
+  }
+
   set inputManager(m: InputManager) {
     this.manager = m;
     this.offChange?.();
