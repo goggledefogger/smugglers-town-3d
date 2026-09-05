@@ -635,6 +635,7 @@ function frame(now: number): void {
           Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell)
         );
         terrainMesh.refresh(game.terrainProvider.heightfield);
+        if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;
       }
     }

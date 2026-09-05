@@ -303,6 +303,36 @@ describe('buildingCollidersFrom', () => {
     const top = Math.max(...boxes.map(b => b.max.y));
     expect(top).toBeCloseTo(50, 1);
   });
+
+  it('steep diagonal truss triangles on bridges do not stamp geometry into driving clearance zone below', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // ground roadway at Y = 0
+    g.add(roof(-6, -6, 6, 6, 20)); // elevated bridge deck at Y = 20
+
+    // Add a steep diagonal truss triangle from deck (Y=20) up to arch apex (Y=45)
+    // Vertices: a=(-3, 20, 0), b=(3, 20, 0), c=(0, 45, 0)
+    const trussGeo = new BufferGeometry();
+    trussGeo.setAttribute('position', new BufferAttribute(new Float32Array([
+      -3, 20, 0,  3, 20, 0,  0, 45, 0
+    ]), 3));
+    g.add(new Mesh(trussGeo));
+
+    const grid = { cell: 1.5, half: 30, n: 40 };
+    const r = rasterizeTile(g, grid)!;
+    // Ground roadway cell at center
+    const centerIdx = Math.floor(40 / 2) * 40 + Math.floor(40 / 2);
+    // Clearance begins above ground (e.g. bin 1..3, height 1.5m..4.5m)
+    // Truss is up at Y=20..45, so driving clearance zone bins must have NO bits set
+    const gBin = Math.floor((0 - r.y0!) / 1.5);
+    const b1 = Math.max(0, gBin + 1);
+    const b2 = Math.min(31, Math.floor((4.5 - r.y0!) / 1.5));
+    const rangeMask = (0xFFFFFFFF >>> (31 - (b2 - b1))) << b1;
+    expect(r.mask![centerIdx]! & rangeMask).toBe(0);
+
+    // Underpass roadway has zero building colliders blocking it
+    const boxes = buildingCollidersFrom(g, flat);
+    expect(boxes).toHaveLength(0);
+  });
 });
 
 describe('tileGroundOffset', () => {
@@ -510,6 +540,30 @@ describe('one shared ground', () => {
     const zBoundary = -grid.half + 16 * grid.cell;
     expect(b15.max.z).toBeCloseTo(zBoundary, 5);
     expect(b16.min.z).toBeCloseTo(zBoundary, 5);
+  });
+
+  it('classifies all lanes of a wide 4-cell bridge (40m wide, 20 cells long) as deckGrid without blocking underpass', () => {
+    const top = flat(0), low = flat(0);
+    // 4-cell wide bridge ribbon from column 15..18 across rows 10..30
+    for (let j = 10; j <= 30; j++) {
+      for (let i = 15; i <= 18; i++) {
+        const c = j * N + i;
+        top[c] = 20; // bridge deck surface
+        low[c] = 18; // 2m deck slab thickness, open air from 0 to 18
+      }
+    }
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Every single cell across all 4 lanes of the bridge deck must be in deckGrid
+    for (let j = 10; j <= 30; j++) {
+      for (let i = 15; i <= 18; i++) {
+        expect(deckGrid[j * N + i]).toBeCloseTo(20, 5);
+      }
+    }
+    // Underneath the bridge, no false building colliders should block the roadway
+    expect(colliders).toHaveLength(0);
   });
 });
 

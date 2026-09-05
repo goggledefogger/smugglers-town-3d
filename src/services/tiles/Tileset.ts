@@ -350,6 +350,7 @@ export class TileStreamer {
   private inFlight = false;
   private lastPickMs = 0;
   private dirty = false;
+  private shiftY = 0;
 
   constructor(
     private readonly apiKey: string,
@@ -558,12 +559,22 @@ export class TileStreamer {
   private calibrateGround(): void {
     const offset = tileGroundOffset(this.tiles.map(t => t.raster), this.grid, this.terrainTop);
     if (offset === null) return;
-    this.group.position.y -= (offset - TILE_GROUND_GAP);
+    const shiftY = -(offset - TILE_GROUND_GAP);
+    this.shiftY = shiftY;
+    // Bake datum shift directly into placement matrix so all future refined tiles
+    // are automatically loaded and rasterized in the calibrated frame
+    this.placement.elements[13] += shiftY;
+    for (const t of this.tiles) {
+      t.group.matrix.elements[13] += shiftY;
+      t.group.matrixWorldNeedsUpdate = true;
+      t.group.updateMatrixWorld(true);
+      t.raster = rasterizeTile(t.group, this.grid);
+    }
+    this.group.position.y = 0;
     this.group.updateMatrixWorld(true);
-    for (const t of this.tiles) t.raster = rasterizeTile(t.group, this.grid);
     this.dirty = true;
     log.info('ground datum shifted', {
-      metres: Number((-(offset - TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
+      metres: Number((shiftY / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
     });
   }
 
@@ -574,7 +585,7 @@ export class TileStreamer {
   update(playerWorld: Vector3, nowMs: number): void {
     if (this.inFlight || nowMs - this.lastPickMs < 250) return;
     this.lastPickMs = nowMs;
-    const p = _ecef.copy(playerWorld).applyMatrix4(this.worldToEcef);
+    const p = _ecef.set(playerWorld.x, playerWorld.y - this.shiftY, playerWorld.z).applyMatrix4(this.worldToEcef);
 
     // If approaching tile capacity, evict the farthest tile beyond the fog horizon
     if (this.tiles.length >= MAX_TILES) {

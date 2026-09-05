@@ -146,17 +146,23 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
 
       if (isSteepWall) {
         // Step along all 3 edges of steep vertical walls so thin facades/piers
-        // continuously stamp every cell they cross without over-stamping far corners
+        // continuously stamp every cell they cross with their true edge segment height
         const stepEdge = (p1: { x: number; y: number; z: number }, p2: { x: number; y: number; z: number }) => {
           const len = Math.hypot(p2.x - p1.x, p2.z - p1.z);
           const steps = Math.max(1, Math.ceil(len / (cell * 0.5)));
-          for (let s = 0; s <= steps; s++) {
-            const f = s / steps;
-            const x = p1.x + (p2.x - p1.x) * f;
-            const z = p1.z + (p2.z - p1.z) * f;
+          for (let s = 0; s < steps; s++) {
+            const f0 = s / steps;
+            const f1 = (s + 1) / steps;
+            const x = p1.x + (p2.x - p1.x) * f0;
+            const z = p1.z + (p2.z - p1.z) * f0;
+            const yA = p1.y + (p2.y - p1.y) * f0;
+            const yB = p1.y + (p2.y - p1.y) * f1;
             if (x >= -half && x < half && z >= -half && z < half) {
-              stampRange(cellOf(x), cellOf(z), minY, maxY);
+              stampRange(cellOf(x), cellOf(z), yA, yB);
             }
+          }
+          if (p2.x >= -half && p2.x < half && p2.z >= -half && p2.z < half) {
+            stamp(cellOf(p2.x), cellOf(p2.z), p2.y);
           }
         };
         stepEdge(a, b);
@@ -167,14 +173,10 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
         continue;
       }
 
-      // Stamp centroid height/range so small triangles register accurately
+      // Stamp centroid height so small triangles register accurately
       const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
       if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-        if (isSteepWall) {
-          stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
-        } else {
-          stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
-        }
+        stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
       }
 
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
@@ -190,11 +192,7 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
           const l2 = ((b.x - a.x) * (cz - a.z) - (cx - a.x) * (b.z - a.z)) / det;
           const l0 = 1 - l1 - l2;
           if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
-          if (isSteepWall) {
-            stampRange(i, j, minY, maxY);
-          } else {
-            stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
-          }
+          stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
         }
       }
     }
@@ -643,54 +641,104 @@ export function collidersFromRasters(
     return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
   };
 
-  /** Check if an elevated span is a narrow roadway ribbon (drops to ground/air on both opposing sides within 2 cells). */
+  /**
+   * Check if an elevated span is a bridge deck, viaduct, overpass, or approach ramp:
+   * 1. Narrow roadway ribbon (width <= 2 cells, i.e. <= 20m in X or Z) - covers 1-2 lane bridges, overpasses, ramps.
+   * 2. Multi-lane bridge ribbon (width <= 6 cells, i.e. <= 60m in X or Z) with significant length
+   *    (length >= 5 cells, i.e. >= 50m, and length >= width + 2) - covers major interstate and river bridges across all lanes.
+   * Broad squarish buildings (e.g. 40m x 40m warehouses with gabled roofs) are excluded.
+   */
   const isNarrowSpan = (c: number): boolean => {
     const cx = c % n;
     const cz = Math.floor(c / n);
 
-    // Narrow in X: must drop to ground/air on West (-X) AND on East (+X)
-    let dropsWest = false;
-    for (const dx of [-1, -2]) {
-      const x = cx + dx;
-      if (x < 0) { dropsWest = true; break; }
-      const nb = cz * n + x;
+    // Continuous elevated span in X (drop on West and East)
+    let spanWest = 0;
+    for (let dx = -1; cx + dx >= 0; dx--) {
+      const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsWest = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanWest++;
+      if (spanWest > 6) break;
     }
-    let dropsEast = false;
-    for (const dx of [1, 2]) {
-      const x = cx + dx;
-      if (x >= n) { dropsEast = true; break; }
-      const nb = cz * n + x;
+    let spanEast = 0;
+    for (let dx = 1; cx + dx < n; dx++) {
+      const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsEast = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanEast++;
+      if (spanEast > 6) break;
     }
-    const narrowInX = dropsWest && dropsEast;
+    const widthX = spanWest + 1 + spanEast;
 
-    // Narrow in Z: must drop to ground/air on South (-Z) AND on North (+Z)
-    let dropsSouth = false;
-    for (const dz of [-1, -2]) {
-      const z = cz + dz;
-      if (z < 0) { dropsSouth = true; break; }
-      const nb = z * n + cx;
+    // Continuous elevated span in Z (drop on South and North)
+    let spanSouth = 0;
+    for (let dz = -1; cz + dz >= 0; dz--) {
+      const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsSouth = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanSouth++;
+      if (spanSouth > 6) break;
     }
-    let dropsNorth = false;
-    for (const dz of [1, 2]) {
-      const z = cz + dz;
-      if (z >= n) { dropsNorth = true; break; }
-      const nb = z * n + cx;
+    let spanNorth = 0;
+    for (let dz = 1; cz + dz < n; dz++) {
+      const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsNorth = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanNorth++;
+      if (spanNorth > 6) break;
     }
-    const narrowInZ = dropsSouth && dropsNorth;
+    const widthZ = spanSouth + 1 + spanNorth;
 
-    return narrowInX || narrowInZ;
+    // Narrow span in either axis (1-2 cells wide: <= 20m)
+    if (widthX <= 2 || widthZ <= 2) return true;
+
+    // Check diagonal extents for angled bridges
+    let diag1 = 0;
+    for (let d = 1; cx + d < n && cz + d < n; d++) {
+      const nb = (cz + d) * n + (cx + d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag1++;
+      if (diag1 > 10) break;
+    }
+    for (let d = 1; cx - d >= 0 && cz - d >= 0; d++) {
+      const nb = (cz - d) * n + (cx - d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag1++;
+      if (diag1 > 10) break;
+    }
+
+    let diag2 = 0;
+    for (let d = 1; cx + d < n && cz - d >= 0; d++) {
+      const nb = (cz - d) * n + (cx + d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag2++;
+      if (diag2 > 10) break;
+    }
+    for (let d = 1; cx - d >= 0 && cz + d < n; d++) {
+      const nb = (cz + d) * n + (cx - d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag2++;
+      if (diag2 > 10) break;
+    }
+
+    const minCross = Math.min(widthX, widthZ);
+    const maxLen = Math.max(widthX, widthZ, diag1 + 1, diag2 + 1);
+
+    // Multi-lane bridge ribbon (width <= 6 cells = 60m, length >= 5 cells = 50m, length >= width + 2)
+    return minCross <= 6 && maxLen >= 5 && maxLen >= minCross + 2;
   };
 
   // Pre-classify elevated bridge decks and overhead underpass spans

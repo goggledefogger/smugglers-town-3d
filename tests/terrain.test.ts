@@ -182,6 +182,35 @@ describe('AmortizedGroundBuilder', () => {
       expect(builder.result![i]).toBeCloseTo(expected[i]!, 5);
     }
   });
+
+  it('maintains consistent ground datum and does not sink when refined tiles are processed', async () => {
+    const { groundField, TILE_GROUND_GAP } = await import('../src/services/tiles/tileColliders.ts');
+    const N = 40;
+    const grid = { cell: 10, half: (N * 10) / 2, n: N };
+    const terrainTop = new Float32Array(N * N).fill(10);
+
+    // Initial coarse tile covering the center: tile mesh surface at 10.0m
+    const tileSurfaceHeight = 10;
+    const coarseRaster = {
+      i0: 10, j0: 10, w: 20, h: 20,
+      top: new Float32Array(20 * 20).fill(tileSurfaceHeight),
+      low: new Float32Array(20 * 20).fill(tileSurfaceHeight)
+    };
+    const initialGround = groundField([coarseRaster], grid, terrainTop, 1);
+    const centerIdx = 20 * N + 20;
+    expect(initialGround[centerIdx]).toBeCloseTo(tileSurfaceHeight + TILE_GROUND_GAP, 2);
+
+    // Refined tile replacing the center with calibrated datum (same ground level)
+    const refinedRaster = {
+      i0: 15, j0: 15, w: 10, h: 10,
+      top: new Float32Array(10 * 10).fill(tileSurfaceHeight),
+      low: new Float32Array(10 * 10).fill(tileSurfaceHeight)
+    };
+    const refinedGround = groundField([coarseRaster, refinedRaster], grid, terrainTop, 1);
+    // Ground at center MUST stay at tileSurfaceHeight + TILE_GROUND_GAP, not sinking below ground
+    expect(refinedGround[centerIdx]).toBeCloseTo(tileSurfaceHeight + TILE_GROUND_GAP, 2);
+    expect(refinedGround[centerIdx]).toBeCloseTo(initialGround[centerIdx]!, 2);
+  });
 });
 
 
