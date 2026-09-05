@@ -35,8 +35,13 @@ const CELL = 10;
  * only a sharp hill crest gets shaved, and then by well under the threshold.
  */
 const GROUND_K = 6;
-/** Real meters above the estimated ground that make a cell a building. */
-const BUILDING_RISE_M = 8;
+/**
+ * Real meters above the estimated ground that make a cell a building.
+ * Set to 3.5m (~12ft) to capture 1-story commercial/residential structures,
+ * building annexes, and low-rise historical architecture (e.g. New Orleans French Quarter)
+ * while ignoring road crowns, curbs, and parked vehicles (<2m).
+ */
+const BUILDING_RISE_M = 3.5;
 /**
  * Height gap between the physics ground and photogrammetry surface.
  * Kept at 5cm so 3D tile pavement sits cleanly above the continuous terrain underlay
@@ -638,29 +643,54 @@ export function collidersFromRasters(
     return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
   };
 
-  /** Check if an elevated span is a narrow roadway ribbon (within 2 cells in X or Z, drops to ground). */
+  /** Check if an elevated span is a narrow roadway ribbon (drops to ground/air on both opposing sides within 2 cells). */
   const isNarrowSpan = (c: number): boolean => {
     const cx = c % n;
     const cz = Math.floor(c / n);
-    let dropsX = false;
-    for (const dx of [-2, -1, 1, 2]) {
+
+    // Narrow in X: must drop to ground/air on West (-X) AND on East (+X)
+    let dropsWest = false;
+    for (const dx of [-1, -2]) {
       const x = cx + dx;
-      if (x < 0 || x >= n) { dropsX = true; break; }
+      if (x < 0) { dropsWest = true; break; }
       const nb = cz * n + x;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsX = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsWest = true; break; }
     }
-    let dropsZ = false;
-    for (const dz of [-2, -1, 1, 2]) {
+    let dropsEast = false;
+    for (const dx of [1, 2]) {
+      const x = cx + dx;
+      if (x >= n) { dropsEast = true; break; }
+      const nb = cz * n + x;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsEast = true; break; }
+    }
+    const narrowInX = dropsWest && dropsEast;
+
+    // Narrow in Z: must drop to ground/air on South (-Z) AND on North (+Z)
+    let dropsSouth = false;
+    for (const dz of [-1, -2]) {
       const z = cz + dz;
-      if (z < 0 || z >= n) { dropsZ = true; break; }
+      if (z < 0) { dropsSouth = true; break; }
       const nb = z * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsZ = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsSouth = true; break; }
     }
-    return dropsX || dropsZ;
+    let dropsNorth = false;
+    for (const dz of [1, 2]) {
+      const z = cz + dz;
+      if (z >= n) { dropsNorth = true; break; }
+      const nb = z * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsNorth = true; break; }
+    }
+    const narrowInZ = dropsSouth && dropsNorth;
+
+    return narrowInX || narrowInZ;
   };
 
   // Pre-classify elevated bridge decks and overhead underpass spans
@@ -676,8 +706,15 @@ export function collidersFromRasters(
     if (t === NO_DATA || g === NO_DATA || t - g < rise) continue;
 
     const clearanceOk = !hasMask || hasGroundClearance(c, g, t);
-    // Bridge deck / viaduct: elevated roadway structure with clear slab thickness (0.8m - 7.0m) and clearance below
-    const isThinElevatedDeck = l !== Infinity && t - l >= 0.8 && t - l <= 7.0 && l - g >= 4.0 && clearanceOk;
+    // Bridge deck / viaduct: elevated roadway structure with clear slab thickness (0.8m - 7.0m),
+    // clearance below, and a narrow roadway ribbon (1-2 cells wide) dropping off to ground on its sides
+    const isThinElevatedDeck =
+      l !== Infinity &&
+      t - l >= 0.8 &&
+      t - l <= 7.0 &&
+      l - g >= 4.0 &&
+      clearanceOk &&
+      isNarrowSpan(c);
     // High overhead underpass span: at least 13m high, narrow span, with confirmed open driving clearance below from mesh mask
     const isUnderpassDeck =
       hasMask &&
@@ -707,7 +744,8 @@ export function collidersFromRasters(
   }
 
   // Ramp Continuity Rule: Trace descending road slopes from elevated deck terminals
-  // down to ground level to unblock solid approach viaducts (e.g. Brooklyn Bridge earthen approaches)
+  // down to ground level to unblock solid approach viaducts (e.g. Brooklyn Bridge earthen approaches).
+  // Ramps must be narrow roadway ribbons (isNarrowSpan), not broad gabled or pitched building roofs.
   let head = 0;
   while (head < queue.length) {
     const curr = queue[head++]!;
@@ -731,9 +769,9 @@ export function collidersFromRasters(
       const lNb = low[nb];
       if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0) continue;
 
-      // Ramp MUST descend strictly towards the ground: road grade between 0.05m and 2.8m per 10m cell
+      // Ramp MUST descend strictly towards the ground along a narrow roadway span
       const drop = currT - tNb;
-      if (drop > 0.05 && drop <= 2.8 && tNb >= gNb) {
+      if (drop > 0.05 && drop <= 2.8 && tNb >= gNb && isNarrowSpan(nb)) {
         isRamp[nb] = 1;
         if (outDeckGrid) outDeckGrid[nb] = tNb;
         // Continue downward towards ground; stop once ground level is reached (within 1m of ground)
@@ -755,11 +793,18 @@ export function collidersFromRasters(
     return true;
   };
 
-  const out: BuildingCollider[] = [];
-  let above = new Map<number, BuildingCollider>();
+  interface BoxExtent {
+    b: BuildingCollider;
+    i0: number;
+    i1: number;
+    j0: number;
+    j1: number;
+  }
+  const boxes: BoxExtent[] = [];
+  let above = new Map<number, BoxExtent>();
   for (let j = 0; j < n; j++) {
     const z0 = -half + j * cell;
-    const row = new Map<number, BuildingCollider>();
+    const row = new Map<number, BoxExtent>();
     let start = -1, hi = -Infinity, lo = Infinity;
     for (let i = 0; i <= n; i++) {
       const c = j * n + i;
@@ -778,35 +823,72 @@ export function collidersFromRasters(
       const key = start * (n + 1) + i;
       const prev = above.get(key);
       if (prev) {
-        prev.max.z = z0 + cell;
-        prev.max.y = Math.max(prev.max.y, hi);
-        prev.min.y = Math.min(prev.min.y, lo - 1);
+        prev.b.max.z = z0 + cell;
+        prev.b.max.y = Math.max(prev.b.max.y, hi);
+        prev.b.min.y = Math.min(prev.b.min.y, lo - 1);
+        prev.j1 = j + 1;
         row.set(key, prev);
       } else {
         const b: BuildingCollider = {
           min: new Vector3(-half + start * cell, lo - 1, z0),
           max: new Vector3(-half + i * cell, hi, z0 + cell)
         };
-        out.push(b);
-        row.set(key, b);
+        const ext: BoxExtent = { b, i0: start, i1: i, j0: j, j1: j + 1 };
+        boxes.push(ext);
+        row.set(key, ext);
       }
       start = -1;
     }
     above = row;
   }
-  for (const b of out) {
+
+  // Neighbor-aware horizontal insetting:
+  // Inset exterior faces that border open streets or non-building cells by 1.0m to prevent
+  // 10m quantization steps from protruding into roadway lanes.
+  // Internal faces between adjacent building cells remain 100% flush (0m inset) so contiguous
+  // buildings are solid with zero gaps, zero cracks, and zero isolated pillars.
+  // Freestanding 1-cell columns (isolated piers/towers with no building neighbors on all 4 sides)
+  // get a 2.8m inset to snugly hug structural supports.
+  for (const { b, i0, i1, j0, j1 } of boxes) {
+    let touchSouth = false;
+    if (j0 > 0) {
+      for (let i = i0; i < i1; i++) {
+        if (isBuilding((j0 - 1) * n + i)) { touchSouth = true; break; }
+      }
+    }
+    let touchNorth = false;
+    if (j1 < n) {
+      for (let i = i0; i < i1; i++) {
+        if (isBuilding(j1 * n + i)) { touchNorth = true; break; }
+      }
+    }
+    let touchWest = false;
+    if (i0 > 0) {
+      for (let j = j0; j < j1; j++) {
+        if (isBuilding(j * n + (i0 - 1))) { touchWest = true; break; }
+      }
+    }
+    let touchEast = false;
+    if (i1 < n) {
+      for (let j = j0; j < j1; j++) {
+        if (isBuilding(j * n + i1)) { touchEast = true; break; }
+      }
+    }
+
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
-    const isIsolatedColumn = width <= cell && depth <= cell;
+    const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
     const insetMax = isIsolatedColumn ? 2.8 : 1.0;
     const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
     const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
-    b.min.x += insetX;
-    b.max.x -= insetX;
-    b.min.z += insetZ;
-    b.max.z -= insetZ;
+
+    if (!touchWest) b.min.x += insetX;
+    if (!touchEast) b.max.x -= insetX;
+    if (!touchSouth) b.min.z += insetZ;
+    if (!touchNorth) b.max.z -= insetZ;
   }
-  return out;
+
+  return boxes.map(e => e.b);
 }
 
 /** Colliders straight from a group of meshes (tests and one-shot use). */

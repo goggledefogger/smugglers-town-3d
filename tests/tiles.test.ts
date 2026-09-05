@@ -442,5 +442,74 @@ describe('one shared ground', () => {
     // The adjacent building REMAINS a solid building collider
     expect(colliders.length).toBeGreaterThan(0);
   });
+
+  it('detects low-rise 1-story buildings (height 4.5m) as solid colliders', () => {
+    const top = flat(0), low = flat(0);
+    // Low-rise 4.5m commercial building / annex at column 15..17, rows 15..17
+    for (let j = 15; j <= 17; j++) {
+      for (let i = 15; i <= 17; i++) {
+        const c = j * N + i;
+        top[c] = 4.5;
+        low[c] = 0;
+      }
+    }
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+    expect(colliders.length).toBeGreaterThan(0);
+    const maxTop = Math.max(...colliders.map(b => b.max.y));
+    expect(maxTop).toBeCloseTo(4.5, 1);
+  });
+
+  it('keeps broad buildings with pitched/gabled roofs as solid buildings (never bridge decks)', () => {
+    const top = flat(0), low = flat(0);
+    // A 4-cell wide building (40m wide) with gabled roof: peak 14m, eaves 10m, low 9m
+    for (let j = 15; j <= 18; j++) {
+      for (let i = 15; i <= 18; i++) {
+        const c = j * N + i;
+        // Peak along center, slope to eaves
+        top[c] = (i === 16 || i === 17) ? 14 : 11;
+        low[c] = 9; // attic floor / eave
+      }
+    }
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Broad building MUST NOT be classified as deckGrid
+    for (let j = 15; j <= 18; j++) {
+      for (let i = 15; i <= 18; i++) {
+        expect(deckGrid[j * N + i]).toBe(NO_DATA);
+      }
+    }
+    // Broad building MUST produce solid colliders
+    expect(colliders.length).toBeGreaterThan(0);
+  });
+
+  it('leaves contiguous adjacent building rows flush with zero internal gaps', () => {
+    const top = flat(0), low = flat(0);
+    // Stepped/diagonal building: row 15 has columns 15..17, row 16 has columns 16..18
+    for (let i = 15; i <= 17; i++) {
+      top[15 * N + i] = 10;
+      low[15 * N + i] = 0;
+    }
+    for (let i = 16; i <= 18; i++) {
+      top[16 * N + i] = 10;
+      low[16 * N + i] = 0;
+    }
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+
+    expect(colliders.length).toBe(2);
+    // Find the box for row 15 and row 16
+    const b15 = colliders.find(b => b.min.z < -grid.half + 16 * grid.cell && b.max.z <= -grid.half + 16.5 * grid.cell)!;
+    const b16 = colliders.find(b => b.min.z >= -grid.half + 15.5 * grid.cell && b.max.z > -grid.half + 16 * grid.cell)!;
+    expect(b15).toBeDefined();
+    expect(b16).toBeDefined();
+
+    // The boundary at z = -half + 16 * cell MUST be flush with 0 gap!
+    const zBoundary = -grid.half + 16 * grid.cell;
+    expect(b15.max.z).toBeCloseTo(zBoundary, 5);
+    expect(b16.min.z).toBeCloseTo(zBoundary, 5);
+  });
 });
 
