@@ -34,6 +34,7 @@ import { logger } from './app/log.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
+import { AmortizedGroundBuilder } from './services/tiles/tileColliders.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
 import { worldToLl } from './core/geo/projection.ts';
@@ -132,6 +133,8 @@ const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
+let colliderGeneration = 0;
+let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
 let viewMode: 'photoreal' | 'game3d' = 'photoreal';
@@ -167,6 +170,7 @@ viewModeBtn?.addEventListener('click', () => {
 
 /** Buildings from the streamed tiles plus the scattered props. */
 function applyColliders(): void {
+  colliderGeneration++;
   const colliders = [...(tiles?.colliders() ?? []), ...propScatter.colliders];
   game.setBuildingColliders(colliders);
   buildingMeshView.update(
@@ -175,7 +179,7 @@ function applyColliders(): void {
     tiles?.activeGrid,
     (x, z) => world.terrainProvider.heightfield.sample(x, z)
   );
-  terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2);
+  terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2, colliderGeneration);
 }
 
 function rebuildViews(): void {
@@ -199,6 +203,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 
 function clearTiles(): void {
   game.setSurfaceProvider(undefined);
+  groundBuilder = null;
   if (groundStreamer) {
     renderer.scene.remove(groundStreamer.group);
     groundStreamer.dispose();
@@ -617,6 +622,20 @@ function frame(now: number): void {
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
         applyColliders();
+        if (!groundBuilder) {
+          groundBuilder = tiles.createGroundBuilder();
+        }
+      }
+    }
+    // Step amortized ground refinement (bounded to 1.5ms per frame)
+    if (groundBuilder && tiles) {
+      const finished = groundBuilder.step(1.5);
+      if (finished && groundBuilder.result) {
+        game.terrainProvider.heightfield.copyFrom(
+          Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell)
+        );
+        terrainMesh.refresh(game.terrainProvider.heightfield);
+        groundBuilder = null;
       }
     }
     if (groundStreamer && player) {

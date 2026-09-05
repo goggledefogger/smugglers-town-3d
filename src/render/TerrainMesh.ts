@@ -55,7 +55,13 @@ export class TerrainMesh {
   private _photorealMat: MeshStandardMaterial | null = null;
   private _game3dMat: MeshStandardMaterial | null = null;
   private _mode: 'photoreal' | 'game3d' = 'photoreal';
-  private _lastNeutralizedCount = -1;
+  private _sourceCanvas: HTMLCanvasElement | null = null;
+  private _workingCanvas: HTMLCanvasElement | null = null;
+  private _lastNeutralizedGeneration = -1;
+  private _pendingGeneration = -1;
+  private _pendingColliders: readonly BuildingCollider[] | null = null;
+  private _pendingMapSize = 0;
+  private _pendingStreetColor: string | undefined = undefined;
 
   get mesh(): Mesh | null {
     return this._mesh;
@@ -76,6 +82,15 @@ export class TerrainMesh {
         ? this._game3dMat
         : (this._photorealMat ?? this._mesh.material);
     }
+    // If switching back to photoreal and we have pending un-neutralized colliders, paint now
+    if (mode === 'photoreal' && this._pendingColliders && this._pendingGeneration !== this._lastNeutralizedGeneration) {
+      this.neutralizeBuildingFootprints(
+        this._pendingColliders,
+        this._pendingMapSize,
+        this._pendingGeneration,
+        this._pendingStreetColor
+      );
+    }
   }
 
   markTextureNeedsUpdate(): void {
@@ -84,6 +99,11 @@ export class TerrainMesh {
 
   build(provider: TerrainProvider, anisotropy: number): Mesh {
     this.dispose();
+    this._lastNeutralizedGeneration = -1;
+    this._pendingGeneration = -1;
+    this._pendingColliders = null;
+    this._pendingMapSize = 0;
+
     const hf = provider.heightfield;
     const seg = hf.segs;
     const size = hf.size;
@@ -96,7 +116,31 @@ export class TerrainMesh {
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
       }
-      const tex = new CanvasTexture(provider.satelliteCanvas);
+      if (typeof document !== 'undefined') {
+        try {
+          const sw = provider.satelliteCanvas.width;
+          const sh = provider.satelliteCanvas.height;
+          const src = document.createElement('canvas');
+          src.width = sw;
+          src.height = sh;
+          src.getContext('2d')?.drawImage(provider.satelliteCanvas, 0, 0);
+          this._sourceCanvas = src;
+
+          const work = document.createElement('canvas');
+          work.width = sw;
+          work.height = sh;
+          work.getContext('2d')?.drawImage(src, 0, 0);
+          this._workingCanvas = work;
+        } catch {
+          this._sourceCanvas = null;
+          this._workingCanvas = provider.satelliteCanvas;
+        }
+      } else if (provider.satelliteCanvas) {
+        this._sourceCanvas = provider.satelliteCanvas;
+        this._workingCanvas = provider.satelliteCanvas;
+      }
+      const texCanvas = this._workingCanvas ?? provider.satelliteCanvas;
+      const tex = new CanvasTexture(texCanvas);
       tex.colorSpace = SRGBColorSpace;
       tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
       tex.minFilter = LinearMipmapLinearFilter;
@@ -189,146 +233,75 @@ export class TerrainMesh {
   /**
    * Neutralizes 2D aerial satellite building footprints/roofs under and around 3D buildings.
    *
-   * Aerial photography contains off-nadir parallax/relief displacement (building rooftops
-   * and facades in 2D imagery are shifted 5-18m away from building bases). When 3D buildings
-   * are placed or 3D tiles meet the terrain, these displaced 2D rooftops appear as duplicate
-   * "ghost" buildings printed on the ground.
-   *
-   * For each building collider, this samples the ambient street/ground color along its perimeter
-   * and paints the footprint with that neutral ground tone (with a soft blend margin),
-   * seamlessly replacing flat rooftop graphics with clean street pavement.
+   * Non-destructive: restores the pristine source imagery from _sourceCanvas before
+   * filling the current active building footprints with the ambient street tone.
+   * Gated on mode: skipped in Game 3D mode.
+   * Memoized on generation: skipped if this exact collider generation was already painted.
    */
   neutralizeBuildingFootprints(
     colliders: readonly BuildingCollider[],
-    mapSize: number
+    mapSize: number,
+    generation: number,
+    streetColor?: string
   ): void {
-    if (colliders.length === 0 || colliders.length === this._lastNeutralizedCount) return;
-    if (typeof HTMLCanvasElement === 'undefined') return;
-    const canvas = this._texture?.image;
-    if (!(canvas instanceof HTMLCanvasElement)) return;
+    this._pendingColliders = colliders;
+    this._pendingMapSize = mapSize;
+    this._pendingGeneration = generation;
+    this._pendingStreetColor = streetColor;
 
-    const ctx = canvas.getContext('2d');
+    // 1. Do not run paint pass in Game 3D mode where the texture is not visible
+    if (this._mode === 'game3d') return;
+    // 2. Skip if this exact collider generation has already been painted
+    if (generation === this._lastNeutralizedGeneration) return;
+    if (typeof HTMLCanvasElement === 'undefined') return;
+
+    const work = this._workingCanvas ?? (this._texture?.image as HTMLCanvasElement | null);
+    if (!(work instanceof HTMLCanvasElement)) return;
+    const ctx = work.getContext('2d');
     if (!ctx) return;
 
-    const cw = canvas.width;
-    const ch = canvas.height;
+    const cw = work.width;
+    const ch = work.height;
     if (cw <= 0 || ch <= 0) return;
 
-    let imgData: ImageData;
-    try {
-      imgData = ctx.getImageData(0, 0, cw, ch);
-    } catch {
-      return;
+    // 3. Non-destructively restore pristine source satellite imagery (GPU blit ~0.2ms)
+    if (this._sourceCanvas) {
+      ctx.drawImage(this._sourceCanvas, 0, 0);
     }
 
-    const data = imgData.data;
+    // 4. Fill active building footprints with verified street tone
+    ctx.fillStyle = streetColor ?? '#3e434a';
+
     const scaleX = cw / mapSize;
     const scaleY = ch / mapSize;
     const half = mapSize / 2;
 
-    let modified = false;
-
+    let painted = 0;
     for (const b of colliders) {
       if (b.kind === 'prop') continue;
       const w = b.max.x - b.min.x;
       const d = b.max.z - b.min.z;
       const h = b.max.y - b.min.y;
-      // Skip tiny props or boxes that are not buildings
       if (w < 4 || d < 4 || h < 3) continue;
 
-      // Project world bounds to canvas pixel coordinates
       const x0 = (b.min.x + half) * scaleX;
       const x1 = (b.max.x + half) * scaleX;
       const y0 = (b.min.z + half) * scaleY;
       const y1 = (b.max.z + half) * scaleY;
 
-      // Relief displacement padding: building roofs tilt away from nadir by up to h * 0.15
-      // Adding 2 to 6 pixels (~3 to 10 meters) covers the displaced roof and eaves
-      const pad = Math.max(2, Math.min(6, Math.round(h * 0.12 * scaleX)));
-      const bx0 = Math.max(0, Math.floor(Math.min(x0, x1) - pad));
-      const bx1 = Math.min(cw - 1, Math.ceil(Math.max(x0, x1) + pad));
-      const by0 = Math.max(0, Math.floor(Math.min(y0, y1) - pad));
-      const by1 = Math.min(ch - 1, Math.ceil(Math.max(y0, y1) + pad));
+      // At ~2.9m/px, 10m cell is ~3.4px. Pad 1-2 pixels (~3-6m) to cover roof eaves & off-nadir shift
+      const pad = Math.max(1, Math.min(2, Math.round(h * 0.04 * scaleX)));
+      const bx = Math.floor(Math.min(x0, x1) - pad);
+      const by = Math.floor(Math.min(y0, y1) - pad);
+      const bw = Math.ceil(Math.abs(x1 - x0) + 2 * pad);
+      const bh = Math.ceil(Math.abs(y1 - y0) + 2 * pad);
 
-      const bw = bx1 - bx0 + 1;
-      const bh = by1 - by0 + 1;
-      if (bw <= 0 || bh <= 0) continue;
-
-      // Sample ambient ground color around the perimeter (outer ring of border pixels)
-      let sumR = 0, sumG = 0, sumB = 0, sampleCount = 0;
-
-      const ring = 2; // 2 pixels outside footprint
-      const sx0 = Math.max(0, bx0 - ring);
-      const sx1 = Math.min(cw - 1, bx1 + ring);
-      const sy0 = Math.max(0, by0 - ring);
-      const sy1 = Math.min(ch - 1, by1 + ring);
-
-      const stepX = Math.max(1, Math.floor((sx1 - sx0) / 4));
-      const stepY = Math.max(1, Math.floor((sy1 - sy0) / 4));
-
-      for (let px = sx0; px <= sx1; px += stepX) {
-        // Top edge
-        const idxTop = (sy0 * cw + px) * 4;
-        sumR += data[idxTop]!;
-        sumG += data[idxTop + 1]!;
-        sumB += data[idxTop + 2]!;
-        // Bottom edge
-        const idxBot = (sy1 * cw + px) * 4;
-        sumR += data[idxBot]!;
-        sumG += data[idxBot + 1]!;
-        sumB += data[idxBot + 2]!;
-        sampleCount += 2;
-      }
-
-      for (let py = sy0 + stepY; py < sy1; py += stepY) {
-        // Left edge
-        const idxLeft = (py * cw + sx0) * 4;
-        sumR += data[idxLeft]!;
-        sumG += data[idxLeft + 1]!;
-        sumB += data[idxLeft + 2]!;
-        // Right edge
-        const idxRight = (py * cw + sx1) * 4;
-        sumR += data[idxRight]!;
-        sumG += data[idxRight + 1]!;
-        sumB += data[idxRight + 2]!;
-        sampleCount += 2;
-      }
-
-      if (sampleCount === 0) continue;
-
-      const avgR = Math.round(sumR / sampleCount);
-      const avgG = Math.round(sumG / sampleCount);
-      const avgB = Math.round(sumB / sampleCount);
-
-      // Fill footprint with ambient ground color, with a 1-pixel soft blend at the outer edge
-      for (let py = by0; py <= by1; py++) {
-        const rowOffset = py * cw;
-        const edgeDistY = Math.min(py - by0, by1 - py);
-
-        for (let px = bx0; px <= bx1; px++) {
-          const edgeDistX = Math.min(px - bx0, bx1 - px);
-          const edgeDist = Math.min(edgeDistX, edgeDistY);
-          const idx = (rowOffset + px) * 4;
-
-          if (edgeDist === 0) {
-            // 50% blend with original at border
-            data[idx] = (data[idx]! + avgR) >> 1;
-            data[idx + 1] = (data[idx + 1]! + avgG) >> 1;
-            data[idx + 2] = (data[idx + 2]! + avgB) >> 1;
-          } else {
-            // Full ambient ground fill
-            data[idx] = avgR;
-            data[idx + 1] = avgG;
-            data[idx + 2] = avgB;
-          }
-        }
-      }
-      modified = true;
+      ctx.fillRect(bx, by, bw, bh);
+      painted++;
     }
 
-    if (modified) {
-      ctx.putImageData(imgData, 0, 0);
-      this._lastNeutralizedCount = colliders.length;
+    this._lastNeutralizedGeneration = generation;
+    if (painted > 0 || this._sourceCanvas) {
       this.markTextureNeedsUpdate();
     }
   }
@@ -346,6 +319,11 @@ export class TerrainMesh {
     this._game3dMat = null;
     this._texture = null;
     this._gridTexture = null;
-    this._lastNeutralizedCount = -1;
+    this._sourceCanvas = null;
+    this._workingCanvas = null;
+    this._lastNeutralizedGeneration = -1;
+    this._pendingGeneration = -1;
+    this._pendingColliders = null;
+    this._pendingStreetColor = undefined;
   }
 }

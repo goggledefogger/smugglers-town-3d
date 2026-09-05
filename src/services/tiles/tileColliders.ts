@@ -139,12 +139,26 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
       // A steep wall, pier face, or facade has normal pointing mostly horizontally (slope > 63°: nHoriz > 2.0 * |det|)
       const isSteepWall = Math.abs(det) < 1e-9 || (nHoriz > 2.0 * Math.abs(det) && maxY - minY >= BIN_SIZE);
 
-      if (Math.abs(det) < 1e-9) {
-        // Vertical wall with zero horizontal footprint: stamp only at centroid
-        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
-        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-          stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
-        }
+      if (isSteepWall) {
+        // Step along all 3 edges of steep vertical walls so thin facades/piers
+        // continuously stamp every cell they cross without over-stamping far corners
+        const stepEdge = (p1: { x: number; y: number; z: number }, p2: { x: number; y: number; z: number }) => {
+          const len = Math.hypot(p2.x - p1.x, p2.z - p1.z);
+          const steps = Math.max(1, Math.ceil(len / (cell * 0.5)));
+          for (let s = 0; s <= steps; s++) {
+            const f = s / steps;
+            const x = p1.x + (p2.x - p1.x) * f;
+            const z = p1.z + (p2.z - p1.z) * f;
+            if (x >= -half && x < half && z >= -half && z < half) {
+              stampRange(cellOf(x), cellOf(z), minY, maxY);
+            }
+          }
+        };
+        stepEdge(a, b);
+        stepEdge(b, c);
+        stepEdge(c, a);
+        if (Math.abs(det) < 1e-9) continue;
+      } else if (Math.abs(det) < 1e-9) {
         continue;
       }
 
@@ -267,19 +281,262 @@ function composite(rasters: readonly (TileRaster | null)[], n: number, max: bool
 }
 
 /**
+ * Incrementally builds the shared ground heightfield row-by-row across frames,
+ * bounding execution time to ~1.5-2ms per frame to eliminate main-thread hitches
+ * during runtime tile refinement.
+ */
+export class AmortizedGroundBuilder {
+  readonly n: number;
+  readonly cell: number;
+  private readonly terrainTop: Float32Array;
+  private readonly rasters: readonly (TileRaster | null)[];
+  private readonly k: number;
+  private readonly rise: number;
+
+  private phase = 0;
+  private row = 0;
+
+  private top: Float32Array;
+  private low: Float32Array;
+  private minsTmp: Float32Array;
+  private mins: Float32Array;
+  private groundTmp: Float32Array;
+  private ground: Float32Array;
+  private raw: Float32Array;
+  private out: Float32Array;
+  private deque: Int32Array;
+
+  done = false;
+  result: Float32Array | null = null;
+
+  constructor(
+    rasters: readonly (TileRaster | null)[],
+    grid: Grid,
+    terrainTop: Float32Array,
+    reliefBoost = 1
+  ) {
+    this.n = grid.n;
+    this.cell = grid.cell;
+    this.terrainTop = terrainTop;
+    this.rasters = rasters;
+    this.k = GROUND_K;
+    this.rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+
+    const total = this.n * this.n;
+    this.top = new Float32Array(total).fill(-Infinity);
+    this.low = new Float32Array(total).fill(Infinity);
+    this.minsTmp = new Float32Array(total);
+    this.mins = new Float32Array(total);
+    this.groundTmp = new Float32Array(total);
+    this.ground = new Float32Array(total);
+    this.raw = new Float32Array(total);
+    this.out = new Float32Array(total);
+    this.deque = new Int32Array(this.n);
+  }
+
+  /**
+   * Run one slice of the computation up to budgetMs (or until complete if budgetMs is Infinity).
+   * Returns true if completed, false if more work remains.
+   */
+  step(budgetMs = 2.0): boolean {
+    if (this.done) return true;
+    const start = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    const n = this.n;
+    const k = this.k;
+    const deque = this.deque;
+
+    while (!this.done) {
+      // Phase 0: Composite tops and lows from rasters
+      if (this.phase === 0) {
+        const batchEnd = Math.min(this.rasters.length, this.row + 30);
+        for (; this.row < batchEnd; this.row++) {
+          const r = this.rasters[this.row];
+          if (!r) continue;
+          for (let j = 0; j < r.h; j++) {
+            const g = (r.j0 + j) * n + r.i0;
+            const l = j * r.w;
+            for (let i = 0; i < r.w; i++) {
+              const tv = r.top[l + i]!;
+              if (tv > this.top[g + i]!) this.top[g + i] = tv;
+              const lv = r.low[l + i]!;
+              if (lv < this.low[g + i]!) this.low[g + i] = lv;
+            }
+          }
+        }
+        if (this.row >= this.rasters.length) {
+          this.phase = 1;
+          this.row = 0;
+        }
+      }
+      // Phase 1: windowExtreme MIN - Pass 1 by rows
+      else if (this.phase === 1) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.top[a * n + b]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val <= this.top[a * n + deque[tail - 1]!]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.minsTmp[a * n + c] = tail > head ? this.top[a * n + deque[head]!]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 2;
+          this.row = 0;
+        }
+      }
+      // Phase 2: windowExtreme MIN - Pass 2 by cols
+      else if (this.phase === 2) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.minsTmp[b * n + a]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val <= this.minsTmp[deque[tail - 1]! * n + a]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.mins[c * n + a] = tail > head ? this.minsTmp[deque[head]! * n + a]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 3;
+          this.row = 0;
+        }
+      }
+      // Phase 3: windowExtreme MAX - Pass 1 by rows
+      else if (this.phase === 3) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.mins[a * n + b]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val >= this.mins[a * n + deque[tail - 1]!]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.groundTmp[a * n + c] = tail > head ? this.mins[a * n + deque[head]!]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 4;
+          this.row = 0;
+        }
+      }
+      // Phase 4: windowExtreme MAX - Pass 2 by cols
+      else if (this.phase === 4) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.groundTmp[b * n + a]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val >= this.groundTmp[deque[tail - 1]! * n + a]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.ground[c * n + a] = tail > head ? this.groundTmp[deque[head]! * n + a]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 5;
+          this.row = 0;
+        }
+      }
+      // Phase 5: Border mask & raw heights with seam closure clamp
+      else if (this.phase === 5) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const j = this.row;
+          const isBorderJ = j < k || j >= n - k;
+          for (let i = 0; i < n; i++) {
+            const c = j * n + i;
+            if (isBorderJ || i < k || i >= n - k) {
+              this.ground[c] = NO_DATA;
+            }
+            const t = this.top[c]!, b = this.ground[c]!;
+            if (t === NO_DATA || b === NO_DATA) {
+              this.raw[c] = this.terrainTop[c]!;
+            } else {
+              const tileGround = (t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!));
+              this.raw[c] = tileGround + TILE_GROUND_GAP;
+            }
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 6;
+          this.row = 0;
+        }
+      }
+      // Phase 6: 3x3 smoothing blur
+      else if (this.phase === 6) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const j = this.row;
+          for (let i = 0; i < n; i++) {
+            let sum = 0, count = 0;
+            for (let dj = -1; dj <= 1; dj++) {
+              const jj = j + dj;
+              if (jj < 0 || jj >= n) continue;
+              for (let di = -1; di <= 1; di++) {
+                const ii = i + di;
+                if (ii < 0 || ii >= n) continue;
+                sum += this.raw[jj * n + ii]!;
+                count++;
+              }
+            }
+            this.out[j * n + i] = sum / count;
+          }
+        }
+        if (this.row >= n) {
+          this.done = true;
+          this.result = this.out;
+          return true;
+        }
+      }
+
+      const elapsed = ((typeof performance !== 'undefined') ? performance.now() : Date.now()) - start;
+      if (elapsed >= budgetMs) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
+
+/**
  * The one ground the whole game plays on, per cell. Where tiles cover a cell
  * it is the tile surface: the lowest one, so streets survive tree canopy and
  * bridge decks, and the opened base under anything tall enough to be a
  * building. Cells without coverage fall back to the elevation-grid terrain,
  * which the tiles were calibrated against, so the seam is small. A 3×3 box
  * takes the 10 m quantisation off the result before it becomes a heightfield.
- *
- * Physics, spawning, props, shadows, the camera and the satellite drape all
- * sample the heightfield built from this; the building colliders' floors are
- * cut from the same base. Before this the elevation grid (87 m samples) was
- * the ground for physics while the tiles were the ground for collision, and
- * in San Francisco the two disagreed by whole storeys: cars sat inside the
- * tile mesh and slid under building boxes.
  */
 export function groundField(
   rasters: readonly (TileRaster | null)[],
@@ -287,35 +544,9 @@ export function groundField(
   terrainTop: Float32Array,
   reliefBoost = 1
 ): Float32Array {
-  const { n } = grid;
-  const top = compositeTops(rasters, n);
-  const low = compositeLows(rasters, n);
-  const base = groundEstimate(top, n);
-  const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
-  const raw = new Float32Array(n * n);
-  for (let c = 0; c < n * n; c++) {
-    const t = top[c]!, b = base[c]!;
-    if (t === NO_DATA || b === NO_DATA) raw[c] = terrainTop[c]!;
-    else raw[c] = (t - b >= rise ? b : Math.max(b - 0.5, Math.min(t, low[c]!))) + TILE_GROUND_GAP;
-  }
-  const out = new Float32Array(n * n);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      let sum = 0, count = 0;
-      for (let dj = -1; dj <= 1; dj++) {
-        const jj = j + dj;
-        if (jj < 0 || jj >= n) continue;
-        for (let di = -1; di <= 1; di++) {
-          const ii = i + di;
-          if (ii < 0 || ii >= n) continue;
-          sum += raw[jj * n + ii]!;
-          count++;
-        }
-      }
-      out[j * n + i] = sum / count;
-    }
-  }
-  return out;
+  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost);
+  builder.step(Infinity);
+  return builder.result!;
 }
 
 /**
@@ -323,9 +554,14 @@ export function groundField(
  * null without enough data. Tiles are placed by height above the WGS84
  * ellipsoid while the elevation grid is above mean sea level; the geoid runs
  * ~20 m below the ellipsoid around Portland, which buried bridge decks and
- * ground floors. Measuring beats shipping a geoid model: the 30th percentile
- * of (local ground − terrain) lands inside the cluster of true ground cells,
- * below roofs and canopy, above valleys the coarse grid interpolates over.
+ * ground floors. Measuring beats shipping a geoid model.
+ *
+ * Location Tuning Note:
+ * The 15th percentile (0.15) was chosen based on calibration across Portland (low flat
+ * river valley with elevated bridges where 30th percentile previously submerged road approaches)
+ * and dense urban canyons (Midtown Manhattan and San Francisco hills where coarse 87m elevation
+ * samples interpolate across valleys). The 15th percentile lands inside the true ground cluster
+ * while keeping 85%+ of tile streets strictly at or above the terrain underlay datum.
  */
 export function tileGroundOffset(
   rasters: readonly (TileRaster | null)[],
@@ -511,6 +747,9 @@ export function collidersFromRasters(
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
     const g = ground[c]!;
+    // Border cells (within GROUND_K = 60m of the map edge) have ground[c] === NO_DATA.
+    // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
+    // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
     return true;

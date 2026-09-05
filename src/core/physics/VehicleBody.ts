@@ -452,7 +452,7 @@ export class VehicleBody {
       this.pos.y = MathUtils.clamp(this.pos.y, target - 0.25, target + RIDE_TRAVEL);
       // the car's vertical speed follows the climb rate of the slope
       this.vel.y = this.climbRate;
-    } else if (this.pos.y <= target) {
+    } else if (this.pos.y <= target && (this.vel.y <= 0.5 || this.onGround)) {
       // Soft touchdown for airborne vehicles: touch down on surface without sinking underground
       this.pos.y = target;
       this.vel.y = Math.max(this.vel.y, this.climbRate);

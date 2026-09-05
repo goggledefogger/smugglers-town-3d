@@ -32,7 +32,8 @@ import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
 import {
-  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP, NO_DATA,
+  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
+  AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
   type Grid, type TileRaster
 } from './tileColliders.ts';
 
@@ -341,7 +342,7 @@ const _ecef = new Vector3();
 export class TileStreamer {
   readonly group = new Group();
   private readonly tiles: LoadedTile[] = [];
-  private readonly grid: Grid;
+  readonly grid: Grid;
   private readonly terrainTop: Float32Array;
   private readonly reliefBoost: number;
   private readonly placement: Matrix4;
@@ -460,7 +461,9 @@ export class TileStreamer {
       const h = this.deckGrid[j * n + i]!;
       if (h === NO_DATA) return null;
       const deckH = h + TILE_GROUND_GAP;
-      if (Math.abs(currentY - deckH) > maxDrop) return null;
+      // Car can only land on or ride a deck from above, never snap up onto it from underneath
+      if (deckH > currentY + 0.5) return null;
+      if (currentY - deckH > maxDrop) return null;
       if (deckH < groundY - 0.5) return null;
       return Math.max(deckH, groundY);
     }
@@ -499,7 +502,9 @@ export class TileStreamer {
       deckH = (sum / weight) + TILE_GROUND_GAP;
     }
 
-    if (Math.abs(currentY - deckH) > maxDrop) return null;
+    // Car can only land on or ride a deck from above, never snap up onto it from underneath
+    if (deckH > currentY + 0.5) return null;
+    if (currentY - deckH > maxDrop) return null;
     if (deckH < groundY - 0.5) return null;
     return Math.max(deckH, groundY);
   }
@@ -534,6 +539,19 @@ export class TileStreamer {
   groundHeightfield(): Heightfield {
     const cells = groundField(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
     return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
+  }
+
+  /**
+   * Create an amortized ground builder that computes refined ground heights
+   * incrementally over multiple animation frames without freezing the main thread.
+   */
+  createGroundBuilder(): AmortizedGroundBuilder {
+    return new AmortizedGroundBuilder(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost
+    );
   }
 
   /** Shift every tile so the tile ground sits cleanly flush or above the terrain underlay (see tileGroundOffset). */
