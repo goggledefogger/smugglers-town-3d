@@ -5,7 +5,7 @@ import {
 } from '../src/services/tiles/Tileset.ts';
 import {
   buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP,
-  collidersFromRasters, NO_DATA
+  collidersFromRasters, NO_DATA, gridFor, sampleTerrain, AmortizedGroundBuilder
 } from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
@@ -332,6 +332,92 @@ describe('buildingCollidersFrom', () => {
     // Underpass roadway has zero building colliders blocking it
     const boxes = buildingCollidersFrom(g, flat);
     expect(boxes).toHaveLength(0);
+  });
+
+  it('detects low-rise 1-story buildings (height 4.5m) as solid colliders', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // ground roadway at Y = 0
+    // A 4.5m building with vertical walls and flat roof
+    g.add(pillar(-6, -6, 6, 6, 0, 4.5));
+    g.add(roof(-6, -6, 6, 6, 4.5));
+
+    const boxes = buildingCollidersFrom(g, flat);
+    expect(boxes.length).toBeGreaterThan(0);
+    const topY = Math.max(...boxes.map(b => b.max.y));
+    expect(topY).toBeCloseTo(4.5, 1);
+  });
+
+  it('does not flag a gradual driveable hill or embankment narrower than opening window as a building', () => {
+    const g = new Group();
+    const h = SIZE / 2;
+    const geo = new BufferGeometry();
+    const pos: number[] = [
+      // West outer flat: [-h, -25]
+      -h, 0, -h,  -25, 0, -h,  -h, 0, h,
+      -25, 0, -h,  -25, 0, h,  -h, 0, h,
+      // West slope: [-25, 0], y goes 0 -> 5 (slope = 5/25 = 20%)
+      -25, 0, -h,  0, 5, -h,  -25, 0, h,
+      0, 5, -h,  0, 5, h,  -25, 0, h,
+      // East slope: [0, 25], y goes 5 -> 0 (slope = 20%)
+      0, 5, -h,  25, 0, -h,  0, 5, h,
+      25, 0, -h,  25, 0, h,  0, 5, h,
+      // East outer flat: [25, h]
+      25, 0, -h,  h, 0, -h,  25, 0, h,
+      h, 0, -h,  h, 0, h,  25, 0, h,
+    ];
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3));
+    g.add(new Mesh(geo));
+
+    const boxes = buildingCollidersFrom(g, flat);
+    // Gradual 20% slope is driveable and connected to ground; must NOT produce building colliders
+    expect(boxes).toHaveLength(0);
+  });
+
+  it('traces descending approach ramps all the way down to ground without building boxes', () => {
+    const g = new Group();
+    g.add(slab(0, 0)); // ground at Y = 0
+    // Elevated deck at Y = 15m, spanning x in [-30, 0], z in [-6, 6] (width 12m)
+    g.add(roof(-30, -6, 0, 6, 15));
+    // Approach ramp from x = 0 (y = 15) to x = 60 (y = 0), z in [-6, 6] (slope = 15/60 = 25%)
+    const rampGeo = new BufferGeometry();
+    const rampPos = [
+      0, 15, -6,  60, 0, -6,  0, 15, 6,
+      60, 0, -6,  60, 0, 6,  0, 15, 6,
+    ];
+    rampGeo.setAttribute('position', new BufferAttribute(new Float32Array(rampPos), 3));
+    g.add(new Mesh(rampGeo));
+
+    const boxes = buildingCollidersFrom(g, flat);
+    expect(boxes).toHaveLength(0);
+  });
+
+  it('AmortizedGroundBuilder preserves gradual terrain slope in physics ground', () => {
+    const g = new Group();
+    const h = SIZE / 2;
+    const geo = new BufferGeometry();
+    const pos = [
+      -h, 0, -h,  -25, 0, -h,  -h, 0, h,
+      -25, 0, -h,  -25, 0, h,  -h, 0, h,
+      -25, 0, -h,  0, 5, -h,  -25, 0, h,
+      0, 5, -h,  0, 5, h,  -25, 0, h,
+      0, 5, -h,  25, 0, -h,  0, 5, h,
+      25, 0, -h,  25, 0, h,  0, 5, h,
+      25, 0, -h,  h, 0, -h,  25, 0, h,
+      h, 0, -h,  h, 0, h,  25, 0, h,
+    ];
+    geo.setAttribute('position', new BufferAttribute(new Float32Array(pos), 3));
+    g.add(new Mesh(geo));
+
+    const grid = gridFor(flat);
+    const rasters = [rasterizeTile(g, grid)];
+    const terrainTop = sampleTerrain(grid, flat);
+    const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop);
+    while (!builder.step(Infinity)) {}
+
+    const result = builder.result!;
+    // At center of knoll (x ≈ 0, z ≈ 0), ground must be close to 5m (+ TILE_GROUND_GAP), NOT collapsed to 0
+    const centerIdx = Math.floor(grid.n / 2) * grid.n + Math.floor(grid.n / 2);
+    expect(result[centerIdx]).toBeGreaterThan(3.0);
   });
 });
 
