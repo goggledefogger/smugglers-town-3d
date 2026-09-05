@@ -15,6 +15,7 @@ import { type GameEventMap, EventBus } from './app/events.ts';
 import { createStore, type HudSnapshot } from './app/store.ts';
 import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
+import { BuildingMeshView } from './render/BuildingMeshView.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
@@ -33,6 +34,7 @@ import { logger } from './app/log.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
+import { AmortizedGroundBuilder } from './services/tiles/tileColliders.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
 import { worldToLl } from './core/geo/projection.ts';
@@ -57,7 +59,12 @@ const app = document.getElementById('app')!;
 app.innerHTML = `
   <canvas id="c"></canvas>
   <div id="hud">
-    <div class="hud-corner hud-tl"><sr-health></sr-health></div>
+    <div class="hud-corner hud-tl">
+      <sr-health></sr-health>
+      <button id="view-mode-btn" class="hud-btn" type="button" title="Toggle 3D Visual Mode (Hotkey: V or G)">
+        <span>🎮</span> <span id="view-mode-text">VIEW: REAL 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
+      </button>
+    </div>
     <div class="hud-corner hud-tr"><sr-score></sr-score></div>
     <div class="hud-corner hud-bl"><sr-objective></sr-objective></div>
     <div class="hud-corner hud-br"><sr-speed></sr-speed><sr-minimap></sr-minimap></div>
@@ -81,6 +88,8 @@ const settingsEl = document.querySelector('sr-settings') as SettingsScreen;
 const bannerEl = document.querySelector('sr-banner') as Banner;
 const relocateBarEl = document.querySelector('sr-relocate') as RelocateBar;
 const dirArrowEl = document.querySelector('sr-dirarrow') as DirArrow;
+const viewModeBtn = document.getElementById('view-mode-btn') as HTMLButtonElement | null;
+const viewModeText = document.getElementById('view-mode-text') as HTMLSpanElement | null;
 
 // ---- stores, events, game ----
 const events = new EventBus<GameEventMap>();
@@ -124,12 +133,53 @@ const vehicleViews: VehicleView[] = [];
 let tiles: TileStreamer | null = null;
 let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
-let groundRefreshAt = 0;
-let groundDirty = false;
+let colliderGeneration = 0;
+let groundBuilder: AmortizedGroundBuilder | null = null;
+const buildingMeshView = new BuildingMeshView();
+renderer.scene.add(buildingMeshView.group);
+let viewMode: 'photoreal' | 'game3d' = 'photoreal';
+
+function updateViewModeUi(): void {
+  if (!viewModeBtn || !viewModeText) return;
+  if (viewMode === 'game3d') {
+    viewModeBtn.classList.add('active');
+    viewModeText.textContent = 'VIEW: GAME 3D (1:1)';
+  } else {
+    viewModeBtn.classList.remove('active');
+    viewModeText.textContent = 'VIEW: REAL 3D';
+  }
+}
+
+function setViewMode(mode: 'photoreal' | 'game3d'): void {
+  viewMode = mode;
+  const isGame3d = mode === 'game3d';
+  if (tiles) tiles.group.visible = !isGame3d;
+  if (groundStreamer) groundStreamer.group.visible = !isGame3d;
+  terrainMesh.setMode(mode);
+  buildingMeshView.visible = isGame3d;
+  updateViewModeUi();
+}
+
+function toggleViewMode(): void {
+  setViewMode(viewMode === 'photoreal' ? 'game3d' : 'photoreal');
+}
+
+viewModeBtn?.addEventListener('click', () => {
+  toggleViewMode();
+});
 
 /** Buildings from the streamed tiles plus the scattered props. */
 function applyColliders(): void {
-  game.setBuildingColliders([...(tiles?.colliders() ?? []), ...propScatter.colliders]);
+  colliderGeneration++;
+  const colliders = [...(tiles?.colliders() ?? []), ...propScatter.colliders];
+  game.setBuildingColliders(colliders);
+  buildingMeshView.update(
+    colliders,
+    tiles?.activeDeckGrid,
+    tiles?.activeGrid,
+    (x, z) => world.terrainProvider.heightfield.sample(x, z)
+  );
+  terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2, colliderGeneration);
 }
 
 function rebuildViews(): void {
@@ -153,6 +203,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 
 function clearTiles(): void {
   game.setSurfaceProvider(undefined);
+  groundBuilder = null;
   if (groundStreamer) {
     renderer.scene.remove(groundStreamer.group);
     groundStreamer.dispose();
@@ -163,12 +214,14 @@ function clearTiles(): void {
     tiles.dispose();
     tiles = null;
   }
+  buildingMeshView.clear();
 }
 
 function swapTerrainMesh(terrain: TerrainProvider): void {
   const old = terrainMesh.mesh;
   if (old) renderer.scene.remove(old);
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
+  terrainMesh.setMode(viewMode);
   renderer.scene.add(mesh);
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }
@@ -323,8 +376,14 @@ async function openOnline(type: number): Promise<void> {
           clearTiles();
           tiles = newTiles;
           groundStreamer = newGround ?? null;
-          if (groundStreamer) renderer.scene.add(groundStreamer.group);
-          if (tiles) renderer.scene.add(tiles.group);
+          if (groundStreamer) {
+            groundStreamer.group.visible = viewMode !== 'game3d';
+            renderer.scene.add(groundStreamer.group);
+          }
+          if (tiles) {
+            tiles.group.visible = viewMode !== 'game3d';
+            renderer.scene.add(tiles.group);
+          }
           // one ground for everything, cut from the tiles — same as single player
           return tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
         } finally {
@@ -402,8 +461,14 @@ relocateBarEl.onSearch = async (q, key) => {
     clearTiles();
     tiles = newTiles;
     groundStreamer = newGround ?? null;
-    if (groundStreamer) renderer.scene.add(groundStreamer.group);
-    if (tiles) renderer.scene.add(tiles.group);
+    if (groundStreamer) {
+      groundStreamer.group.visible = viewMode !== 'game3d';
+      renderer.scene.add(groundStreamer.group);
+    }
+    if (tiles) {
+      tiles.group.visible = viewMode !== 'game3d';
+      renderer.scene.add(tiles.group);
+    }
     swapTerrainMesh(terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
@@ -540,6 +605,7 @@ function frame(now: number): void {
   for (const hot of input.drainHotkeys()) {
     if (hot === 'camera') cameraRig.cycleMode();
     if (hot === 'reset') resetPlayer();
+    if (hot === 'viewMode') toggleViewMode();
   }
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
@@ -556,16 +622,20 @@ function frame(now: number): void {
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
         applyColliders();
-        groundDirty = true;
+        if (!groundBuilder) {
+          groundBuilder = tiles.createGroundBuilder();
+        }
       }
-      // ...and sharpen the shared ground, less often: this one costs ~50 ms
-      if (groundDirty && now - groundRefreshAt > 6000) {
-        groundRefreshAt = now;
-        groundDirty = false;
-        game.terrainProvider.heightfield.copyFrom(tiles.groundHeightfield());
+    }
+    // Step amortized ground refinement (bounded to 1.5ms per frame)
+    if (groundBuilder && tiles) {
+      const finished = groundBuilder.step(1.5);
+      if (finished && groundBuilder.result) {
+        game.terrainProvider.heightfield.copyFrom(
+          Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell)
+        );
         terrainMesh.refresh(game.terrainProvider.heightfield);
-        groundStreamer?.refresh();
-        minimapEl.setTerrain(game.terrainProvider.heightfield, config.world.mapHalf);
+        groundBuilder = null;
       }
     }
     if (groundStreamer && player) {

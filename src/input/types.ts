@@ -28,7 +28,7 @@ export type UiAction =
   | 'confirm' | 'back' | 'tab' | 'pause';
 
 /** A gameplay hotkey, edge-triggered like a UI action but routed to the sim. */
-export type Hotkey = 'camera' | 'reset';
+export type Hotkey = 'camera' | 'reset' | 'viewMode';
 
 /**
  * A logical action is the name a physical control is bound to. Driving
@@ -40,13 +40,13 @@ export type LogicalAction =
   | 'steerLeft' | 'steerRight'
   | 'jump' | 'handbrake'
   | 'pitchUp' | 'pitchDown'
-  | 'camera' | 'reset'
+  | 'camera' | 'reset' | 'viewMode'
   | 'uiUp' | 'uiDown' | 'uiLeft' | 'uiRight'
   | 'uiConfirm' | 'uiBack' | 'uiTab' | 'uiPause';
 
 /** Which actions produce continuous (held) values vs. one-shot edges. */
 export const EDGE_ACTIONS: ReadonlySet<LogicalAction> = new Set([
-  'camera', 'reset',
+  'camera', 'reset', 'viewMode',
   'uiUp', 'uiDown', 'uiLeft', 'uiRight',
   'uiConfirm', 'uiBack', 'uiTab', 'uiPause'
 ]);

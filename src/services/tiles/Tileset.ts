@@ -20,7 +20,7 @@
  *   ~5k triangles, 100–450 KB.
  */
 import {
-  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter, Raycaster,
+  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -32,7 +32,8 @@ import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
 import {
-  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField, TILE_GROUND_GAP,
+  gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
+  AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
   type Grid, type TileRaster
 } from './tileColliders.ts';
 
@@ -79,17 +80,13 @@ const MAX_TILES = 350;
 const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 350;
+const CORE_RADIUS_M = 500;
 /** ...in rounds of this many refinements. */
-const CORE_REFINE_BATCH = 4;
+const CORE_REFINE_BATCH = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
 const gltfLoader = new GLTFLoader();
 // glTF is Y-up, 3D Tiles content is Z-up ECEF: rotate +90° about X (y→z, z→−y)
 const GLTF_TO_ECEF = new Matrix4().makeRotationX(Math.PI / 2);
-const _rayOrigin = new Vector3();
-const _rayDir = new Vector3(0, -1, 0);
-const _raycaster = new Raycaster();
-const _faceNormal = new Vector3();
 
 function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 8000): Promise<Response> {
   const controller = new AbortController();
@@ -345,7 +342,7 @@ const _ecef = new Vector3();
 export class TileStreamer {
   readonly group = new Group();
   private readonly tiles: LoadedTile[] = [];
-  private readonly grid: Grid;
+  readonly grid: Grid;
   private readonly terrainTop: Float32Array;
   private readonly reliefBoost: number;
   private readonly placement: Matrix4;
@@ -367,6 +364,7 @@ export class TileStreamer {
     this.reliefBoost = terrain.reliefBoost;
     this.placement = glbPlacement(origin, ecef0, terrain.reliefBoost);
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
+    this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
   }
 
   get tileCount(): number {
@@ -428,45 +426,87 @@ export class TileStreamer {
     return false;
   }
 
+  private deckGrid: Float32Array;
+
+  get activeDeckGrid(): Float32Array {
+    return this.deckGrid;
+  }
+
+  get activeGrid(): Grid {
+    return this.grid;
+  }
+
   /**
-   * Downward raycast against loaded 3D tile meshes to find elevated drivable surfaces
-   * (e.g. bridge decks, overpasses) above the base heightfield.
+   * O(1) mathematical lookup of elevated drivable surfaces (e.g. bridge decks, overpasses, ramps)
+   * sampled bilinearly from the classified deck grid. Zero raycasts, zero allocations.
    */
   surfaceElevation(x: number, z: number, currentY: number, groundY: number, maxDrop = 4.0): number | null {
+    if (!this.deckGrid) return null;
     const half = this.grid.half;
     const cell = this.grid.cell;
-    const i = Math.floor((x + half) / cell);
-    const j = Math.floor((z + half) / cell);
-    if (i < 0 || i >= this.grid.n || j < 0 || j >= this.grid.n) return null;
+    const n = this.grid.n;
 
-    _rayOrigin.set(x, currentY + 1.5, z);
-    _raycaster.set(_rayOrigin, _rayDir);
-    _raycaster.near = 0.05;
-    _raycaster.far = maxDrop + 1.5;
+    // Fractional coordinates relative to cell centers
+    const u = (x + half) / cell - 0.5;
+    const v = (z + half) / cell - 0.5;
+    const i0 = Math.floor(u);
+    const j0 = Math.floor(v);
+    const i1 = i0 + 1;
+    const j1 = j0 + 1;
 
-    let bestY: number | null = null;
-    let closestDist = Infinity;
-
-    for (const t of this.tiles) {
-      const r = t.raster;
-      if (!r) continue;
-      if (i < r.i0 || i > r.i0 + r.w || j < r.j0 || j > r.j0 + r.h) continue;
-
-      const hits = _raycaster.intersectObjects(t.group.children, true);
-      for (const h of hits) {
-        if (h.face && h.face.normal) {
-          _faceNormal.copy(h.face.normal).transformDirection(h.object.matrixWorld);
-          if (_faceNormal.y < 0.35) continue;
-        }
-        if (h.point.y <= groundY + 1.5) continue;
-
-        if (h.distance < closestDist) {
-          closestDist = h.distance;
-          bestY = h.point.y + TILE_GROUND_GAP;
-        }
-      }
+    if (i0 < 0 || i1 >= n || j0 < 0 || j1 >= n) {
+      const i = Math.floor((x + half) / cell);
+      const j = Math.floor((z + half) / cell);
+      if (i < 0 || i >= n || j < 0 || j >= n) return null;
+      const h = this.deckGrid[j * n + i]!;
+      if (h === NO_DATA) return null;
+      const deckH = h + TILE_GROUND_GAP;
+      // Car can only land on or ride a deck from above, never snap up onto it from underneath
+      if (deckH > currentY + 0.5) return null;
+      if (currentY - deckH > maxDrop) return null;
+      if (deckH < groundY - 0.5) return null;
+      return Math.max(deckH, groundY);
     }
-    return bestY;
+
+    const c00 = j0 * n + i0;
+    const c10 = j0 * n + i1;
+    const c01 = j1 * n + i0;
+    const c11 = j1 * n + i1;
+
+    const h00 = this.deckGrid[c00]!;
+    const h10 = this.deckGrid[c10]!;
+    const h01 = this.deckGrid[c01]!;
+    const h11 = this.deckGrid[c11]!;
+
+    // If none of the 4 corners have deck data, this is not a deck or ramp
+    if (h00 === NO_DATA && h10 === NO_DATA && h01 === NO_DATA && h11 === NO_DATA) {
+      return null;
+    }
+
+    const tx = u - i0;
+    const tz = v - j0;
+
+    let deckH: number;
+    if (h00 !== NO_DATA && h10 !== NO_DATA && h01 !== NO_DATA && h11 !== NO_DATA) {
+      const a = h00 + (h10 - h00) * tx;
+      const b = h01 + (h11 - h01) * tx;
+      deckH = (a + (b - a) * tz) + TILE_GROUND_GAP;
+    } else {
+      // Edge of deck/ramp: average available valid samples weighted by distance
+      let sum = 0, weight = 0;
+      if (h00 !== NO_DATA) { const w = (1 - tx) * (1 - tz); sum += h00 * w; weight += w; }
+      if (h10 !== NO_DATA) { const w = tx * (1 - tz); sum += h10 * w; weight += w; }
+      if (h01 !== NO_DATA) { const w = (1 - tx) * tz; sum += h01 * w; weight += w; }
+      if (h11 !== NO_DATA) { const w = tx * tz; sum += h11 * w; weight += w; }
+      if (weight < 1e-4) return null;
+      deckH = (sum / weight) + TILE_GROUND_GAP;
+    }
+
+    // Car can only land on or ride a deck from above, never snap up onto it from underneath
+    if (deckH > currentY + 0.5) return null;
+    if (currentY - deckH > maxDrop) return null;
+    if (deckH < groundY - 0.5) return null;
+    return Math.max(deckH, groundY);
   }
 
   /**
@@ -476,8 +516,8 @@ export class TileStreamer {
    * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
-    const CORE_TARGET_ERROR_M = 10;
-    for (let round = 0; round < 2 && this.tiles.length < MAX_TILES; round++) {
+    const CORE_TARGET_ERROR_M = this.lod.minErrorM;
+    for (let round = 0; round < 6 && this.tiles.length < MAX_TILES; round++) {
       const coarse = this.tiles
         .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
           && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
@@ -501,16 +541,29 @@ export class TileStreamer {
     return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
   }
 
-  /** Shift every tile so the tile ground sits just under the satellite drape (see tileGroundOffset). */
+  /**
+   * Create an amortized ground builder that computes refined ground heights
+   * incrementally over multiple animation frames without freezing the main thread.
+   */
+  createGroundBuilder(): AmortizedGroundBuilder {
+    return new AmortizedGroundBuilder(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost
+    );
+  }
+
+  /** Shift every tile so the tile ground sits cleanly flush or above the terrain underlay (see tileGroundOffset). */
   private calibrateGround(): void {
     const offset = tileGroundOffset(this.tiles.map(t => t.raster), this.grid, this.terrainTop);
     if (offset === null) return;
-    this.group.position.y -= offset + TILE_GROUND_GAP;
+    this.group.position.y -= (offset - TILE_GROUND_GAP);
     this.group.updateMatrixWorld(true);
     for (const t of this.tiles) t.raster = rasterizeTile(t.group, this.grid);
     this.dirty = true;
     log.info('ground datum shifted', {
-      metres: Number((-(offset + TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
+      metres: Number((-(offset - TILE_GROUND_GAP) / WORLD_M_PER_M / this.reliefBoost).toFixed(1))
     });
   }
 
@@ -567,7 +620,16 @@ export class TileStreamer {
   /** Rebuild building colliders from the current tiles (~15 ms for a city). */
   colliders(): BuildingCollider[] {
     this.dirty = false;
-    return collidersFromRasters(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+    if (!this.deckGrid || this.deckGrid.length !== this.grid.n * this.grid.n) {
+      this.deckGrid = new Float32Array(this.grid.n * this.grid.n);
+    }
+    return collidersFromRasters(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost,
+      this.deckGrid
+    );
   }
 
   dispose(): void {
@@ -576,7 +638,7 @@ export class TileStreamer {
     this.group.clear();
   }
 
-  private async add(tile: CollectedTile): Promise<LoadedTile | null> {
+  private async loadChild(tile: CollectedTile): Promise<LoadedTile | null> {
     let g: Group | null = null;
     try {
       g = await loadTileGlb(tile, this.placement, this.apiKey, this.anisotropy);
@@ -584,8 +646,13 @@ export class TileStreamer {
       noteFailure('parse failed', e);
     }
     if (!g) return null;
-    this.group.add(g);
-    const loaded: LoadedTile = { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+    return { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+  }
+
+  private async add(tile: CollectedTile): Promise<LoadedTile | null> {
+    const loaded = await this.loadChild(tile);
+    if (!loaded) return null;
+    this.group.add(loaded.group);
     this.tiles.push(loaded);
     this.dirty = true;
     return loaded;
@@ -604,12 +671,23 @@ export class TileStreamer {
     tile.done = true;
     const kids = await nextLevel(tile.node, tile.session, this.apiKey);
     if (kids.length === 0) return;
-    const loaded = await Promise.all(kids.map(k => this.add(k)));
+    const loaded = await Promise.all(kids.map(k => this.loadChild(k)));
     if (loaded.some(l => l === null)) {
-      for (const l of loaded) if (l) this.remove(l);
+      for (const l of loaded) {
+        if (l) disposeTiles(l.group);
+      }
       return;
     }
-    this.remove(tile);
+    // Atomic swap: remove parent and add children in the exact same frame
+    // so parent and child meshes never co-exist in the scene fighting/flickering
+    this.group.remove(tile.group);
+    disposeTiles(tile.group);
+    const i = this.tiles.indexOf(tile);
+    if (i >= 0) this.tiles.splice(i, 1, ...(loaded as LoadedTile[]));
+    for (const l of loaded as LoadedTile[]) {
+      this.group.add(l.group);
+    }
+    this.dirty = true;
   }
 }
 

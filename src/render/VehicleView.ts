@@ -117,10 +117,16 @@ export class VehicleView {
     const { x, z } = this.group.position;
     const f = this._fwd.set(0, 0, -1).applyQuaternion(quat);
     const r = this._right.set(1, 0, 0).applyQuaternion(quat);
-    const hF = hf.sample(x + f.x * WHEELBASE / 2, z + f.z * WHEELBASE / 2);
-    const hB = hf.sample(x - f.x * WHEELBASE / 2, z - f.z * WHEELBASE / 2);
-    const hR = hf.sample(x + r.x * TRACK / 2, z + r.z * TRACK / 2);
-    const hL = hf.sample(x - r.x * TRACK / 2, z - r.z * TRACK / 2);
+    const xF = x + f.x * WHEELBASE / 2, zF = z + f.z * WHEELBASE / 2;
+    const xB = x - f.x * WHEELBASE / 2, zB = z - f.z * WHEELBASE / 2;
+    const xR = x + r.x * TRACK / 2, zR = z + r.z * TRACK / 2;
+    const xL = x - r.x * TRACK / 2, zL = z - r.z * TRACK / 2;
+
+    const hF = hf.sample(xF, zF);
+    const hB = hf.sample(xB, zB);
+    const hR = hf.sample(xR, zR);
+    const hL = hf.sample(xL, zL);
+
     const grounded = MathUtils.clamp(1 - height / 2, 0, 1);
     const k = 1 - Math.exp(-dt * 10);
     this.pitch += (MathUtils.clamp(Math.atan2(hF - hB, WHEELBASE), -MAX_TILT, MAX_TILT) * grounded - this.pitch) * k;

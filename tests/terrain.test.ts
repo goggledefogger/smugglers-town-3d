@@ -69,3 +69,119 @@ describe('PropScatter', () => {
     expect(ps.colliders.length).toBe(0);
   });
 });
+
+describe('neutralizeBuildingFootprints', () => {
+  it('safely handles empty colliders or node environment without canvas', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const tm = new TerrainMesh();
+    // Empty colliders
+    expect(() => tm.neutralizeBuildingFootprints([], 5600, 1)).not.toThrow();
+    tm.dispose();
+  });
+
+  it('neutralizes building footprints, restores source copy, and respects generation and mode', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const { Vector3 } = await import('three');
+
+    const tm = new TerrainMesh();
+    const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
+
+    const width = 100, height = 100;
+    let fillRectCalled = false;
+    let drawImageCalled = false;
+    const mockCtx = {
+      drawImage: () => { drawImageCalled = true; },
+      fillRect: () => { fillRectCalled = true; }
+    };
+
+    class MockHTMLCanvasElement {
+      width = width;
+      height = height;
+      getContext() { return mockCtx; }
+    }
+
+    const origCanvas = (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement;
+    (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement = MockHTMLCanvasElement;
+
+    try {
+      const mockCanvas = new MockHTMLCanvasElement() as unknown as HTMLCanvasElement;
+      const terrain = {
+        label: 'test',
+        isReal: true,
+        heightfield: hf,
+        satelliteCanvas: mockCanvas,
+        reliefBoost: 1,
+        datumAltM: 0
+      };
+
+      tm.build(terrain, 1);
+      expect(tm.texture).toBeDefined();
+
+      const mockColliders = [
+        {
+          min: new Vector3(-10, 0, -10),
+          max: new Vector3(10, 20, 10)
+        }
+      ];
+
+      // Gated on mode: in game3d mode, paint pass is skipped
+      tm.setMode('game3d');
+      tm.neutralizeBuildingFootprints(mockColliders, 100, 1);
+      expect(fillRectCalled).toBe(false);
+
+      // In photoreal mode: paints footprints
+      tm.setMode('photoreal');
+      expect(fillRectCalled).toBe(true);
+      expect(drawImageCalled).toBe(true);
+
+      // Re-calling with identical generation skips redundant processing
+      fillRectCalled = false;
+      drawImageCalled = false;
+      tm.neutralizeBuildingFootprints(mockColliders, 100, 1);
+      expect(fillRectCalled).toBe(false);
+
+      // Calling with new generation repaints cleanly
+      tm.neutralizeBuildingFootprints(mockColliders, 100, 2);
+      expect(fillRectCalled).toBe(true);
+      expect(drawImageCalled).toBe(true);
+    } finally {
+      (globalThis as unknown as { HTMLCanvasElement?: unknown }).HTMLCanvasElement = origCanvas;
+      tm.dispose();
+    }
+  });
+});
+
+describe('AmortizedGroundBuilder', () => {
+  it('produces identical output to groundField when stepped incrementally or synchronously', async () => {
+    const { groundField, AmortizedGroundBuilder } = await import('../src/services/tiles/tileColliders.ts');
+    const N = 40;
+    const grid = { cell: 10, half: (N * 10) / 2, n: N };
+    const terrainTop = new Float32Array(N * N).fill(5);
+
+    const w = 20, h = 20;
+    const top = new Float32Array(w * h).fill(12);
+    const low = new Float32Array(w * h).fill(5);
+    const rasters = [{ i0: 10, j0: 10, w, h, top, low }];
+
+    // 1. Synchronous groundField
+    const expected = groundField(rasters, grid, terrainTop, 1);
+
+    // 2. Incremental AmortizedGroundBuilder (stepped with small 0.5ms budget)
+    const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, 1);
+    let steps = 0;
+    while (!builder.step(0.5)) {
+      steps++;
+    }
+    expect(steps).toBeGreaterThan(0);
+    expect(builder.done).toBe(true);
+    expect(builder.result).toBeDefined();
+
+    // Verify cell-by-cell identity
+    for (let i = 0; i < N * N; i++) {
+      expect(builder.result![i]).toBeCloseTo(expected[i]!, 5);
+    }
+  });
+});
+
+

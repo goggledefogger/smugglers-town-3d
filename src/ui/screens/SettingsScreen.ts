@@ -24,6 +24,7 @@ const ACTION_LABEL: Record<LogicalAction, string> = {
   pitchDown: 'Pitch down (air)',
   camera: 'Camera',
   reset: 'Reset car',
+  viewMode: 'Toggle 3D visual mode',
   uiUp: 'Menu up',
   uiDown: 'Menu down',
   uiLeft: 'Menu left',
@@ -36,7 +37,7 @@ const ACTION_LABEL: Record<LogicalAction, string> = {
 
 const ACTION_GROUP: Record<string, LogicalAction[]> = {
   Driving: ['accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'],
-  'Gameplay hotkeys': ['camera', 'reset'],
+  'Gameplay hotkeys': ['camera', 'reset', 'viewMode'],
   Menus: ['uiUp', 'uiDown', 'uiLeft', 'uiRight', 'uiConfirm', 'uiBack', 'uiTab', 'uiPause']
 };
 

@@ -4,7 +4,8 @@ import {
   boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, STREAM_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
 import {
-  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP
+  buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP,
+  collidersFromRasters, NO_DATA
 } from '../src/services/tiles/tileColliders.ts';
 import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
@@ -386,4 +387,129 @@ describe('one shared ground', () => {
     expect(hf.sample(10, 0)).toBeCloseTo(1, 6);
     expect(() => hf.copyFrom(new Heightfield(20, 1, new Float32Array(4)))).toThrow();
   });
+
+  it('identifies continuous ramps connecting to elevated bridge decks and records them in deckGrid', () => {
+    const top = flat(0), low = flat(0);
+    // Elevated bridge deck sits at column 20, rows 15..25 at height 14 (thin road slab: low=12.5, top=14)
+    for (let j = 15; j <= 25; j++) {
+      const c = j * N + 20;
+      top[c] = 14;
+      low[c] = 12.5;
+    }
+    // Ramp cells leading up to row 15:
+    top[14 * N + 20] = 12.0; low[14 * N + 20] = 10.5;
+    top[13 * N + 20] = 9.5; low[13 * N + 20] = 8.0;
+    top[12 * N + 20] = 7.0; low[12 * N + 20] = 5.5;
+    top[11 * N + 20] = 4.5; low[11 * N + 20] = 3.0;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Elevated bridge deck should be marked in deckGrid
+    expect(deckGrid[20 * N + 20]).toBeCloseTo(14, 5);
+    // Ramp cells should also be connected and populated into deckGrid
+    expect(deckGrid[14 * N + 20]).toBeCloseTo(12.0, 5);
+    expect(deckGrid[13 * N + 20]).toBeCloseTo(9.5, 5);
+    expect(deckGrid[12 * N + 20]).toBeCloseTo(7.0, 5);
+    expect(deckGrid[11 * N + 20]).toBeCloseTo(4.5, 5);
+    // Neither the deck nor the approach ramp should be boxed as building colliders
+    expect(colliders).toHaveLength(0);
+    // Unrelated flat ground cell has NO_DATA in deckGrid
+    expect(deckGrid[10 * N + 10]).toBe(NO_DATA);
+  });
+
+  it('keeps adjacent building roofs as solid colliders and never treats them as ramps', () => {
+    const top = flat(0), low = flat(0);
+    // Elevated bridge deck at column 20, rows 15..25, height 14 (thin slab)
+    for (let j = 15; j <= 25; j++) {
+      const c = j * N + 20;
+      top[c] = 14;
+      low[c] = 12.5;
+    }
+    // A 14m tall building right next to the bridge deck at column 21, row 20 (thick structure: low = 0, top = 14)
+    top[20 * N + 21] = 14;
+    low[20 * N + 21] = 0;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // The bridge deck itself is in deckGrid
+    expect(deckGrid[20 * N + 20]).toBeCloseTo(14, 5);
+    // The adjacent building roof is NOT in deckGrid
+    expect(deckGrid[20 * N + 21]).toBe(NO_DATA);
+    // The adjacent building REMAINS a solid building collider
+    expect(colliders.length).toBeGreaterThan(0);
+  });
+
+  it('detects low-rise 1-story buildings (height 4.5m) as solid colliders', () => {
+    const top = flat(0), low = flat(0);
+    // Low-rise 4.5m commercial building / annex at column 15..17, rows 15..17
+    for (let j = 15; j <= 17; j++) {
+      for (let i = 15; i <= 17; i++) {
+        const c = j * N + i;
+        top[c] = 4.5;
+        low[c] = 0;
+      }
+    }
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+    expect(colliders.length).toBeGreaterThan(0);
+    const maxTop = Math.max(...colliders.map(b => b.max.y));
+    expect(maxTop).toBeCloseTo(4.5, 1);
+  });
+
+  it('keeps broad buildings with pitched/gabled roofs as solid buildings (never bridge decks)', () => {
+    const top = flat(0), low = flat(0);
+    // A 4-cell wide building (40m wide) with gabled roof: peak 14m, eaves 10m, low 9m
+    for (let j = 15; j <= 18; j++) {
+      for (let i = 15; i <= 18; i++) {
+        const c = j * N + i;
+        // Peak along center, slope to eaves
+        top[c] = (i === 16 || i === 17) ? 14 : 11;
+        low[c] = 9; // attic floor / eave
+      }
+    }
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Broad building MUST NOT be classified as deckGrid
+    for (let j = 15; j <= 18; j++) {
+      for (let i = 15; i <= 18; i++) {
+        expect(deckGrid[j * N + i]).toBe(NO_DATA);
+      }
+    }
+    // Broad building MUST produce solid colliders
+    expect(colliders.length).toBeGreaterThan(0);
+  });
+
+  it('leaves contiguous adjacent building rows flush with zero internal gaps', () => {
+    const top = flat(0), low = flat(0);
+    // Stepped/diagonal building: row 15 has columns 15..17, row 16 has columns 16..18
+    for (let i = 15; i <= 17; i++) {
+      top[15 * N + i] = 10;
+      low[15 * N + i] = 0;
+    }
+    for (let i = 16; i <= 18; i++) {
+      top[16 * N + i] = 10;
+      low[16 * N + i] = 0;
+    }
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+
+    expect(colliders.length).toBe(2);
+    // Find the box for row 15 and row 16
+    const b15 = colliders.find(b => b.min.z < -grid.half + 16 * grid.cell && b.max.z <= -grid.half + 16.5 * grid.cell)!;
+    const b16 = colliders.find(b => b.min.z >= -grid.half + 15.5 * grid.cell && b.max.z > -grid.half + 16 * grid.cell)!;
+    expect(b15).toBeDefined();
+    expect(b16).toBeDefined();
+
+    // The boundary at z = -half + 16 * cell MUST be flush with 0 gap!
+    const zBoundary = -grid.half + 16 * grid.cell;
+    expect(b15.max.z).toBeCloseTo(zBoundary, 5);
+    expect(b16.min.z).toBeCloseTo(zBoundary, 5);
+  });
 });
+

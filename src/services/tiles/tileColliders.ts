@@ -35,14 +35,19 @@ const CELL = 10;
  * only a sharp hill crest gets shaved, and then by well under the threshold.
  */
 const GROUND_K = 6;
-/** Real meters above the estimated ground that make a cell a building. */
-const BUILDING_RISE_M = 8;
+/**
+ * Real meters above the estimated ground that make a cell a building.
+ * Set to 3.5m (~12ft) to capture 1-story commercial/residential structures,
+ * building annexes, and low-rise historical architecture (e.g. New Orleans French Quarter)
+ * while ignoring road crowns, curbs, and parked vehicles (<2m).
+ */
+const BUILDING_RISE_M = 3.5;
 /**
  * Height gap between the physics ground and photogrammetry surface.
- * Kept at 2cm so vehicle tires contact the pavement directly rather than hovering,
- * and the continuous 2D terrain mesh stays cleanly underneath the 3D tiles.
+ * Kept at 5cm so 3D tile pavement sits cleanly above the continuous terrain underlay
+ * while vehicle tires contact the pavement directly rather than hovering.
  */
-export const TILE_GROUND_GAP = 0.02;
+export const TILE_GROUND_GAP = 0.05;
 
 export interface Grid {
   readonly cell: number;
@@ -139,34 +144,39 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
       // A steep wall, pier face, or facade has normal pointing mostly horizontally (slope > 63°: nHoriz > 2.0 * |det|)
       const isSteepWall = Math.abs(det) < 1e-9 || (nHoriz > 2.0 * Math.abs(det) && maxY - minY >= BIN_SIZE);
 
-      if (Math.abs(det) < 1e-9) {
-        // vertical wall: stamp full height range at each vertex cell
-        for (const q of _tri) {
-          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
-            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
+      if (isSteepWall) {
+        // Step along all 3 edges of steep vertical walls so thin facades/piers
+        // continuously stamp every cell they cross without over-stamping far corners
+        const stepEdge = (p1: { x: number; y: number; z: number }, p2: { x: number; y: number; z: number }) => {
+          const len = Math.hypot(p2.x - p1.x, p2.z - p1.z);
+          const steps = Math.max(1, Math.ceil(len / (cell * 0.5)));
+          for (let s = 0; s <= steps; s++) {
+            const f = s / steps;
+            const x = p1.x + (p2.x - p1.x) * f;
+            const z = p1.z + (p2.z - p1.z) * f;
+            if (x >= -half && x < half && z >= -half && z < half) {
+              stampRange(cellOf(x), cellOf(z), minY, maxY);
+            }
           }
-        }
+        };
+        stepEdge(a, b);
+        stepEdge(b, c);
+        stepEdge(c, a);
+        if (Math.abs(det) < 1e-9) continue;
+      } else if (Math.abs(det) < 1e-9) {
         continue;
       }
 
-      if (isSteepWall) {
-        // Stamp the full vertical range at centroid and vertices for steep wall/pier faces
-        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
-        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+      // Stamp centroid height/range so small triangles register accurately
+      const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
+      if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
+        if (isSteepWall) {
           stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
-        }
-        for (const q of _tri) {
-          if (q.x >= -half && q.x < half && q.z >= -half && q.z < half) {
-            stampRange(cellOf(q.x), cellOf(q.z), minY, maxY);
-          }
-        }
-      } else {
-        // Gentle slope, roadway, roof, or ground terrain: stamp centroid height
-        const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3, midY = (a.y + b.y + c.y) / 3;
-        if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-          stamp(cellOf(midX), cellOf(midZ), midY);
+        } else {
+          stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
         }
       }
+
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
       const minZ = Math.min(a.z, b.z, c.z), maxZ = Math.max(a.z, b.z, c.z);
       if (maxX < -half || minX >= half || maxZ < -half || minZ >= half) continue;
@@ -180,7 +190,11 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
           const l2 = ((b.x - a.x) * (cz - a.z) - (cx - a.x) * (b.z - a.z)) / det;
           const l0 = 1 - l1 - l2;
           if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
-          stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
+          if (isSteepWall) {
+            stampRange(i, j, minY, maxY);
+          } else {
+            stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
+          }
         }
       }
     }
@@ -222,7 +236,7 @@ function windowExtreme(src: Float32Array, n: number, k: number, min: boolean, sk
   return out;
 }
 
-const NO_DATA = -Infinity;
+export const NO_DATA = -Infinity;
 
 /**
  * Ground level under the photogrammetry surface: a morphological opening
@@ -272,19 +286,262 @@ function composite(rasters: readonly (TileRaster | null)[], n: number, max: bool
 }
 
 /**
+ * Incrementally builds the shared ground heightfield row-by-row across frames,
+ * bounding execution time to ~1.5-2ms per frame to eliminate main-thread hitches
+ * during runtime tile refinement.
+ */
+export class AmortizedGroundBuilder {
+  readonly n: number;
+  readonly cell: number;
+  private readonly terrainTop: Float32Array;
+  private readonly rasters: readonly (TileRaster | null)[];
+  private readonly k: number;
+  private readonly rise: number;
+
+  private phase = 0;
+  private row = 0;
+
+  private top: Float32Array;
+  private low: Float32Array;
+  private minsTmp: Float32Array;
+  private mins: Float32Array;
+  private groundTmp: Float32Array;
+  private ground: Float32Array;
+  private raw: Float32Array;
+  private out: Float32Array;
+  private deque: Int32Array;
+
+  done = false;
+  result: Float32Array | null = null;
+
+  constructor(
+    rasters: readonly (TileRaster | null)[],
+    grid: Grid,
+    terrainTop: Float32Array,
+    reliefBoost = 1
+  ) {
+    this.n = grid.n;
+    this.cell = grid.cell;
+    this.terrainTop = terrainTop;
+    this.rasters = rasters;
+    this.k = GROUND_K;
+    this.rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+
+    const total = this.n * this.n;
+    this.top = new Float32Array(total).fill(-Infinity);
+    this.low = new Float32Array(total).fill(Infinity);
+    this.minsTmp = new Float32Array(total);
+    this.mins = new Float32Array(total);
+    this.groundTmp = new Float32Array(total);
+    this.ground = new Float32Array(total);
+    this.raw = new Float32Array(total);
+    this.out = new Float32Array(total);
+    this.deque = new Int32Array(this.n);
+  }
+
+  /**
+   * Run one slice of the computation up to budgetMs (or until complete if budgetMs is Infinity).
+   * Returns true if completed, false if more work remains.
+   */
+  step(budgetMs = 2.0): boolean {
+    if (this.done) return true;
+    const start = (typeof performance !== 'undefined') ? performance.now() : Date.now();
+    const n = this.n;
+    const k = this.k;
+    const deque = this.deque;
+
+    while (!this.done) {
+      // Phase 0: Composite tops and lows from rasters
+      if (this.phase === 0) {
+        const batchEnd = Math.min(this.rasters.length, this.row + 30);
+        for (; this.row < batchEnd; this.row++) {
+          const r = this.rasters[this.row];
+          if (!r) continue;
+          for (let j = 0; j < r.h; j++) {
+            const g = (r.j0 + j) * n + r.i0;
+            const l = j * r.w;
+            for (let i = 0; i < r.w; i++) {
+              const tv = r.top[l + i]!;
+              if (tv > this.top[g + i]!) this.top[g + i] = tv;
+              const lv = r.low[l + i]!;
+              if (lv < this.low[g + i]!) this.low[g + i] = lv;
+            }
+          }
+        }
+        if (this.row >= this.rasters.length) {
+          this.phase = 1;
+          this.row = 0;
+        }
+      }
+      // Phase 1: windowExtreme MIN - Pass 1 by rows
+      else if (this.phase === 1) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.top[a * n + b]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val <= this.top[a * n + deque[tail - 1]!]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.minsTmp[a * n + c] = tail > head ? this.top[a * n + deque[head]!]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 2;
+          this.row = 0;
+        }
+      }
+      // Phase 2: windowExtreme MIN - Pass 2 by cols
+      else if (this.phase === 2) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.minsTmp[b * n + a]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val <= this.minsTmp[deque[tail - 1]! * n + a]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.mins[c * n + a] = tail > head ? this.minsTmp[deque[head]! * n + a]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 3;
+          this.row = 0;
+        }
+      }
+      // Phase 3: windowExtreme MAX - Pass 1 by rows
+      else if (this.phase === 3) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.mins[a * n + b]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val >= this.mins[a * n + deque[tail - 1]!]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.groundTmp[a * n + c] = tail > head ? this.mins[a * n + deque[head]!]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 4;
+          this.row = 0;
+        }
+      }
+      // Phase 4: windowExtreme MAX - Pass 2 by cols
+      else if (this.phase === 4) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const a = this.row;
+          let head = 0, tail = 0;
+          for (let b = 0; b < n + k; b++) {
+            if (b < n) {
+              const val = this.groundTmp[b * n + a]!;
+              if (val !== NO_DATA) {
+                while (tail > head && val >= this.groundTmp[deque[tail - 1]! * n + a]!) tail--;
+                deque[tail++] = b;
+              }
+            }
+            const c = b - k;
+            if (c < 0) continue;
+            while (tail > head && deque[head]! < c - k) head++;
+            this.ground[c * n + a] = tail > head ? this.groundTmp[deque[head]! * n + a]! : NO_DATA;
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 5;
+          this.row = 0;
+        }
+      }
+      // Phase 5: Border mask & raw heights with seam closure clamp
+      else if (this.phase === 5) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const j = this.row;
+          const isBorderJ = j < k || j >= n - k;
+          for (let i = 0; i < n; i++) {
+            const c = j * n + i;
+            if (isBorderJ || i < k || i >= n - k) {
+              this.ground[c] = NO_DATA;
+            }
+            const t = this.top[c]!, b = this.ground[c]!;
+            if (t === NO_DATA || b === NO_DATA) {
+              this.raw[c] = this.terrainTop[c]!;
+            } else {
+              const tileGround = (t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!));
+              this.raw[c] = tileGround + TILE_GROUND_GAP;
+            }
+          }
+        }
+        if (this.row >= n) {
+          this.phase = 6;
+          this.row = 0;
+        }
+      }
+      // Phase 6: 3x3 smoothing blur
+      else if (this.phase === 6) {
+        const batchEnd = Math.min(n, this.row + 40);
+        for (; this.row < batchEnd; this.row++) {
+          const j = this.row;
+          for (let i = 0; i < n; i++) {
+            let sum = 0, count = 0;
+            for (let dj = -1; dj <= 1; dj++) {
+              const jj = j + dj;
+              if (jj < 0 || jj >= n) continue;
+              for (let di = -1; di <= 1; di++) {
+                const ii = i + di;
+                if (ii < 0 || ii >= n) continue;
+                sum += this.raw[jj * n + ii]!;
+                count++;
+              }
+            }
+            this.out[j * n + i] = sum / count;
+          }
+        }
+        if (this.row >= n) {
+          this.done = true;
+          this.result = this.out;
+          return true;
+        }
+      }
+
+      const elapsed = ((typeof performance !== 'undefined') ? performance.now() : Date.now()) - start;
+      if (elapsed >= budgetMs) {
+        return false;
+      }
+    }
+
+    return true;
+  }
+}
+
+/**
  * The one ground the whole game plays on, per cell. Where tiles cover a cell
  * it is the tile surface: the lowest one, so streets survive tree canopy and
  * bridge decks, and the opened base under anything tall enough to be a
  * building. Cells without coverage fall back to the elevation-grid terrain,
  * which the tiles were calibrated against, so the seam is small. A 3×3 box
  * takes the 10 m quantisation off the result before it becomes a heightfield.
- *
- * Physics, spawning, props, shadows, the camera and the satellite drape all
- * sample the heightfield built from this; the building colliders' floors are
- * cut from the same base. Before this the elevation grid (87 m samples) was
- * the ground for physics while the tiles were the ground for collision, and
- * in San Francisco the two disagreed by whole storeys: cars sat inside the
- * tile mesh and slid under building boxes.
  */
 export function groundField(
   rasters: readonly (TileRaster | null)[],
@@ -292,35 +549,9 @@ export function groundField(
   terrainTop: Float32Array,
   reliefBoost = 1
 ): Float32Array {
-  const { n } = grid;
-  const top = compositeTops(rasters, n);
-  const low = compositeLows(rasters, n);
-  const base = groundEstimate(top, n);
-  const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
-  const raw = new Float32Array(n * n);
-  for (let c = 0; c < n * n; c++) {
-    const t = top[c]!, b = base[c]!;
-    if (t === NO_DATA || b === NO_DATA) raw[c] = terrainTop[c]!;
-    else raw[c] = (t - b >= rise ? b : low[c]!) + TILE_GROUND_GAP;
-  }
-  const out = new Float32Array(n * n);
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
-      let sum = 0, count = 0;
-      for (let dj = -1; dj <= 1; dj++) {
-        const jj = j + dj;
-        if (jj < 0 || jj >= n) continue;
-        for (let di = -1; di <= 1; di++) {
-          const ii = i + di;
-          if (ii < 0 || ii >= n) continue;
-          sum += raw[jj * n + ii]!;
-          count++;
-        }
-      }
-      out[j * n + i] = sum / count;
-    }
-  }
-  return out;
+  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost);
+  builder.step(Infinity);
+  return builder.result!;
 }
 
 /**
@@ -328,9 +559,14 @@ export function groundField(
  * null without enough data. Tiles are placed by height above the WGS84
  * ellipsoid while the elevation grid is above mean sea level; the geoid runs
  * ~20 m below the ellipsoid around Portland, which buried bridge decks and
- * ground floors. Measuring beats shipping a geoid model: the 30th percentile
- * of (local ground − terrain) lands inside the cluster of true ground cells,
- * below roofs and canopy, above valleys the coarse grid interpolates over.
+ * ground floors. Measuring beats shipping a geoid model.
+ *
+ * Location Tuning Note:
+ * The 15th percentile (0.15) was chosen based on calibration across Portland (low flat
+ * river valley with elevated bridges where 30th percentile previously submerged road approaches)
+ * and dense urban canyons (Midtown Manhattan and San Francisco hills where coarse 87m elevation
+ * samples interpolate across valleys). The 15th percentile lands inside the true ground cluster
+ * while keeping 85%+ of tile streets strictly at or above the terrain underlay datum.
  */
 export function tileGroundOffset(
   rasters: readonly (TileRaster | null)[],
@@ -351,14 +587,15 @@ export function tileGroundOffset(
   }
   if (diffs.length < 100) return null;
   diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length * 0.3)]!;
+  return diffs[Math.floor(diffs.length * 0.15)]!;
 }
 
 export function collidersFromRasters(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
   terrainTop: Float32Array,
-  reliefBoost = 1
+  reliefBoost = 1,
+  outDeckGrid?: Float32Array
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -366,6 +603,10 @@ export function collidersFromRasters(
   const ground = groundEstimate(top, n);
   const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
   const BIN_SIZE = 1.5;
+
+  if (outDeckGrid) {
+    outDeckGrid.fill(NO_DATA);
+  }
 
   /**
    * Check if the vehicle driving zone above the ground [g + 1.2m, min(g + 4.5m, t - 1.5m)]
@@ -398,26 +639,172 @@ export function collidersFromRasters(
     return foundRaster;
   };
 
+  const getGroundY = (c: number): number => {
+    return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+  };
+
+  /** Check if an elevated span is a narrow roadway ribbon (drops to ground/air on both opposing sides within 2 cells). */
+  const isNarrowSpan = (c: number): boolean => {
+    const cx = c % n;
+    const cz = Math.floor(c / n);
+
+    // Narrow in X: must drop to ground/air on West (-X) AND on East (+X)
+    let dropsWest = false;
+    for (const dx of [-1, -2]) {
+      const x = cx + dx;
+      if (x < 0) { dropsWest = true; break; }
+      const nb = cz * n + x;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsWest = true; break; }
+    }
+    let dropsEast = false;
+    for (const dx of [1, 2]) {
+      const x = cx + dx;
+      if (x >= n) { dropsEast = true; break; }
+      const nb = cz * n + x;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsEast = true; break; }
+    }
+    const narrowInX = dropsWest && dropsEast;
+
+    // Narrow in Z: must drop to ground/air on South (-Z) AND on North (+Z)
+    let dropsSouth = false;
+    for (const dz of [-1, -2]) {
+      const z = cz + dz;
+      if (z < 0) { dropsSouth = true; break; }
+      const nb = z * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsSouth = true; break; }
+    }
+    let dropsNorth = false;
+    for (const dz of [1, 2]) {
+      const z = cz + dz;
+      if (z >= n) { dropsNorth = true; break; }
+      const nb = z * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsNorth = true; break; }
+    }
+    const narrowInZ = dropsSouth && dropsNorth;
+
+    return narrowInX || narrowInZ;
+  };
+
+  // Pre-classify elevated bridge decks and overhead underpass spans
+  const isDeck = new Uint8Array(n * n);
+  const isRamp = new Uint8Array(n * n);
+  const queue: number[] = [];
+  const hasMask = rasters.some(r => r && r.mask);
+
+  for (let c = 0; c < n * n; c++) {
+    const t = top[c]!;
+    const g = getGroundY(c);
+    const l = low[c]!;
+    if (t === NO_DATA || g === NO_DATA || t - g < rise) continue;
+
+    const clearanceOk = !hasMask || hasGroundClearance(c, g, t);
+    // Bridge deck / viaduct: elevated roadway structure with clear slab thickness (0.8m - 7.0m),
+    // clearance below, and a narrow roadway ribbon (1-2 cells wide) dropping off to ground on its sides
+    const isThinElevatedDeck =
+      l !== Infinity &&
+      t - l >= 0.8 &&
+      t - l <= 7.0 &&
+      l - g >= 4.0 &&
+      clearanceOk &&
+      isNarrowSpan(c);
+    // High overhead underpass span: at least 13m high, narrow span, with confirmed open driving clearance below from mesh mask
+    const isUnderpassDeck =
+      hasMask &&
+      t - g >= 13.0 &&
+      hasGroundClearance(c, g, t) &&
+      isNarrowSpan(c);
+
+    if (isThinElevatedDeck || isUnderpassDeck) {
+      isDeck[c] = 1;
+      if (outDeckGrid) outDeckGrid[c] = t;
+    }
+  }
+
+  // Find terminal boundary cells of elevated decks to seed approach ramps
+  for (let c = 0; c < n * n; c++) {
+    if (!isDeck[c]) continue;
+    const cx = c % n;
+    const cz = Math.floor(c / n);
+    const hasNonDeckNeighbor =
+      (cx > 0 && !isDeck[c - 1]) ||
+      (cx < n - 1 && !isDeck[c + 1]) ||
+      (cz > 0 && !isDeck[c - n]) ||
+      (cz < n - 1 && !isDeck[c + n]);
+    if (hasNonDeckNeighbor) {
+      queue.push(c);
+    }
+  }
+
+  // Ramp Continuity Rule: Trace descending road slopes from elevated deck terminals
+  // down to ground level to unblock solid approach viaducts (e.g. Brooklyn Bridge earthen approaches).
+  // Ramps must be narrow roadway ribbons (isNarrowSpan), not broad gabled or pitched building roofs.
+  let head = 0;
+  while (head < queue.length) {
+    const curr = queue[head++]!;
+    const cx = curr % n;
+    const cz = Math.floor(curr / n);
+    const currT = top[curr]!;
+
+    const neighbors = [
+      cx > 0 ? curr - 1 : -1,
+      cx < n - 1 ? curr + 1 : -1,
+      cz > 0 ? curr - n : -1,
+      cz < n - 1 ? curr + n : -1,
+    ];
+
+    for (const nb of neighbors) {
+      if (nb < 0 || isDeck[nb] || isRamp[nb]) continue;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || gNb === NO_DATA) continue;
+      // Only road surface layers (thickness <= 6.0m), NOT thick vertical columns/piers (t - l >= 10m)
+      const lNb = low[nb];
+      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0) continue;
+
+      // Ramp MUST descend strictly towards the ground along a narrow roadway span
+      const drop = currT - tNb;
+      if (drop > 0.05 && drop <= 2.8 && tNb >= gNb && isNarrowSpan(nb)) {
+        isRamp[nb] = 1;
+        if (outDeckGrid) outDeckGrid[nb] = tNb;
+        // Continue downward towards ground; stop once ground level is reached (within 1m of ground)
+        if (tNb > gNb + 1.0) {
+          queue.push(nb);
+        }
+      }
+    }
+  }
+
   const isBuilding = (c: number): boolean => {
     const t = top[c]!;
-    const g = ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
-    const l = low[c]!;
+    const g = ground[c]!;
+    // Border cells (within GROUND_K = 60m of the map edge) have ground[c] === NO_DATA.
+    // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
+    // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
-    // An elevated roadway, bridge deck, or overpass has substantial open clearance
-    // between its underside (l) and the ground/water (g), AND is a thin deck slab
-    // (not a massive vertical structure like a bridge tower, pier, or building).
-    const isThinElevatedDeck = l !== Infinity && l - g >= 5.0 && t - l <= 7.0;
-    if (isThinElevatedDeck) return false;
-    // An underpass or bridge span over a street has open driving clearance between ground and overhead deck
-    if (t - g >= 13.0 && hasGroundClearance(c, g, t)) return false;
+    if (isDeck[c] || isRamp[c]) return false;
     return true;
   };
 
-  const out: BuildingCollider[] = [];
-  let above = new Map<number, BuildingCollider>();
+  interface BoxExtent {
+    b: BuildingCollider;
+    i0: number;
+    i1: number;
+    j0: number;
+    j1: number;
+  }
+  const boxes: BoxExtent[] = [];
+  let above = new Map<number, BoxExtent>();
   for (let j = 0; j < n; j++) {
     const z0 = -half + j * cell;
-    const row = new Map<number, BuildingCollider>();
+    const row = new Map<number, BoxExtent>();
     let start = -1, hi = -Infinity, lo = Infinity;
     for (let i = 0; i <= n; i++) {
       const c = j * n + i;
@@ -428,46 +815,80 @@ export function collidersFromRasters(
           lo = Infinity;
         }
         hi = Math.max(hi, top[c]!);
-        // the box floor follows the estimated ground, which tracks a hill far
-        // better than the smoothed elevation grid; fall back to it when a
-        // cell has no tile coverage nearby
-        lo = Math.min(lo, ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!);
+        // Box floor follows true ground level so buildings extend all the way down to the terrain
+        lo = Math.min(lo, getGroundY(c));
         continue;
       }
       if (start < 0) continue;
       const key = start * (n + 1) + i;
       const prev = above.get(key);
       if (prev) {
-        prev.max.z = z0 + cell;
-        prev.max.y = Math.max(prev.max.y, hi);
-        prev.min.y = Math.min(prev.min.y, lo - 1);
+        prev.b.max.z = z0 + cell;
+        prev.b.max.y = Math.max(prev.b.max.y, hi);
+        prev.b.min.y = Math.min(prev.b.min.y, lo - 1);
+        prev.j1 = j + 1;
         row.set(key, prev);
       } else {
         const b: BuildingCollider = {
           min: new Vector3(-half + start * cell, lo - 1, z0),
           max: new Vector3(-half + i * cell, hi, z0 + cell)
         };
-        out.push(b);
-        row.set(key, b);
+        const ext: BoxExtent = { b, i0: start, i1: i, j0: j, j1: j + 1 };
+        boxes.push(ext);
+        row.set(key, ext);
       }
       start = -1;
     }
     above = row;
   }
-  // Inset building colliders horizontally by 1.2m so 10m quantization steps and
-  // facade overshoots do not protrude into roadway lanes and sidewalks.
-  const INSET_M = 1.2;
-  for (const b of out) {
+
+  // Neighbor-aware horizontal insetting:
+  // Inset exterior faces that border open streets or non-building cells by 1.0m to prevent
+  // 10m quantization steps from protruding into roadway lanes.
+  // Internal faces between adjacent building cells remain 100% flush (0m inset) so contiguous
+  // buildings are solid with zero gaps, zero cracks, and zero isolated pillars.
+  // Freestanding 1-cell columns (isolated piers/towers with no building neighbors on all 4 sides)
+  // get a 2.8m inset to snugly hug structural supports.
+  for (const { b, i0, i1, j0, j1 } of boxes) {
+    let touchSouth = false;
+    if (j0 > 0) {
+      for (let i = i0; i < i1; i++) {
+        if (isBuilding((j0 - 1) * n + i)) { touchSouth = true; break; }
+      }
+    }
+    let touchNorth = false;
+    if (j1 < n) {
+      for (let i = i0; i < i1; i++) {
+        if (isBuilding(j1 * n + i)) { touchNorth = true; break; }
+      }
+    }
+    let touchWest = false;
+    if (i0 > 0) {
+      for (let j = j0; j < j1; j++) {
+        if (isBuilding(j * n + (i0 - 1))) { touchWest = true; break; }
+      }
+    }
+    let touchEast = false;
+    if (i1 < n) {
+      for (let j = j0; j < j1; j++) {
+        if (isBuilding(j * n + i1)) { touchEast = true; break; }
+      }
+    }
+
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
-    const insetX = Math.min(INSET_M, Math.max(0, (width - 2) / 2));
-    const insetZ = Math.min(INSET_M, Math.max(0, (depth - 2) / 2));
-    b.min.x += insetX;
-    b.max.x -= insetX;
-    b.min.z += insetZ;
-    b.max.z -= insetZ;
+    const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
+    const insetMax = isIsolatedColumn ? 2.8 : 1.0;
+    const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
+    const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
+
+    if (!touchWest) b.min.x += insetX;
+    if (!touchEast) b.max.x -= insetX;
+    if (!touchSouth) b.min.z += insetZ;
+    if (!touchNorth) b.max.z -= insetZ;
   }
-  return out;
+
+  return boxes.map(e => e.b);
 }
 
 /** Colliders straight from a group of meshes (tests and one-shot use). */

@@ -4,12 +4,11 @@ import { TEST_SCENARIOS, getScenario } from '../../core/geo/testScenarios.ts';
 /**
  * Relocate controls: Google Maps API key + place search.
  *
- * Two shapes, because the HUD's top row is the contested space. Given room it
- * is an inline row sitting in the gap between the integrity and score panels.
- * Where there is no such gap it collapses to a single button and opens on
- * demand — three fields cannot fit a phone's width on one line, and wrapping
- * them makes a permanent three-row block across the middle of the game, which
- * is worse than a button. Errors surface inline as status text, never alert().
+ * A single "GO SOMEWHERE REAL" button on every screen, opening on demand into
+ * a popover with the key, search, and scenario fields. The fields do not live
+ * on the HUD row even where they would fit — three of them across the middle
+ * of the game is worse than a button on both a phone and a desktop. Errors
+ * surface inline as status text, never alert().
  */
 export class RelocateBar extends LitElement {
   static override styles = css`
@@ -25,57 +24,45 @@ export class RelocateBar extends LitElement {
       transform: translateX(-50%);
       z-index: 50;
       display: flex;
-      /* nowrap on the inline row: width:max-content on a *wrapping* flex
-         container resolves narrower than the row it contains, so the fields
-         wrapped even with a thousand pixels of gap to sit in. The collapsed
-         panel does its own wrapping below. */
-      flex-wrap: nowrap;
+      /* stack the toggle over the popover it opens: the panel drops below the
+         button instead of sitting beside it, so it never overlaps the score */
+      flex-direction: column;
+      align-items: center;
       justify-content: center;
       gap: var(--space-xs);
-      /* the gap between the HUD's top corners: integrity takes ~19rem on the
-         left and the score ~30rem on the right, so what is left in the middle
-         is the room this bar actually has. Wide screens have plenty and it sits
-         up on that row; it only drops below when the gap gets too narrow to
-         hold it on one line, since wrapping makes it tall enough to reach the
-         nav marker */
       max-width: calc(100vw - 52rem);
       width: max-content;
     }
-    /* too narrow to sit beside the HUD's top corners: drop below them instead
-       of covering the score, and take the full width while down there */
 
     :host([hidden]) { display:none; }
 
-    .fields { display: contents; }
-    .toggle { display: none; }
+    /* One button on every screen: the fields open on demand below it. Three
+       fields do not belong on the HUD row even where they would fit, and the
+       collapsed form is the same on a phone and a desktop. */
+    .fields { display: none; }
+    .toggle { display: block; min-height: 2.25rem; padding: var(--space-xs) var(--space-md); }
+    :host([open]) .fields {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: center;
+      gap: var(--space-xs);
+      margin-top: var(--space-xs);
+      padding: var(--space-md);
+      width: min(24rem, calc(100vw - var(--space-lg) * 2));
+      background: var(--scrim);
+      border: var(--border) solid var(--line);
+      border-radius: var(--radius-md);
+    }
+    :host([open]) .toggle { border-color: var(--accent); color: var(--accent); }
 
-    /* No usable gap: collapse to a button that opens the fields on demand.
-       The threshold is the corners (~52rem) plus what one row of fields needs
-       (~38rem) — widen a field below and this number has to move with it. */
+    /* No usable gap between the HUD corners: drop below them instead of
+       covering the score. The collapsed form is already the default above;
+       this only widens the bar and lowers it. */
     @media (max-width: 92rem) {
       :host {
-        /* below the corners, because on a phone there is no gap between them
-           to sit in — but only a button lives here until you ask for more */
         top: calc(max(var(--space-md), env(safe-area-inset-top)) + 3.5rem);
         max-width: calc(100vw - var(--space-lg) * 2);
-        flex-direction: column;
-        align-items: center;
       }
-      .toggle { display: block; min-height: 2.25rem; padding: var(--space-xs) var(--space-md); }
-      .fields { display: none; }
-      :host([open]) .fields {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        gap: var(--space-xs);
-        margin-top: var(--space-xs);
-        padding: var(--space-md);
-        width: min(24rem, calc(100vw - var(--space-lg) * 2));
-        background: var(--scrim);
-        border: var(--border) solid var(--line);
-        border-radius: var(--radius-md);
-      }
-      :host([open]) .toggle { border-color: var(--accent); color: var(--accent); }
     }
     input { padding:var(--space-sm) var(--space-md); background:rgba(0,0,0,.6);
       border:var(--border) solid var(--line); border-radius:var(--radius-sm); color:var(--ink);
@@ -144,7 +131,12 @@ export class RelocateBar extends LitElement {
       this.status = 'Paste a Google Maps API key first (starts with AIzaSy).';
       return;
     }
-    if (q && this.onSearch) this.onSearch(q, key);
+    if (q && this.onSearch) {
+      this.onSearch(q, key);
+      // collapse back to the button once the search is dispatched — the status
+      // line sits below :host so it stays visible whether open or not
+      this.open = false;
+    }
   }
 
   selectScenario(id: string): void {

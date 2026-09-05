@@ -10,11 +10,12 @@
  */
 import {
   Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, CanvasTexture,
-  SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter, Color,
-  type BufferAttribute as BufferAttributeT
+  SRGBColorSpace, ClampToEdgeWrapping, RepeatWrapping, LinearMipmapLinearFilter,
+  LinearFilter, Color, type BufferAttribute as BufferAttributeT
 } from 'three';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Heightfield } from '../core/heightfield.ts';
+import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 
 export interface TileFootprint {
   readonly minX: number;
@@ -23,9 +24,44 @@ export interface TileFootprint {
   readonly maxZ: number;
 }
 
+function createGridTexture(): CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 64;
+    c.height = 64;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = '#1e232a';
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.strokeStyle = '#2d3748';
+    ctx.lineWidth = 2;
+    ctx.strokeRect(0, 0, 64, 64);
+    const tex = new CanvasTexture(c);
+    tex.wrapS = tex.wrapT = RepeatWrapping;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.magFilter = LinearFilter;
+    tex.generateMipmaps = true;
+    return tex;
+  } catch {
+    return null;
+  }
+}
+
 export class TerrainMesh {
   private _mesh: Mesh | null = null;
   private _texture: CanvasTexture | null = null;
+  private _gridTexture: CanvasTexture | null = null;
+  private _photorealMat: MeshStandardMaterial | null = null;
+  private _game3dMat: MeshStandardMaterial | null = null;
+  private _mode: 'photoreal' | 'game3d' = 'photoreal';
+  private _sourceCanvas: HTMLCanvasElement | null = null;
+  private _workingCanvas: HTMLCanvasElement | null = null;
+  private _lastNeutralizedGeneration = -1;
+  private _pendingGeneration = -1;
+  private _pendingColliders: readonly BuildingCollider[] | null = null;
+  private _pendingMapSize = 0;
+  private _pendingStreetColor: string | undefined = undefined;
 
   get mesh(): Mesh | null {
     return this._mesh;
@@ -35,12 +71,39 @@ export class TerrainMesh {
     return this._texture;
   }
 
+  get gridTexture(): CanvasTexture | null {
+    return this._gridTexture;
+  }
+
+  setMode(mode: 'photoreal' | 'game3d'): void {
+    this._mode = mode;
+    if (this._mesh) {
+      this._mesh.material = (mode === 'game3d' && this._game3dMat)
+        ? this._game3dMat
+        : (this._photorealMat ?? this._mesh.material);
+    }
+    // If switching back to photoreal and we have pending un-neutralized colliders, paint now
+    if (mode === 'photoreal' && this._pendingColliders && this._pendingGeneration !== this._lastNeutralizedGeneration) {
+      this.neutralizeBuildingFootprints(
+        this._pendingColliders,
+        this._pendingMapSize,
+        this._pendingGeneration,
+        this._pendingStreetColor
+      );
+    }
+  }
+
   markTextureNeedsUpdate(): void {
     if (this._texture) this._texture.needsUpdate = true;
   }
 
   build(provider: TerrainProvider, anisotropy: number): Mesh {
     this.dispose();
+    this._lastNeutralizedGeneration = -1;
+    this._pendingGeneration = -1;
+    this._pendingColliders = null;
+    this._pendingMapSize = 0;
+
     const hf = provider.heightfield;
     const seg = hf.segs;
     const size = hf.size;
@@ -48,11 +111,36 @@ export class TerrainMesh {
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as BufferAttributeT;
 
+    // 1. Build Photoreal material
     if (provider.isReal && provider.satelliteCanvas) {
       for (let i = 0; i < pos.count; i++) {
         pos.setY(i, hf.sample(pos.getX(i), pos.getZ(i)));
       }
-      const tex = new CanvasTexture(provider.satelliteCanvas);
+      if (typeof document !== 'undefined') {
+        try {
+          const sw = provider.satelliteCanvas.width;
+          const sh = provider.satelliteCanvas.height;
+          const src = document.createElement('canvas');
+          src.width = sw;
+          src.height = sh;
+          src.getContext('2d')?.drawImage(provider.satelliteCanvas, 0, 0);
+          this._sourceCanvas = src;
+
+          const work = document.createElement('canvas');
+          work.width = sw;
+          work.height = sh;
+          work.getContext('2d')?.drawImage(src, 0, 0);
+          this._workingCanvas = work;
+        } catch {
+          this._sourceCanvas = null;
+          this._workingCanvas = provider.satelliteCanvas;
+        }
+      } else if (provider.satelliteCanvas) {
+        this._sourceCanvas = provider.satelliteCanvas;
+        this._workingCanvas = provider.satelliteCanvas;
+      }
+      const texCanvas = this._workingCanvas ?? provider.satelliteCanvas;
+      const tex = new CanvasTexture(texCanvas);
       tex.colorSpace = SRGBColorSpace;
       tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
       tex.minFilter = LinearMipmapLinearFilter;
@@ -62,7 +150,7 @@ export class TerrainMesh {
       tex.needsUpdate = true;
       this._texture = tex;
 
-      const mat = new MeshStandardMaterial({
+      this._photorealMat = new MeshStandardMaterial({
         map: tex,
         roughness: 0.96,
         metalness: 0,
@@ -70,7 +158,6 @@ export class TerrainMesh {
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
       });
-      this._mesh = new Mesh(geo, mat);
     } else {
       // Desert palette: low=sand, mid=rock, high=snow cap, canyon=dark
       const colors = new Float32Array(pos.count * 3);
@@ -96,7 +183,7 @@ export class TerrainMesh {
         colors[i * 3 + 2] = col.b;
       }
       geo.setAttribute('color', new BufferAttribute(colors, 3));
-      const mat = new MeshStandardMaterial({
+      this._photorealMat = new MeshStandardMaterial({
         vertexColors: true,
         roughness: 0.95,
         metalness: 0,
@@ -104,8 +191,26 @@ export class TerrainMesh {
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
       });
-      this._mesh = new Mesh(geo, mat);
     }
+
+    // 2. Build Game 3D stylized material (crisp 10m grid)
+    const gridTex = createGridTexture();
+    if (gridTex) {
+      gridTex.repeat.set(size / 10, size / 10);
+      this._gridTexture = gridTex;
+    }
+    this._game3dMat = new MeshStandardMaterial({
+      color: gridTex ? 0xffffff : 0x1e232a,
+      ...(gridTex ? { map: gridTex } : {}),
+      roughness: 0.88,
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: 3,
+      polygonOffsetUnits: 3
+    });
+
+    const mat = (this._mode === 'game3d' && this._game3dMat) ? this._game3dMat : this._photorealMat;
+    this._mesh = new Mesh(geo, mat);
     geo.computeVertexNormals();
     return this._mesh;
   }
@@ -125,14 +230,100 @@ export class TerrainMesh {
     m.geometry.computeVertexNormals();
   }
 
+  /**
+   * Neutralizes 2D aerial satellite building footprints/roofs under and around 3D buildings.
+   *
+   * Non-destructive: restores the pristine source imagery from _sourceCanvas before
+   * filling the current active building footprints with the ambient street tone.
+   * Gated on mode: skipped in Game 3D mode.
+   * Memoized on generation: skipped if this exact collider generation was already painted.
+   */
+  neutralizeBuildingFootprints(
+    colliders: readonly BuildingCollider[],
+    mapSize: number,
+    generation: number,
+    streetColor?: string
+  ): void {
+    this._pendingColliders = colliders;
+    this._pendingMapSize = mapSize;
+    this._pendingGeneration = generation;
+    this._pendingStreetColor = streetColor;
+
+    // 1. Do not run paint pass in Game 3D mode where the texture is not visible
+    if (this._mode === 'game3d') return;
+    // 2. Skip if this exact collider generation has already been painted
+    if (generation === this._lastNeutralizedGeneration) return;
+    if (typeof HTMLCanvasElement === 'undefined') return;
+
+    const work = this._workingCanvas ?? (this._texture?.image as HTMLCanvasElement | null);
+    if (!(work instanceof HTMLCanvasElement)) return;
+    const ctx = work.getContext('2d');
+    if (!ctx) return;
+
+    const cw = work.width;
+    const ch = work.height;
+    if (cw <= 0 || ch <= 0) return;
+
+    // 3. Non-destructively restore pristine source satellite imagery (GPU blit ~0.2ms)
+    if (this._sourceCanvas) {
+      ctx.drawImage(this._sourceCanvas, 0, 0);
+    }
+
+    // 4. Fill active building footprints with verified street tone
+    ctx.fillStyle = streetColor ?? '#3e434a';
+
+    const scaleX = cw / mapSize;
+    const scaleY = ch / mapSize;
+    const half = mapSize / 2;
+
+    let painted = 0;
+    for (const b of colliders) {
+      if (b.kind === 'prop') continue;
+      const w = b.max.x - b.min.x;
+      const d = b.max.z - b.min.z;
+      const h = b.max.y - b.min.y;
+      if (w < 4 || d < 4 || h < 3) continue;
+
+      const x0 = (b.min.x + half) * scaleX;
+      const x1 = (b.max.x + half) * scaleX;
+      const y0 = (b.min.z + half) * scaleY;
+      const y1 = (b.max.z + half) * scaleY;
+
+      // At ~2.9m/px, 10m cell is ~3.4px. Pad 1-2 pixels (~3-6m) to cover roof eaves & off-nadir shift
+      const pad = Math.max(1, Math.min(2, Math.round(h * 0.04 * scaleX)));
+      const bx = Math.floor(Math.min(x0, x1) - pad);
+      const by = Math.floor(Math.min(y0, y1) - pad);
+      const bw = Math.ceil(Math.abs(x1 - x0) + 2 * pad);
+      const bh = Math.ceil(Math.abs(y1 - y0) + 2 * pad);
+
+      ctx.fillRect(bx, by, bw, bh);
+      painted++;
+    }
+
+    this._lastNeutralizedGeneration = generation;
+    if (painted > 0 || this._sourceCanvas) {
+      this.markTextureNeedsUpdate();
+    }
+  }
+
   dispose(): void {
     if (this._mesh) {
       this._mesh.geometry.dispose();
-      const mat = this._mesh.material as MeshStandardMaterial;
-      mat.map?.dispose();
-      mat.dispose();
+      this._photorealMat?.map?.dispose();
+      this._photorealMat?.dispose();
+      this._game3dMat?.map?.dispose();
+      this._game3dMat?.dispose();
       this._mesh = null;
     }
+    this._photorealMat = null;
+    this._game3dMat = null;
     this._texture = null;
+    this._gridTexture = null;
+    this._sourceCanvas = null;
+    this._workingCanvas = null;
+    this._lastNeutralizedGeneration = -1;
+    this._pendingGeneration = -1;
+    this._pendingColliders = null;
+    this._pendingStreetColor = undefined;
   }
 }

@@ -197,8 +197,8 @@ export class VehicleBody {
     const rising = this.vel.y - this.climbRate;
     this.onGround = this.launchLockS === 0
       && this.pos.y < gh + this.cfg.groundClearance + GROUND_SNAP
-      && rising < LAUNCH_SEPARATION
-      && rising >= -HARD_LANDING_V;
+      && (rising < LAUNCH_SEPARATION || this.pos.y <= gh + this.cfg.groundClearance + 0.1)
+      && (rising >= -HARD_LANDING_V || this.vel.y >= -HARD_LANDING_V);
     this.airTime = this.onGround ? 0 : this.airTime + dt;
 
     if (this.onGround) {
@@ -282,15 +282,25 @@ export class VehicleBody {
   ): number {
     const { x, z } = this.pos;
     const f = this._fwd, r = this._right;
-    const baseGround = 0.25 * (
-      ground.sample(x + f.x * 1.3, z + f.z * 1.3) + ground.sample(x - f.x * 1.3, z - f.z * 1.3) +
-      ground.sample(x + r.x * 0.95, z + r.z * 0.95) + ground.sample(x - r.x * 0.95, z - r.z * 0.95)
-    );
+    const xF = x + f.x * 1.3, zF = z + f.z * 1.3;
+    const xB = x - f.x * 1.3, zB = z - f.z * 1.3;
+    const xR = x + r.x * 0.95, zR = z + r.z * 0.95;
+    const xL = x - r.x * 0.95, zL = z - r.z * 0.95;
+
+    const gF = ground.sample(xF, zF);
+    const gB = ground.sample(xB, zB);
+    const gR = ground.sample(xR, zR);
+    const gL = ground.sample(xL, zL);
+
     if (surfaceProvider) {
-      const surf = surfaceProvider(x, z, this.pos.y, baseGround);
-      if (surf !== null) return surf;
+      const cy = this.pos.y;
+      const sF = surfaceProvider(xF, zF, cy, gF) ?? gF;
+      const sB = surfaceProvider(xB, zB, cy, gB) ?? gB;
+      const sR = surfaceProvider(xR, zR, cy, gR) ?? gR;
+      const sL = surfaceProvider(xL, zL, cy, gL) ?? gL;
+      return 0.25 * (sF + sB + sR + sL);
     }
-    return baseGround;
+    return 0.25 * (gF + gB + gR + gL);
   }
 
   /** Direct yaw about the body's up axis, scaled down at crawling speeds. */
@@ -356,7 +366,8 @@ export class VehicleBody {
   private autoRight(dt: number): void {
     const upW = this._up.set(0, 1, 0).applyQuaternion(this.quat);
     const tilt = MathUtils.clamp(upW.dot(WORLD_UP), -1, 1);
-    if (tilt >= 0.95) return;
+    const ang = Math.acos(tilt);
+    if (ang < 1e-4) return;
     const axis = this._axis.crossVectors(upW, WORLD_UP);
     if (axis.lengthSq() < 1e-4) {
       if (tilt < 0) {
@@ -369,7 +380,6 @@ export class VehicleBody {
       }
     }
     axis.normalize();
-    const ang = Math.acos(tilt);
     const rate = MathUtils.lerp(
       this.cfg.rollRecover, this.cfg.rollRecover * 2.4, 1 - (tilt + 1) / 2
     );
@@ -414,7 +424,8 @@ export class VehicleBody {
       this.vel.y = Math.max(this.vel.y, this.climbPeak);
     }
     const closing = this.vel.y - this.climbRate;
-    if (closing < -HARD_LANDING_V && this.pos.y < target) {
+    const isFallingHard = this.vel.y < -HARD_LANDING_V && closing < -HARD_LANDING_V;
+    if (isFallingHard && this.pos.y < target && (!this.onGround || this.airTime > 0.05)) {
       // hard landing: how fast the car met the ground, not how fast it fell
       this.pos.y = target;
       const impact = -closing;
@@ -434,15 +445,21 @@ export class VehicleBody {
       }
     } else if (this.onGround && this.pos.y < target + GROUND_SNAP) {
       // grounded: suspension eases the body toward the ride height so bumps
-      // and grid kinks don't jolt it; the travel clamp keeps climbs and
-      // descents honest. Jumps (climbing) and hard falls (which must reach
-      // the landing branch above) skip this
-      this.pos.y += (target - this.pos.y) * (1 - Math.exp(-dt * RIDE_RATE));
-      this.pos.y = MathUtils.clamp(this.pos.y, target - RIDE_TRAVEL, target + RIDE_TRAVEL);
-      // the car's vertical speed is the ground's, not zero. Zeroing it here is
-      // what made a ramp a shrug: the climb was thrown away every frame, so a
-      // crest had nothing to launch with
+      // and grid kinks don't jolt it. On uphill climbs, firm upward response
+      // prevents chassis sag into the slope.
+      const rate = this.pos.y < target ? RIDE_RATE * 2.5 : RIDE_RATE;
+      this.pos.y += (target - this.pos.y) * (1 - Math.exp(-dt * rate));
+      this.pos.y = MathUtils.clamp(this.pos.y, target - 0.25, target + RIDE_TRAVEL);
+      // the car's vertical speed follows the climb rate of the slope
       this.vel.y = this.climbRate;
+    } else if (this.pos.y <= target && (this.vel.y <= 0.5 || this.onGround)) {
+      // Soft touchdown for airborne vehicles: touch down on surface without sinking underground
+      this.pos.y = target;
+      this.vel.y = Math.max(this.vel.y, this.climbRate);
+      if (this.launchLockS === 0) {
+        this.onGround = true;
+        this.airTime = 0;
+      }
     }
     this.keepInBounds();
   }

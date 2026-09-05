@@ -98,4 +98,31 @@ describe('Option 2: Multi-Deck Bridge Driving & Surface Elevation', () => {
     // Car should collide and rebound from the tower
     expect(body.vel.z).toBeGreaterThan(-5);
   });
+
+  it('Vehicle jumping or driving under an overpass does not snap upwards onto the bridge deck', () => {
+    const stats = VEHICLE_TYPES[2]!;
+    const body = new VehicleBody(stats);
+    // On riverbed at Y=1.8 (ground is 0.8 + 1.0m clearance)
+    body.pos.set(0, 1.8, 0);
+    body.vel.set(0, 5, 0); // jumping upward under the bridge
+    body.snapPrev();
+
+    const ground = makeGround(0.8);
+    // Bridge deck 4m above at Y=5.8 (within maxDrop 4m)
+    const bridgeHeight = 5.8;
+    const surfaceProvider = (_x: number, _z: number, currentY: number) => {
+      // Elevated bridge deck only rides/lands if car is on/above it
+      if (bridgeHeight > currentY + 0.5) return null;
+      return bridgeHeight;
+    };
+
+    // Step physics forward while jumping
+    for (let i = 0; i < 10; i++) {
+      body.step(1 / 60, { throttle: 0, steer: 0, brake: 0, handbrake: false, jump: false }, ground, [], surfaceProvider);
+    }
+
+    // Car must NOT have snapped to bridgeHeight + 1.0 (6.8m)
+    expect(body.pos.y).toBeLessThan(4.5);
+    expect(body.groundY).toBeCloseTo(0.8, 1);
+  });
 });
