@@ -116,11 +116,11 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
     ctx.fillRect(X(205) - 12, 84, 24, 5);
 
     // Race number roundel at X(320)
-    ctx.fillStyle = '#f4ead8';
+    ctx.fillStyle = '#f1f5f9';
     ctx.beginPath();
     ctx.arc(X(320), 52, 28, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#1a1410';
+    ctx.fillStyle = '#0b0f17';
     ctx.font = '900 38px Inter, Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -197,10 +197,10 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
       ctx.fillText('★ TOWN ★', X(x), 116);
     }
 
-    // Dirt and weathering
+    // Grime and weathering
     const dirt = ctx.createLinearGradient(0, 80, 0, H);
-    dirt.addColorStop(0, 'rgba(70,50,30,0)');
-    dirt.addColorStop(1, 'rgba(70,50,30,0.55)');
+    dirt.addColorStop(0, 'rgba(18,24,34,0)');
+    dirt.addColorStop(1, 'rgba(18,24,34,0.45)');
     ctx.fillStyle = dirt;
     ctx.fillRect(0, 80, W, H - 80);
     const r = rng(n * 7919 + teamColor);

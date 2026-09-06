@@ -30,19 +30,21 @@ export class IntroScreen extends LitElement {
 
     :host { position:fixed; inset:0; z-index:40; display:grid;
       grid-template-columns:minmax(300px, 430px) 1fr; grid-template-rows:auto 1fr auto;
-      background:linear-gradient(90deg, rgba(26,20,16,.97) 0%, rgba(26,20,16,.97) 34%,
-        rgba(26,20,16,.18) 52%, rgba(26,20,16,.3) 100%); }
+      background:linear-gradient(90deg, rgba(11,15,23,.97) 0%, rgba(11,15,23,.95) 34%,
+        rgba(11,15,23,.22) 55%, rgba(11,15,23,.35) 100%); }
     header { grid-column:1 / -1; padding:20px 28px 6px; }
     h1 { font-family:'Russo One',sans-serif; font-size:clamp(28px,4.5vw,46px); line-height:1;
-      margin:0; text-shadow:0 4px 0 #0006; }
+      margin:0; text-shadow:0 4px 0 #0008; }
     .ac { color:var(--accent); }
     .sub { color:var(--muted); margin:8px 0 0; font-size:13px; max-width:640px; line-height:1.45; }
     .list { padding:8px 28px; display:flex; flex-direction:column; gap:8px; overflow:auto; }
     .label { font-size:10px; letter-spacing:.16em; text-transform:uppercase; color:var(--muted); margin:6px 0 2px; }
-    .card { display:flex; align-items:center; gap:12px; padding:11px 14px; background:rgba(36,28,22,.85);
-      border:2px solid var(--line); border-radius:10px; cursor:pointer; outline:none; transition:border-color .12s, transform .12s; }
-    .card:hover { border-color:var(--sand); }
-    .card.sel { border-color:var(--accent); background:rgba(64,42,28,.95); transform:translateX(6px); }
+    .card { display:flex; align-items:center; gap:12px; padding:11px 14px; background:rgba(17,26,38,.85);
+      border:2px solid var(--line); border-radius:10px; cursor:pointer; outline:none; backdrop-filter:blur(6px);
+      transition:border-color .15s, transform .15s, box-shadow .15s; }
+    .card:hover { border-color:var(--sand); box-shadow:0 0 12px rgba(251,191,36,.2); }
+    .card.sel { border-color:var(--accent); background:rgba(26,42,66,.95); transform:translateX(6px);
+      box-shadow:0 0 16px rgba(255,85,0,.3); }
     /* gamepad focus ring: the InputManager moves data-focused between cards
        and buttons; keyboard hover and mouse click still work alongside it */
     .card[data-focused], button[data-focused] {
@@ -55,33 +57,34 @@ export class IntroScreen extends LitElement {
       border:1px solid var(--line); border-radius:4px; padding:1px 6px; }
     .stage { position:relative; }
     .pick { position:absolute; left:28px; top:6px; }
-    .pick h2 { font-family:'Russo One',sans-serif; font-size:clamp(24px,3.2vw,36px); margin:0; text-shadow:0 3px 0 #0006; }
+    .pick h2 { font-family:'Russo One',sans-serif; font-size:clamp(24px,3.2vw,36px); margin:0; text-shadow:0 3px 0 #0008; }
     .pick .blurb { color:var(--muted); font-size:12px; margin-top:2px; }
     .stats { position:absolute; left:28px; bottom:14px; width:270px; padding:12px 14px;
-      background:rgba(36,28,22,.86); border:1px solid var(--line); border-radius:10px; }
+      background:rgba(17,26,38,.86); border:1px solid var(--line); border-radius:10px; backdrop-filter:blur(8px); }
     .stat { display:grid; grid-template-columns:96px 1fr; align-items:center; gap:10px; margin:5px 0;
       font-size:10px; letter-spacing:.12em; text-transform:uppercase; color:var(--muted); }
-    .bar { height:7px; background:#000; border-radius:4px; overflow:hidden; border:1px solid var(--line); }
+    .bar { height:7px; background:#070b12; border-radius:4px; overflow:hidden; border:1px solid var(--line); }
     .fill { display:block; height:100%; background:var(--accent); transition:width .18s; }
     footer { grid-column:1 / -1; display:flex; align-items:center; justify-content:space-between; gap:16px;
       padding:10px 28px 20px; flex-wrap:wrap; }
     .controls { font-size:12px; color:#9e9; line-height:1.8; }
     .controls kbd { background:var(--panel2); border:1px solid var(--line); border-bottom-width:2px;
       border-radius:4px; padding:1px 6px; font-family:'JetBrains Mono',monospace; font-size:11px; color:var(--ink); }
-    .play { padding:14px 42px; background:var(--accent); color:#1a1410; font-family:'Russo One',sans-serif;
-      font-size:18px; border:none; border-radius:10px; cursor:pointer; box-shadow:0 6px 0 #b0390f;
+    .play { padding:14px 42px; background:var(--accent); color:#0b0f17; font-family:'Russo One',sans-serif;
+      font-size:18px; border:none; border-radius:10px; cursor:pointer;
+      box-shadow:0 6px 0 #c23800, 0 10px 24px rgba(255,85,0,.35);
       transition:transform .08s, box-shadow .2s; }
     .actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
     .online { padding:13px 22px; background:transparent; color:var(--accent); font-family:'Russo One',sans-serif;
       font-size:14px; border:2px solid var(--accent); border-radius:10px; cursor:pointer; letter-spacing:.04em; }
-    .online:hover { background:rgba(255,120,60,.12); }
+    .online:hover { background:rgba(255,85,0,.15); }
     .controls { padding:13px 22px; background:transparent; color:var(--muted); font-family:'Russo One',sans-serif;
       font-size:14px; border:2px solid var(--line); border-radius:10px; cursor:pointer; letter-spacing:.04em; }
     .controls:hover { border-color:var(--sand); color:var(--sand); }
-    .play:hover { transform:translateY(-2px); box-shadow:0 8px 0 #b0390f; }
-    .play:active { transform:translateY(4px); box-shadow:0 2px 0 #b0390f; }
+    .play:hover { transform:translateY(-2px); box-shadow:0 8px 0 #c23800, 0 14px 28px rgba(255,85,0,.45); }
+    .play:active { transform:translateY(4px); box-shadow:0 2px 0 #c23800; }
     @media (max-width: 760px) {
-      :host { grid-template-columns:1fr; background:rgba(26,20,16,.96); }
+      :host { grid-template-columns:1fr; background:rgba(11,15,23,.96); }
       .stage { min-height:120px; }
       .stats { position:static; width:auto; margin:8px 28px; }
       .pick { position:static; padding:0 28px; }

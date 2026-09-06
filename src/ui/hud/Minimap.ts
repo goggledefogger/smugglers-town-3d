@@ -1,6 +1,7 @@
 import { html, css } from 'lit';
 import { HudComponent } from './HudComponent.ts';
 import { hillshade, radarProject, headingOf } from './radar.ts';
+import { MINIMAP_COLORS } from '../../core/theme.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
 import type { MatchState } from '../../core/gameplay/MatchRules.ts';
 import type { VehicleActor } from '../../app/Game.ts';
@@ -50,7 +51,7 @@ export class Minimap extends HudComponent {
   static override styles = css`
     :host {
       --radar-size: clamp(104px, 13vw + 4vh, 170px);
-      --radar-rim: var(--sand);
+      --radar-rim: rgba(56, 189, 248, 0.35);
       display: block;
       width: var(--radar-size);
       height: var(--radar-size);
@@ -64,12 +65,14 @@ export class Minimap extends HudComponent {
       border: var(--border) solid var(--radar-rim);
       background: var(--panel);
       box-sizing: border-box;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5);
     }
     /* the goal tints the rim, the same one property the nav chevron keys off,
        so the radar and the arrow never disagree about what you are doing */
     :host(.goal-deliver) { --radar-rim: var(--hot); }
     :host(.goal-chase) { --radar-rim: var(--accent); }
     :host(.goal-escort) { --radar-rim: var(--cool); }
+    :host(.goal-collect) { --radar-rim: var(--sand); }
   `;
 
   private canvas: HTMLCanvasElement | null = null;
@@ -115,6 +118,7 @@ export class Minimap extends HudComponent {
       }
     }
     const span = Math.max(1e-3, hi - lo);
+    const { lowGround, highRidge } = MINIMAP_COLORS;
     for (let j = 0; j < RELIEF_N; j++) {
       for (let i = 0; i < RELIEF_N; i++) {
         const k = j * RELIEF_N + i;
@@ -123,13 +127,13 @@ export class Minimap extends HudComponent {
         const gx = ((h[j * RELIEF_N + ie]! - h[k]!) / step) * RELIEF_EXAGGERATION;
         const gz = ((h[je * RELIEF_N + i]! - h[k]!) / step) * RELIEF_EXAGGERATION;
         const shade = hillshade(gx, gz);
-        // height tints low ground dark and ridges pale, shading does the form
+        // height tints low ground dark slate and ridges crisp illuminated steel/cyan
         const t = (h[k]! - lo) / span;
         const lum = 0.35 + 0.65 * shade;
         const o = k * 4;
-        img.data[o] = Math.round((70 + 120 * t) * lum);
-        img.data[o + 1] = Math.round((55 + 95 * t) * lum);
-        img.data[o + 2] = Math.round((40 + 70 * t) * lum);
+        img.data[o] = Math.round((lowGround.r + (highRidge.r - lowGround.r) * t) * lum);
+        img.data[o + 1] = Math.round((lowGround.g + (highRidge.g - lowGround.g) * t) * lum);
+        img.data[o + 2] = Math.round((lowGround.b + (highRidge.b - lowGround.b) * t) * lum);
         img.data[o + 3] = 255;
       }
     }
@@ -214,7 +218,7 @@ export class Minimap extends HudComponent {
   }
 
   private drawRangeRings(ctx: CanvasRenderingContext2D, radius: number): void {
-    ctx.strokeStyle = 'rgba(244,234,216,.13)';
+    ctx.strokeStyle = MINIMAP_COLORS.rings;
     ctx.lineWidth = Math.max(1, radius * 0.008);
     for (const f of [0.33, 0.66]) {
       ctx.beginPath();
@@ -269,7 +273,7 @@ export class Minimap extends HudComponent {
     ctx.rotate(-yaw);
     ctx.translate(0, -radius * 0.9);
     ctx.rotate(yaw);
-    ctx.fillStyle = 'rgba(244,234,216,.75)';
+    ctx.fillStyle = MINIMAP_COLORS.north;
     ctx.font = `700 ${Math.round(radius * 0.17)}px system-ui, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';

@@ -13,6 +13,7 @@ import {
   SRGBColorSpace, ClampToEdgeWrapping, RepeatWrapping, LinearMipmapLinearFilter,
   LinearFilter, Color, type BufferAttribute as BufferAttributeT
 } from 'three';
+import { TERRAIN_COLORS } from '../core/theme.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Heightfield } from '../core/heightfield.ts';
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
@@ -32,9 +33,9 @@ function createGridTexture(): CanvasTexture | null {
     c.height = 64;
     const ctx = c.getContext('2d');
     if (!ctx) return null;
-    ctx.fillStyle = '#1e232a';
+    ctx.fillStyle = TERRAIN_COLORS.gridBg;
     ctx.fillRect(0, 0, 64, 64);
-    ctx.strokeStyle = '#2d3748';
+    ctx.strokeStyle = TERRAIN_COLORS.gridLine;
     ctx.lineWidth = 2;
     ctx.strokeRect(0, 0, 64, 64);
     const tex = new CanvasTexture(c);
@@ -159,19 +160,20 @@ export class TerrainMesh {
         polygonOffsetUnits: 3
       });
     } else {
-      // Desert palette: low=sand, mid=rock, high=snow cap, canyon=dark
+      // Crisp alpine/canyon biome: low=dark slate bedrock, mid=mossy steppe, high=granite cliff, peaks=snowcap
       const colors = new Float32Array(pos.count * 3);
       const col = new Color();
+      const { bedrock, steppe, cliff, snow } = TERRAIN_COLORS.biome;
       for (let i = 0; i < pos.count; i++) {
         const x = pos.getX(i);
         const z = pos.getZ(i);
         const h = hf.sample(x, z);
         pos.setY(i, h);
         let r: number, g: number, b: number;
-        if (h < 7) { r = 0.76; g = 0.62; b = 0.42; }
-        else if (h < 65) { r = 0.82; g = 0.68; b = 0.45; }
-        else if (h < 175) { r = 0.6; g = 0.5; b = 0.36; }
-        else { r = 0.85; g = 0.85; b = 0.82; }
+        if (h < 8) { [r, g, b] = bedrock; }
+        else if (h < 65) { [r, g, b] = steppe; }
+        else if (h < 175) { [r, g, b] = cliff; }
+        else { [r, g, b] = snow; }
         const n = (Math.sin(x * 0.045) + Math.cos(z * 0.04)) * 0.03;
         col.setRGB(
           Math.max(0, Math.min(1, r + n)),

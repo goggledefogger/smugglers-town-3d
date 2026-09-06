@@ -9,6 +9,7 @@ import {
   SRGBColorSpace, ACESFilmicToneMapping
 } from 'three';
 import { makeSkyTexture, SKY_HORIZON, SKY_MID_LIGHT } from './skyTexture.ts';
+import { LIGHTING_COLORS } from '../core/theme.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('render');
@@ -49,11 +50,11 @@ export class GameRenderer {
     );
     this.camera.position.set(0, 20, 30);
 
-    const sun = new DirectionalLight(0xfff2dd, 1.4);
+    const sun = new DirectionalLight(LIGHTING_COLORS.sun, 1.4);
     sun.position.copy(SUN_POS);
     this.scene.add(sun);
-    this.scene.add(new AmbientLight(0x8899bb, 0.6));
-    this.scene.add(new HemisphereLight(SKY_MID_LIGHT, 0x6b5a3a, 0.5));
+    this.scene.add(new AmbientLight(LIGHTING_COLORS.ambient, 0.6));
+    this.scene.add(new HemisphereLight(SKY_MID_LIGHT, LIGHTING_COLORS.groundBounce, 0.5));
 
     window.addEventListener('resize', () => this.handleResize());
   }

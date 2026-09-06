@@ -4,13 +4,14 @@
  * above the horizon and warm haze below it. One texture, no per-frame cost.
  */
 import { CanvasTexture, EquirectangularReflectionMapping, SRGBColorSpace, Vector3 } from 'three';
+import { SKY_COLORS } from '../core/theme.ts';
 
-export const SKY_ZENITH = 0x2a66c2;
-export const SKY_HORIZON = 0xc6dbee;
+export const SKY_ZENITH = SKY_COLORS.zenith;
+export const SKY_HORIZON = SKY_COLORS.horizon;
 /** Hemisphere-light sky tint: between zenith and horizon. */
-export const SKY_MID_LIGHT = 0x9cc3e8;
-const SKY_MID = 0x6ea8e0;
-const HAZE = 0xb9a88f;
+export const SKY_MID_LIGHT = SKY_COLORS.midLight;
+const SKY_MID = SKY_COLORS.mid;
+const HAZE = SKY_COLORS.haze;
 
 const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
 
@@ -34,7 +35,7 @@ export function makeSkyTexture(sunDir: Vector3, w = 2048, h = 1024): CanvasTextu
   sky.addColorStop(0.3, hex(SKY_MID));
   sky.addColorStop(0.5, hex(SKY_HORIZON));
   sky.addColorStop(0.53, hex(HAZE));
-  sky.addColorStop(1, '#6b5a48');
+  sky.addColorStop(1, '#182436');
   ctx.fillStyle = sky;
   ctx.fillRect(0, 0, w, h);
 

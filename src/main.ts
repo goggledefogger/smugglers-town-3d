@@ -51,8 +51,10 @@ import { LoaderOverlay } from './ui/screens/LoaderOverlay.ts';
 import { RelocateBar } from './ui/screens/RelocateBar.ts';
 import { SettingsScreen } from './ui/screens/SettingsScreen.ts';
 import type { LobbyScreen } from './ui/screens/LobbyScreen.ts';
+import { applyThemeToDocument } from './core/theme.ts';
 
 const log = logger('app');
+applyThemeToDocument();
 const app = document.getElementById('app')!;
 
 // ---- DOM shell ----
@@ -495,7 +497,7 @@ const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.loc
 let showDiagnostic = !!urlParams && (urlParams.has('debug') || urlParams.has('scenario') || urlParams.has('lat'));
 const diagEl = document.createElement('div');
 diagEl.id = 'debug-diagnostic';
-diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(26,20,16,0.92);backdrop-filter:blur(8px);border:1px solid #ff5a1f;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f4ead8;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.5);';
+diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(11,15,23,0.92);backdrop-filter:blur(8px);border:1px solid #ff5500;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f1f5f9;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 diagEl.style.display = showDiagnostic ? 'flex' : 'none';
 document.body.appendChild(diagEl);
 
