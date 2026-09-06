@@ -679,7 +679,9 @@ export function collidersFromRasters(
   terrainTop: Float32Array,
   reliefBoost = 1,
   outDeckGrid?: Float32Array,
-  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+  /** n*n, receives 1 where the cell is a building, deck or ramp (what a render filter must leave alone). */
+  outStructureGrid?: Uint8Array
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1066,6 +1068,12 @@ export function collidersFromRasters(
     if (isDriveableGround[c]) return false;
     return true;
   };
+
+  if (outStructureGrid) {
+    for (let c = 0; c < n * n; c++) {
+      outStructureGrid[c] = isBuilding(c) || isDeck[c] || isRamp[c] ? 1 : 0;
+    }
+  }
 
   interface BoxExtent {
     b: BuildingCollider;

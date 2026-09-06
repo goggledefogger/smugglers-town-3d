@@ -28,7 +28,7 @@ export type UiAction =
   | 'confirm' | 'back' | 'tab' | 'pause';
 
 /** A gameplay hotkey, edge-triggered like a UI action but routed to the sim. */
-export type Hotkey = 'camera' | 'reset' | 'viewMode';
+export type Hotkey = 'camera' | 'reset' | 'viewMode' | 'clutterMode';
 
 /**
  * A logical action is the name a physical control is bound to. Driving
@@ -40,7 +40,7 @@ export type LogicalAction =
   | 'steerLeft' | 'steerRight'
   | 'jump' | 'handbrake'
   | 'pitchUp' | 'pitchDown'
-  | 'camera' | 'reset' | 'viewMode'
+  | 'camera' | 'reset' | 'viewMode' | 'clutterMode'
   | 'uiUp' | 'uiDown' | 'uiLeft' | 'uiRight'
   | 'uiConfirm' | 'uiBack' | 'uiTab' | 'uiPause';
 

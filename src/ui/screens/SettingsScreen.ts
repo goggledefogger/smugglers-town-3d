@@ -25,6 +25,7 @@ const ACTION_LABEL: Record<LogicalAction, string> = {
   camera: 'Camera',
   reset: 'Reset car',
   viewMode: 'Toggle 3D visual mode',
+  clutterMode: 'Street clutter filter',
   uiUp: 'Menu up',
   uiDown: 'Menu down',
   uiLeft: 'Menu left',

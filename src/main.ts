@@ -16,6 +16,7 @@ import { createStore, type HudSnapshot } from './app/store.ts';
 import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
 import { BuildingMeshView } from './render/BuildingMeshView.ts';
+import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
@@ -65,6 +66,9 @@ app.innerHTML = `
       <sr-health></sr-health>
       <button id="view-mode-btn" class="hud-btn" type="button" title="Toggle 3D Visual Mode (Hotkey: V or G)">
         <span>🎮</span> <span id="view-mode-text">VIEW: REAL 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
+      </button>
+      <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road (Hotkey: F)">
+        <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
       </button>
     </div>
     <div class="hud-corner hud-tr"><sr-score></sr-score></div>
@@ -141,6 +145,38 @@ let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
 let viewMode: 'photoreal' | 'game3d' = 'photoreal';
+let clutterFilter: TileClutterFilter | null = null;
+// the mode survives a relocate: a new filter starts in it
+let clutterMode: ClutterMode = 'off';
+const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
+const clutterText = document.getElementById('clutter-text') as HTMLSpanElement | null;
+const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT' };
+
+function updateClutterUi(): void {
+  if (!clutterBtn || !clutterText) return;
+  clutterBtn.hidden = !clutterFilter;
+  clutterBtn.classList.toggle('active', clutterMode !== 'off');
+  clutterText.textContent = CLUTTER_LABEL[clutterMode];
+}
+
+function cycleClutterMode(): void {
+  if (!clutterFilter) return;
+  clutterMode = clutterFilter.cycleMode();
+  updateClutterUi();
+}
+
+clutterBtn?.addEventListener('click', cycleClutterMode);
+
+/** Patch the streamed tiles so the clutter filter runs on every tile, now and as they refine. */
+function attachClutterFilter(streamer: TileStreamer, terrain: TerrainProvider): void {
+  clutterFilter = new TileClutterFilter(
+    terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
+  );
+  clutterFilter.mode = clutterMode;
+  clutterFilter.patch(streamer.group);
+  streamer.onTileLoaded = g => clutterFilter?.patch(g);
+  updateClutterUi();
+}
 
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
@@ -175,6 +211,7 @@ viewModeBtn?.addEventListener('click', () => {
 function applyColliders(): void {
   colliderGeneration++;
   const colliders = [...(tiles?.colliders() ?? []), ...propScatter.colliders];
+  clutterFilter?.maskChanged();
   game.setBuildingColliders(colliders);
   buildingMeshView.update(
     colliders,
@@ -216,6 +253,11 @@ function clearTiles(): void {
     renderer.scene.remove(tiles.group);
     tiles.dispose();
     tiles = null;
+  }
+  if (clutterFilter) {
+    clutterFilter.dispose();
+    clutterFilter = null;
+    updateClutterUi();
   }
   buildingMeshView.clear();
 }
@@ -388,7 +430,9 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
-          return tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
+          const terrain: TerrainProvider = tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
+          if (tiles) attachClutterFilter(tiles, terrain);
+          return terrain;
         } finally {
           loaderEl.hidden = true;
         }
@@ -473,6 +517,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
+    if (tiles) attachClutterFilter(tiles, terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {
@@ -618,6 +663,7 @@ function frame(now: number): void {
     if (hot === 'camera') cameraRig.cycleMode();
     if (hot === 'reset') resetPlayer();
     if (hot === 'viewMode') toggleViewMode();
+    if (hot === 'clutterMode') cycleClutterMode();
   }
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
@@ -649,6 +695,7 @@ function frame(now: number): void {
           game.terrainProvider.heightfield.copyFrom(refined);
         }
         terrainMesh.refresh(world.terrainProvider.heightfield);
+        clutterFilter?.groundChanged(world.terrainProvider.heightfield);
         if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;
       }
