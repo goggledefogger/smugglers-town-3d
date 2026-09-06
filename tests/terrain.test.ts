@@ -44,6 +44,62 @@ describe('TerrainMesh continuous underlay', () => {
     tm.dispose();
     expect(tm.mesh).toBeNull();
   });
+
+  it('generates high-res sand detail texture and grid texture with anisotropic filtering', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const { createDesertTerrain } = await import('../src/core/terrain/ProceduralTerrain.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const { RepeatWrapping } = await import('three');
+
+    // Setup mock document/canvas
+    const mockCtx = {
+      fillStyle: '',
+      strokeStyle: '',
+      lineWidth: 0,
+      fillRect: () => {},
+      strokeRect: () => {},
+      createLinearGradient: () => ({ addColorStop: () => {} }),
+      getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).fill(230) }),
+      putImageData: () => {}
+    };
+    class MockCanvas {
+      width = 512;
+      height = 512;
+      getContext() { return mockCtx; }
+    }
+    const origDoc = (globalThis as any).document;
+    (globalThis as any).document = {
+      createElement: (tag: string) => {
+        if (tag === 'canvas') return new MockCanvas();
+        return {};
+      }
+    };
+
+    try {
+      const tm = new TerrainMesh();
+      const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
+      const terrain = createDesertTerrain(hf);
+      const mesh = tm.build(terrain, 4);
+      expect(mesh).toBeDefined();
+
+      // Sand detail texture should be instantiated, repeated, and have anisotropy <= 4
+      expect(tm.sandTexture).toBeDefined();
+      expect(tm.sandTexture?.wrapS).toBe(RepeatWrapping);
+      expect(tm.sandTexture?.wrapT).toBe(RepeatWrapping);
+      expect(tm.sandTexture?.anisotropy).toBeLessThanOrEqual(4);
+
+      // Grid texture should also have anisotropy <= 4
+      expect(tm.gridTexture).toBeDefined();
+      expect(tm.gridTexture?.anisotropy).toBeLessThanOrEqual(4);
+
+      tm.dispose();
+      expect(tm.sandTexture).toBeNull();
+      expect(tm.gridTexture).toBeNull();
+      expect(tm.mesh).toBeNull();
+    } finally {
+      (globalThis as any).document = origDoc;
+    }
+  });
 });
 
 describe('PropScatter', () => {

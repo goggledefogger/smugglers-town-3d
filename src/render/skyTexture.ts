@@ -25,6 +25,12 @@ function rng(seed: number): () => number {
 }
 
 export function makeSkyTexture(sunDir: Vector3, w = 2048, h = 1024): CanvasTexture {
+  if (typeof document === 'undefined') {
+    const t = new CanvasTexture({} as HTMLCanvasElement);
+    t.mapping = EquirectangularReflectionMapping;
+    t.colorSpace = SRGBColorSpace;
+    return t;
+  }
   const c = document.createElement('canvas');
   c.width = w;
   c.height = h;

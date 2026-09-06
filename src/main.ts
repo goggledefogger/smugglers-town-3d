@@ -561,9 +561,18 @@ let simTime = 0;
 
 function frame(now: number): void {
   const rawDt = (now - last) / 1000;
-  const dt = Math.min(rawDt, config.loop.maxFrameDt);
   last = now;
-  renderer.adapt(rawDt, now);
+
+  // When tab is hidden or backgrounded, skip simulation and avoid corrupting adaptive resolution
+  if (typeof document !== 'undefined' && document.hidden) {
+    requestAnimationFrame(frame);
+    return;
+  }
+
+  const dt = Math.min(rawDt, config.loop.maxFrameDt);
+  if (rawDt <= 0.15) {
+    renderer.adapt(rawDt, now);
+  }
 
   if (showDiagnostic && world.player?.body) {
     const b = world.player.body;
