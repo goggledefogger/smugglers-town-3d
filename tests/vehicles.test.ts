@@ -13,6 +13,12 @@ import {
   drawAcidPsychedelicGraffiti,
   drawCyberpunkNeonTag,
   drawStickerSlapGraffiti,
+  drawComplexWildstyleBurner,
+  drawChicanoGothicScript,
+  drawKawaiiBubbleGraffiti,
+  drawBarcodeGlitchTag,
+  drawStickerBombCluster,
+  drawRibbonSplitMarkerTag,
   liverySide,
   liveryTop,
   liveryRear,
@@ -72,7 +78,7 @@ describe('Modular Vehicles Architecture', () => {
   });
 });
 
-describe('TOWN Procedural Graffiti Renderers Suite (10 Styles)', () => {
+describe('TOWN Procedural Graffiti Renderers Suite (16 Styles)', () => {
   function createMockCtx() {
     const calls: string[] = [];
     return {
@@ -88,11 +94,13 @@ describe('TOWN Procedural Graffiti Renderers Suite (10 Styles)', () => {
       moveTo: () => calls.push('moveTo'),
       lineTo: () => calls.push('lineTo'),
       quadraticCurveTo: () => calls.push('quadraticCurveTo'),
+      bezierCurveTo: () => calls.push('bezierCurveTo'),
       arc: () => calls.push('arc'),
       ellipse: () => calls.push('ellipse'),
       fill: () => calls.push('fill'),
       stroke: () => calls.push('stroke'),
       fillRect: () => calls.push('fillRect'),
+      strokeRect: () => calls.push('strokeRect'),
       strokeText: (t: string) => calls.push(`strokeText:${t}`),
       fillText: (t: string) => calls.push(`fillText:${t}`),
       createLinearGradient: () => ({ addColorStop: () => {} }),
@@ -103,6 +111,7 @@ describe('TOWN Procedural Graffiti Renderers Suite (10 Styles)', () => {
       strokeStyle: '',
       lineWidth: 1,
       lineJoin: 'miter',
+      lineCap: 'butt',
       miterLimit: 10,
       shadowColor: '',
       shadowBlur: 0,
@@ -182,5 +191,46 @@ describe('TOWN Procedural Graffiti Renderers Suite (10 Styles)', () => {
     expect(ctx.calls).toContain('fillText:HELLO');
     expect(ctx.calls).toContain('fillText:TOWN');
     expect(ctx.calls).toContain('fillRect');
+  });
+
+  it('11. drawComplexWildstyleBurner: Extreme interlocking wildstyle with arrowheads', () => {
+    const ctx = createMockCtx();
+    drawComplexWildstyleBurner(ctx, 180, 90, 0xff3366);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('strokeText:TOWN');
+  });
+
+  it('12. drawChicanoGothicScript: Lowrider Old English calligraphy with diamond serifs', () => {
+    const ctx = createMockCtx();
+    drawChicanoGothicScript(ctx, 160, 80, 0xe0e0e0);
+    expect(ctx.calls).toContain('fillText:Town');
+    expect(ctx.calls).toContain('stroke');
+  });
+
+  it('13. drawKawaiiBubbleGraffiti: Pastel bubblegum letters with star flares', () => {
+    const ctx = createMockCtx();
+    drawKawaiiBubbleGraffiti(ctx, 160, 80, 0xff66cc);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('strokeText:TOWN');
+  });
+
+  it('14. drawBarcodeGlitchTag: Cyber-industrial stencil with barcode lines', () => {
+    const ctx = createMockCtx();
+    drawBarcodeGlitchTag(ctx, 160, 70, 0x00ff88);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('strokeRect');
+  });
+
+  it('15. drawStickerBombCluster: Collage of multiple overlapping mini-tags', () => {
+    const ctx = createMockCtx();
+    drawStickerBombCluster(ctx, 120, 80);
+    expect(ctx.calls).toContain('fillText:TOWN');
+  });
+
+  it('16. drawRibbonSplitMarkerTag: Split-nib two-tone calligraphy stroke', () => {
+    const ctx = createMockCtx();
+    drawRibbonSplitMarkerTag(ctx, 160, 75, 0xffaa00);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('stroke');
   });
 });

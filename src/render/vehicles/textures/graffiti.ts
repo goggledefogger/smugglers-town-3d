@@ -658,3 +658,351 @@ export function drawStickerSlapGraffiti(
 
   ctx.restore();
 }
+
+/**
+ * 11. Complex Wildstyle Burner
+ * Extreme interlocking letterforms with angular arrowheads, 3D bridge loops,
+ * and high-energy geometric energy shards.
+ */
+export function drawComplexWildstyleBurner(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  accentColor = 0xff3366
+): void {
+  ctx.save();
+  const text = 'TOWN';
+  const cx = w / 2;
+  const cy = h / 2;
+  const fontSize = Math.floor(h * 0.52);
+
+  ctx.translate(cx, cy);
+  ctx.rotate(-0.04);
+
+  // Background energy flash / explosion
+  ctx.fillStyle = 'rgba(255, 51, 102, 0.25)';
+  ctx.beginPath();
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    const r = i % 2 === 0 ? w * 0.48 : w * 0.32;
+    const x = Math.cos(a) * r;
+    const y = Math.sin(a) * (r * 0.4);
+    if (i === 0) ctx.moveTo(x, y);
+    else ctx.lineTo(x, y);
+  }
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.font = `italic 900 ${fontSize}px "Impact", "Arial Black", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // 1. Deep 3D Extrusion
+  ctx.fillStyle = '#080010';
+  for (let off = 16; off >= 2; off -= 2) {
+    ctx.fillText(text, -off * 0.7, off);
+  }
+
+  // 2. Heavy outer comic outline
+  ctx.strokeStyle = '#0a0014';
+  ctx.lineWidth = 14;
+  ctx.strokeText(text, 0, 0);
+
+  // 3. Multi-tier Wildstyle Burner Gradient Fill
+  const burnerGrad = ctx.createLinearGradient(-w / 2, -fontSize / 2, w / 2, fontSize / 2);
+  burnerGrad.addColorStop(0, '#ff0055');
+  burnerGrad.addColorStop(0.35, toHex(accentColor));
+  burnerGrad.addColorStop(0.7, '#ffcc00');
+  burnerGrad.addColorStop(1, '#ffffff');
+  ctx.fillStyle = burnerGrad;
+  ctx.fillText(text, 0, 0);
+
+  // 4. Wildstyle Arrow Flourishes on ends
+  ctx.fillStyle = toHex(accentColor);
+  // Left arrow
+  ctx.beginPath();
+  ctx.moveTo(-w * 0.42, 0);
+  ctx.lineTo(-w * 0.34, -12);
+  ctx.lineTo(-w * 0.36, -4);
+  ctx.lineTo(-w * 0.28, -4);
+  ctx.lineTo(-w * 0.28, 4);
+  ctx.lineTo(-w * 0.36, 4);
+  ctx.lineTo(-w * 0.34, 12);
+  ctx.closePath();
+  ctx.fill();
+
+  // Right arrow
+  ctx.beginPath();
+  ctx.moveTo(w * 0.42, 0);
+  ctx.lineTo(w * 0.34, -12);
+  ctx.lineTo(w * 0.36, -4);
+  ctx.lineTo(w * 0.28, -4);
+  ctx.lineTo(w * 0.28, 4);
+  ctx.lineTo(w * 0.36, 4);
+  ctx.lineTo(w * 0.34, 12);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * 12. Chicano Gothic Script
+ * Classic lowrider Old English street calligraphy with sharp diamond spurs
+ * and graceful ornamental flourishes.
+ */
+export function drawChicanoGothicScript(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  accentColor = 0xe0e0e0
+): void {
+  ctx.save();
+  const text = 'Town';
+  const cx = w / 2;
+  const cy = h / 2 - 4;
+  const fontSize = Math.floor(h * 0.56);
+
+  ctx.font = `italic 900 ${fontSize}px "Old English Text MT", "Palatino", "Georgia", serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Chrome / Silver drop shadow
+  ctx.fillStyle = '#060608';
+  ctx.fillText(text, cx + 4, cy + 4);
+
+  // Outline
+  ctx.strokeStyle = '#000000';
+  ctx.lineWidth = 8;
+  ctx.strokeText(text, cx, cy);
+
+  // Metallic Silver / Platinum Gradient Fill
+  const silverGrad = ctx.createLinearGradient(0, cy - fontSize / 2, 0, cy + fontSize / 2);
+  silverGrad.addColorStop(0, '#ffffff');
+  silverGrad.addColorStop(0.48, toHex(accentColor));
+  silverGrad.addColorStop(0.52, '#888899');
+  silverGrad.addColorStop(1, '#222233');
+  ctx.fillStyle = silverGrad;
+  ctx.fillText(text, cx, cy);
+
+  // Calligraphic underline flourish with diamond center
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2.5;
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.35, cy + fontSize * 0.38);
+  ctx.quadraticCurveTo(cx, cy + fontSize * 0.55, cx + w * 0.35, cy + fontSize * 0.38);
+  ctx.stroke();
+
+  // Diamond flourish at center
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.moveTo(cx, cy + fontSize * 0.44);
+  ctx.lineTo(cx + 6, cy + fontSize * 0.49);
+  ctx.lineTo(cx, cy + fontSize * 0.54);
+  ctx.lineTo(cx - 6, cy + fontSize * 0.49);
+  ctx.closePath();
+  ctx.fill();
+
+  ctx.restore();
+}
+
+/**
+ * 13. Kawaii Bubblegum Pop
+ * Sweet rounded pastel bubble letters with white star/heart glints
+ * and puffy cloud drop shadows.
+ */
+export function drawKawaiiBubbleGraffiti(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  accentColor = 0xff66cc
+): void {
+  ctx.save();
+  const text = 'TOWN';
+  const cx = w / 2;
+  const cy = h / 2 - 4;
+  const fontSize = Math.floor(h * 0.54);
+
+  ctx.font = `900 ${fontSize}px "Comic Sans MS", "Arial Rounded MT Bold", sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Puffy candy cloud shadow
+  ctx.fillStyle = '#4a0044';
+  ctx.fillText(text, cx + 5, cy + 6);
+
+  // Thick candy outline
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 12;
+  ctx.strokeText(text, cx, cy);
+  ctx.strokeStyle = '#330033';
+  ctx.lineWidth = 8;
+  ctx.strokeText(text, cx, cy);
+
+  // Sweet pastel gradient fill (Bubblegum pink to pastel lemon)
+  const candyGrad = ctx.createLinearGradient(0, cy - fontSize / 2, 0, cy + fontSize / 2);
+  candyGrad.addColorStop(0, '#ff99dd');
+  candyGrad.addColorStop(0.5, toHex(accentColor));
+  candyGrad.addColorStop(1, '#ffff99');
+  ctx.fillStyle = candyGrad;
+  ctx.fillText(text, cx, cy);
+
+  // Star glints
+  ctx.fillStyle = '#ffffff';
+  for (const [sx, sy] of [[cx - w * 0.26, cy - fontSize * 0.28], [cx + w * 0.22, cy - fontSize * 0.25]] as const) {
+    ctx.beginPath();
+    ctx.arc(sx, sy, 3.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillRect(sx - 7, sy - 1, 14, 2);
+    ctx.fillRect(sx - 1, sy - 7, 2, 14);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * 14. Barcode & Digital Stencil Glitch
+ * Technical cybernetic spray with halftone dot pattern and vertical barcode matrix.
+ */
+export function drawBarcodeGlitchTag(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  accentColor = 0x00ff88
+): void {
+  ctx.save();
+  const text = 'TOWN';
+  const cx = w / 2;
+  const cy = h / 2 - 6;
+  const fontSize = Math.floor(h * 0.46);
+
+  ctx.font = `900 ${fontSize}px "Impact", monospace, sans-serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Digital green / cyan glowing matrix
+  ctx.fillStyle = '#031a0e';
+  ctx.fillRect(cx - w * 0.44, cy - fontSize * 0.6, w * 0.88, fontSize * 1.2);
+
+  // Outer border with cut corners
+  ctx.strokeStyle = toHex(accentColor);
+  ctx.lineWidth = 2;
+  ctx.strokeRect(cx - w * 0.44, cy - fontSize * 0.6, w * 0.88, fontSize * 1.2);
+
+  // Stencil text
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText(text, cx, cy);
+
+  // Horizontal glitch slice cuts
+  ctx.fillStyle = '#031a0e';
+  ctx.fillRect(cx - w * 0.42, cy - 4, w * 0.84, 3);
+  ctx.fillRect(cx - w * 0.35, cy + 8, w * 0.7, 2);
+
+  // High-density barcode lines underneath
+  const by = cy + fontSize * 0.52;
+  ctx.fillStyle = toHex(accentColor);
+  for (let i = 0; i < 28; i++) {
+    const bx = cx - w * 0.38 + i * (w * 0.76 / 28);
+    const bw = i % 4 === 0 ? 3.5 : (i % 2 === 0 ? 2 : 1);
+    ctx.fillRect(bx, by, bw, 10);
+  }
+
+  ctx.restore();
+}
+
+/**
+ * 15. Sticker Bomb Cluster
+ * Multi-layer street collage of overlapping stickers and mini-tags.
+ */
+export function drawStickerBombCluster(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number
+): void {
+  ctx.save();
+  const cx = w / 2;
+  const cy = h / 2;
+
+  // 1. Base neon circular slap (tilted left)
+  ctx.save();
+  ctx.translate(cx - 24, cy + 4);
+  ctx.rotate(-0.14);
+  ctx.fillStyle = '#ffee00';
+  ctx.beginPath();
+  ctx.arc(0, 0, Math.min(w, h) * 0.38, 0, Math.PI * 2);
+  ctx.fill();
+  ctx.strokeStyle = '#111';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+  ctx.fillStyle = '#000';
+  ctx.font = '900 18px "Impact", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TOWN', 0, 0);
+  ctx.restore();
+
+  // 2. Overlapping rectangular postal badge (tilted right)
+  ctx.save();
+  ctx.translate(cx + 20, cy - 4);
+  ctx.rotate(0.12);
+  const bw = w * 0.48;
+  const bh = h * 0.52;
+  ctx.fillStyle = 'rgba(0,0,0,0.3)';
+  ctx.fillRect(-bw / 2 + 3, -bh / 2 + 3, bw, bh);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillRect(-bw / 2, -bh / 2, bw, bh);
+  ctx.fillStyle = '#ff3333';
+  ctx.fillRect(-bw / 2, -bh / 2, bw, bh * 0.3);
+  ctx.fillStyle = '#111';
+  ctx.font = 'italic 900 16px "Arial Black", sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText('TOWN', 0, bh * 0.2);
+  ctx.restore();
+
+  ctx.restore();
+}
+
+/**
+ * 16. Ribbon Split-Nib Calligraphy Tag
+ * Smooth two-tone ribbon marker strokes with calligraphic twist transitions.
+ */
+export function drawRibbonSplitMarkerTag(
+  ctx: CanvasRenderingContext2D,
+  w: number,
+  h: number,
+  accentColor = 0xffaa00
+): void {
+  ctx.save();
+  const text = 'TOWN';
+  const cx = w / 2;
+  const cy = h / 2;
+  const fontSize = Math.floor(h * 0.52);
+
+  ctx.font = `italic 900 ${fontSize}px "Georgia", "Impact", serif`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+
+  // Two-tone split stroke (Upper half orange, lower half hot red)
+  ctx.fillStyle = '#ff2200';
+  ctx.fillText(text, cx + 2, cy + 2);
+
+  const ribbonGrad = ctx.createLinearGradient(0, cy - fontSize / 2, 0, cy + fontSize / 2);
+  ribbonGrad.addColorStop(0, '#ffffff');
+  ribbonGrad.addColorStop(0.4, toHex(accentColor));
+  ribbonGrad.addColorStop(1, '#ff0055');
+  ctx.fillStyle = ribbonGrad;
+  ctx.fillText(text, cx, cy);
+
+  // Underline flourish with sharp ribbon tail
+  ctx.strokeStyle = toHex(accentColor);
+  ctx.lineWidth = 4;
+  ctx.lineCap = 'round';
+  ctx.beginPath();
+  ctx.moveTo(cx - w * 0.36, cy + fontSize * 0.38);
+  ctx.bezierCurveTo(cx - w * 0.1, cy + fontSize * 0.48, cx + w * 0.1, cy + fontSize * 0.3, cx + w * 0.38, cy + fontSize * 0.44);
+  ctx.stroke();
+
+  ctx.restore();
+}
+
