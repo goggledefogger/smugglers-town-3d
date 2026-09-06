@@ -640,6 +640,20 @@ if (urlParams) {
 let last = performance.now();
 let simTime = 0;
 
+// SPIKE hook (temporary): lets the harness build a navmesh from the live tiles
+(window as unknown as Record<string, unknown>).__spike = {
+  async run(params: unknown) {
+    const { runNavmeshSpike } = await import('./spike/navmeshSpike.ts');
+    if (!tiles) return { error: 'no tiles' };
+    const b = world.player?.body;
+    const centre = { x: b?.pos.x ?? 0, y: b?.pos.y ?? 0, z: b?.pos.z ?? 0 };
+    const hf = world.terrainProvider.heightfield;
+    return runNavmeshSpike(tiles.group, { ...(params as Record<string, unknown>), centre } as never,
+      (x, z) => hf.sample(x, z));
+  },
+  get ready() { return !!tiles; }
+};
+
 function frame(now: number): void {
   const rawDt = (now - last) / 1000;
   last = now;

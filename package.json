@@ -17,9 +17,11 @@
     "smoke": "node scripts/smoke.mjs"
   },
   "dependencies": {
+    "@recast-navigation/three": "^0.43.1",
     "@trystero-p2p/firebase": "^0.25.4",
     "firebase": "^12.18.0",
     "lit": "3.2.1",
+    "recast-navigation": "^0.43.1",
     "three": "0.169.0"
   },
   "devDependencies": {
