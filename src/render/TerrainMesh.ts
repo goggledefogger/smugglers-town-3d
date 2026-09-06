@@ -25,24 +25,87 @@ export interface TileFootprint {
   readonly maxZ: number;
 }
 
-function createGridTexture(): CanvasTexture | null {
+/**
+ * Procedural micro-surface sand and dune ripple texture for procedural terrain.
+ * Multiplied over vertex colors to provide crisp, high-resolution physical sand & pebble
+ * grain detail up close to the vehicle without any additional draw calls or fill-rate penalty.
+ */
+function createSandDetailTexture(anisotropy: number): CanvasTexture | null {
   if (typeof document === 'undefined') return null;
   try {
     const c = document.createElement('canvas');
-    c.width = 64;
-    c.height = 64;
+    c.width = 512;
+    c.height = 512;
     const ctx = c.getContext('2d');
     if (!ctx) return null;
-    ctx.fillStyle = TERRAIN_COLORS.gridBg;
-    ctx.fillRect(0, 0, 64, 64);
-    ctx.strokeStyle = TERRAIN_COLORS.gridLine;
-    ctx.lineWidth = 2;
-    ctx.strokeRect(0, 0, 64, 64);
+
+    // Neutral base tone (~0.93 luminance) so multiplying by vertex colors preserves theme hue
+    ctx.fillStyle = '#eeebe4';
+    ctx.fillRect(0, 0, 512, 512);
+
+    // 1. Natural wind-blown dune ripple ridges (transverse ripples)
+    for (let y = 0; y < 512; y++) {
+      const w1 = Math.sin((y / 512) * Math.PI * 16);
+      const w2 = Math.sin((y / 512) * Math.PI * 32 + 1.2);
+      const intensity = w1 * 0.045 + w2 * 0.025;
+      const alpha = Math.abs(intensity);
+      ctx.fillStyle = intensity > 0 ? `rgba(255, 255, 255, ${alpha})` : `rgba(160, 145, 125, ${alpha})`;
+      ctx.fillRect(0, y, 512, 1);
+    }
+
+    // 2. High-frequency sand grain & pebble noise
+    const imgData = ctx.getImageData(0, 0, 512, 512);
+    const d = imgData.data;
+    let s = 123456789;
+    const nextRng = () => {
+      s = (s * 1664525 + 1013904223) >>> 0;
+      return (s & 0xff) / 255;
+    };
+
+    for (let i = 0; i < d.length; i += 4) {
+      const n = (nextRng() - 0.5) * 26;
+      d[i] = Math.max(0, Math.min(255, d[i]! + n));
+      d[i + 1] = Math.max(0, Math.min(255, d[i + 1]! + n * 0.95));
+      d[i + 2] = Math.max(0, Math.min(255, d[i + 2]! + n * 0.85));
+    }
+    ctx.putImageData(imgData, 0, 0);
+
     const tex = new CanvasTexture(c);
     tex.wrapS = tex.wrapT = RepeatWrapping;
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.generateMipmaps = true;
+    tex.anisotropy = Math.max(anisotropy, 8);
+    return tex;
+  } catch {
+    return null;
+  }
+}
+
+function createGridTexture(anisotropy: number): CanvasTexture | null {
+  if (typeof document === 'undefined') return null;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 256;
+    c.height = 256;
+    const ctx = c.getContext('2d');
+    if (!ctx) return null;
+    ctx.fillStyle = TERRAIN_COLORS.gridBg;
+    ctx.fillRect(0, 0, 256, 256);
+
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.02)';
+    ctx.fillRect(4, 4, 248, 248);
+
+    ctx.strokeStyle = TERRAIN_COLORS.gridLine;
+    ctx.lineWidth = 4;
+    ctx.strokeRect(2, 2, 252, 252);
+
+    const tex = new CanvasTexture(c);
+    tex.wrapS = tex.wrapT = RepeatWrapping;
+    tex.minFilter = LinearMipmapLinearFilter;
+    tex.magFilter = LinearFilter;
+    tex.generateMipmaps = true;
+    tex.anisotropy = Math.max(anisotropy, 8);
     return tex;
   } catch {
     return null;
@@ -52,6 +115,7 @@ function createGridTexture(): CanvasTexture | null {
 export class TerrainMesh {
   private _mesh: Mesh | null = null;
   private _texture: CanvasTexture | null = null;
+  private _sandTexture: CanvasTexture | null = null;
   private _gridTexture: CanvasTexture | null = null;
   private _photorealMat: MeshStandardMaterial | null = null;
   private _game3dMat: MeshStandardMaterial | null = null;
@@ -70,6 +134,10 @@ export class TerrainMesh {
 
   get texture(): CanvasTexture | null {
     return this._texture;
+  }
+
+  get sandTexture(): CanvasTexture | null {
+    return this._sandTexture;
   }
 
   get gridTexture(): CanvasTexture | null {
@@ -147,7 +215,7 @@ export class TerrainMesh {
       tex.minFilter = LinearMipmapLinearFilter;
       tex.magFilter = LinearFilter;
       tex.generateMipmaps = true;
-      tex.anisotropy = anisotropy;
+      tex.anisotropy = Math.max(anisotropy, 8);
       tex.needsUpdate = true;
       this._texture = tex;
 
@@ -185,10 +253,19 @@ export class TerrainMesh {
         colors[i * 3 + 2] = col.b;
       }
       geo.setAttribute('color', new BufferAttribute(colors, 3));
+
+      // Procedural micro-surface sand detail texture multiplied over vertex colors
+      const sandTex = createSandDetailTexture(anisotropy);
+      if (sandTex) {
+        sandTex.repeat.set(size / 32, size / 32);
+        this._sandTexture = sandTex;
+      }
+
       this._photorealMat = new MeshStandardMaterial({
         vertexColors: true,
-        roughness: 0.95,
-        metalness: 0,
+        ...(sandTex ? { map: sandTex } : {}),
+        roughness: 0.92,
+        metalness: 0.02,
         polygonOffset: true,
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
@@ -196,7 +273,7 @@ export class TerrainMesh {
     }
 
     // 2. Build Game 3D stylized material (crisp 10m grid)
-    const gridTex = createGridTexture();
+    const gridTex = createGridTexture(anisotropy);
     if (gridTex) {
       gridTex.repeat.set(size / 10, size / 10);
       this._gridTexture = gridTex;
@@ -317,10 +394,17 @@ export class TerrainMesh {
       this._game3dMat?.dispose();
       this._mesh = null;
     }
+    if (this._sandTexture) {
+      this._sandTexture.dispose();
+      this._sandTexture = null;
+    }
+    if (this._gridTexture) {
+      this._gridTexture.dispose();
+      this._gridTexture = null;
+    }
     this._photorealMat = null;
     this._game3dMat = null;
     this._texture = null;
-    this._gridTexture = null;
     this._sourceCanvas = null;
     this._workingCanvas = null;
     this._lastNeutralizedGeneration = -1;

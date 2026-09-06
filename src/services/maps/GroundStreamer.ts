@@ -231,7 +231,7 @@ export class GroundStreamer {
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.generateMipmaps = true;
-    tex.anisotropy = this.anisotropy;
+    tex.anisotropy = Math.max(this.anisotropy, 8);
     tex.needsUpdate = true;
 
     const segs = 16;
