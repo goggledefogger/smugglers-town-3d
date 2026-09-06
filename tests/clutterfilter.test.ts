@@ -61,6 +61,7 @@ describe('TileClutterFilter', () => {
     expect(shader.vertexShader).toContain('uniform sampler2D uClutterGround');
     expect(shader.vertexShader).toContain('#include <begin_vertex>\n');
     expect(shader.vertexShader).toContain('texelFetch(uClutterGround');
+    expect(shader.vertexShader).toContain('uClutterMask, cuv).r * 255.0');
     expect(shader.vertexShader).toContain('#include <project_vertex>\n');
     expect(shader.vertexShader).toContain('vNormal');
     expect(shader.fragmentShader).toBe('void main() {}');

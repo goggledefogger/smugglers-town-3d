@@ -46,7 +46,9 @@ float cClutterDy = 0.0;
 if (uClutterMode > 0.5) {
   vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 cuv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
-  float cStructure = texture2D(uClutterMask, cuv).r;
+  // an R8 UNSIGNED_BYTE texture samples normalised, so the mask's 1 reads as 1/255:
+  // scale back up before comparing, bilinear blends between cells still land in 0..1
+  float cStructure = min(1.0, texture2D(uClutterMask, cuv).r * 255.0);
   vec2 cf = cuv * uClutterField.y;
   vec2 c0 = min(floor(cf), uClutterField.y - 1.0);
   vec2 ct = cf - c0;
