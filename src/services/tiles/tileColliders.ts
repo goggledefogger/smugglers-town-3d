@@ -694,35 +694,56 @@ export function collidersFromRasters(
     outDeckGrid.fill(NO_DATA);
   }
 
+  // Which masked rasters cover each cell. Footprints only overlap at tile
+  // edges, so one slot per cell plus a map for the rest; without this every
+  // tall cell scanned all ~300 rasters of a city, 45 ms per rebuild.
+  const firstRaster = new Int32Array(n * n).fill(-1);
+  const moreRasters = new Map<number, number[]>();
+  rasters.forEach((r, ri) => {
+    if (!r || !r.mask || r.y0 === undefined) return;
+    for (let j = 0; j < r.h; j++) {
+      for (let i = 0; i < r.w; i++) {
+        const c = (r.j0 + j) * n + r.i0 + i;
+        if (firstRaster[c]! < 0) firstRaster[c] = ri;
+        else {
+          const l = moreRasters.get(c);
+          if (l) l.push(ri);
+          else moreRasters.set(c, [ri]);
+        }
+      }
+    }
+  });
+
+  /** True if raster `r` has no geometry in the vertical band [g + 1 bin, y2] at cell c. */
+  const rasterClear = (r: TileRaster, c: number, g: number, y2: number): boolean => {
+    const j = Math.floor(c / n) - r.j0;
+    const i = (c % n) - r.i0;
+    const m = r.mask![j * r.w + i]!;
+    if (!m) return true;
+    // Clearance begins above the ground road surface (at least 1 full height bin above ground)
+    const gBin = Math.floor((g - r.y0!) / BIN_SIZE);
+    const b1 = Math.max(0, gBin + 1);
+    const b2 = Math.min(31, Math.floor((y2 - r.y0!) / BIN_SIZE));
+    if (b1 > b2) return true;
+    const rangeMask = (0xFFFFFFFF >>> (31 - (b2 - b1))) << b1;
+    // Geometry in the driving clearance zone (wall, pier, column)
+    return (m & rangeMask) === 0;
+  };
+
   /**
    * Check if the vehicle driving zone above the ground [g + 1.2m, min(g + 4.5m, t - 1.5m)]
    * has no geometry in any tile raster covering cell c. If clear, the space is an open underpass / bridge span.
    */
   const hasGroundClearance = (c: number, g: number, t: number): boolean => {
+    const ri = firstRaster[c]!;
+    if (ri < 0) return false;
     const y2 = Math.min(g + thresholds.clearanceDriveMaxM, t - thresholds.clearanceTopMarginM);
-    let foundRaster = false;
-    for (const r of rasters) {
-      if (!r || !r.mask || r.y0 === undefined) continue;
-      const j = Math.floor(c / n) - r.j0;
-      const i = (c % n) - r.i0;
-      if (i < 0 || i >= r.w || j < 0 || j >= r.h) continue;
-      foundRaster = true;
-      const idx = j * r.w + i;
-      const m = r.mask[idx]!;
-      if (!m) continue;
-      // Clearance begins above the ground road surface (at least 1 full height bin above ground)
-      const gBin = Math.floor((g - r.y0) / BIN_SIZE);
-      const b1 = Math.max(0, gBin + 1);
-      const b2 = Math.min(31, Math.floor((y2 - r.y0) / BIN_SIZE));
-      if (b1 <= b2) {
-        const rangeMask = (0xFFFFFFFF >>> (31 - (b2 - b1))) << b1;
-        if ((m & rangeMask) !== 0) {
-          // Geometry exists in the driving clearance zone (wall, pier, column)
-          return false;
-        }
-      }
+    if (!rasterClear(rasters[ri]!, c, g, y2)) return false;
+    const more = moreRasters.get(c);
+    if (more) {
+      for (const k of more) if (!rasterClear(rasters[k]!, c, g, y2)) return false;
     }
-    return foundRaster;
+    return true;
   };
 
   const getGroundY = (c: number): number => {
