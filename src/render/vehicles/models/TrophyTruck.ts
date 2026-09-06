@@ -12,8 +12,9 @@ export function buildTrophyTruck(b: VehicleMeshBuilder, p: VehiclePalette, r: nu
   // Chassis
   b.box(2.1, 0.5, 4.2, p.body, 0, y, 0);
 
-  // Cab and glass
-  b.box(2.0, 0.7, 1.75, p.paint, 0, y + 0.6, -0.55);
+  // Cab and glass: top face features full-coverage roof street art
+  const cabMats = [p.paint, p.paint, p.roof, p.paint, p.paint, p.paint];
+  b.box(2.0, 0.7, 1.75, cabMats, 0, y + 0.6, -0.55);
   b.box(2.03, 0.34, 1.35, p.glass, 0, y + 0.7, -0.55);
   b.box(1.85, 0.08, 0.7, p.glass, 0, y + 0.72, -1.45, -0.62);
 

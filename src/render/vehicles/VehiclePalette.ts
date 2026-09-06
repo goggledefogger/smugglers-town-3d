@@ -4,7 +4,7 @@ import {
 import type { VehicleStats } from '../../core/physics/vehicleStats.ts';
 import type { VehiclePalette } from './types.ts';
 import {
-  liverySide, liveryTop, liveryRear, liveryTailgate, liveryHood
+  liverySide, liveryTop, liveryRoof, liveryRear, liveryTailgate, liveryHood
 } from './textures/liveryTextures.ts';
 import { tread, sidewall } from './textures/wheelTextures.ts';
 
@@ -37,6 +37,7 @@ export function createVehiclePalette(stats: VehicleStats, teamColor: number): Ve
   const right = livery(liverySide(stats, teamColor, false));
   const left = livery(liverySide(stats, teamColor, true));
   const top = livery(liveryTop(stats, teamColor));
+  const roof = livery(liveryRoof(stats, teamColor));
   const rear = livery(liveryRear(stats, teamColor));
   const tailgate = livery(liveryTailgate(stats, teamColor));
   const hood = livery(liveryHood(stats, teamColor));
@@ -53,6 +54,7 @@ export function createVehiclePalette(stats: VehicleStats, teamColor: number): Ve
     // Box faces: [+x right, -x left, +y top, -y bottom, +z rear, -z front]
     body: [right, left, top, paint, rear, paint],
     top,
+    roof,
     rear,
     tailgate,
     hood,

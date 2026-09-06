@@ -32,6 +32,10 @@ export function buildDuneBuggy(b: VehicleMeshBuilder, p: VehiclePalette, r: numb
   }
   for (const x of [-0.8, 0.8]) b.cyl(0.05, 1.4, p.accent, x, y + 1.3, 0.2, 'z', 6);
 
+  // Roll cage roof canopy plate with full-coverage graffiti on the top face
+  const canopyMats = [p.paint, p.paint, p.roof, p.dark, p.paint, p.paint];
+  b.box(1.5, 0.04, 1.3, canopyMats, 0, y + 1.32, 0.2);
+
   // Headlights and taillights
   for (const x of [-0.45, 0.45]) b.cyl(0.14, 0.08, p.head, x, y + 0.15, -2.15, 'z', 10);
   for (const x of [-0.6, 0.6]) b.box(0.3, 0.12, 0.06, p.tail, x, y + 0.1, 1.85);

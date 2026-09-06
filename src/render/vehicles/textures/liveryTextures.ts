@@ -472,3 +472,63 @@ export function liveryHood(stats: VehicleStats, teamColor: number): CanvasTextur
     ctx.restore();
   });
 }
+
+/**
+ * Dedicated cabin/canopy roof panel (512x512 square high-resolution).
+ * Renders prominent, full-coverage graffiti directly on top of the vehicle cabin roof,
+ * ensuring maximum visibility from the third-person chase camera and overhead views.
+ */
+export function liveryRoof(stats: VehicleStats, teamColor: number): CanvasTexture {
+  return texture(`roof:${stats.name}:${teamColor}:v1`, 512, 512, ctx => {
+    const W = 512, H = 512;
+    ctx.fillStyle = hex(teamColor);
+    ctx.fillRect(0, 0, W, H);
+
+    // Roof ambient gradient (slight radial vignette)
+    const vignette = ctx.createRadialGradient(W / 2, H / 2, 40, W / 2, H / 2, W * 0.7);
+    vignette.addColorStop(0, 'rgba(255,255,255,0.14)');
+    vignette.addColorStop(0.7, 'rgba(0,0,0,0)');
+    vignette.addColorStop(1, 'rgba(0,0,0,0.38)');
+    ctx.fillStyle = vignette;
+    ctx.fillRect(0, 0, W, H);
+
+    // Outer roof border / weather stripping
+    ctx.strokeStyle = '#141416';
+    ctx.lineWidth = 12;
+    ctx.strokeRect(6, 6, W - 12, H - 12);
+
+    // Centerpiece Roof Street Art by Archetype
+    if (stats.name === 'Monster Truck') {
+      // Monster Truck: Heavy-Metal Liquid Chrome Wildstyle
+      drawChromeWildstyleGraffiti(ctx, W, H * 0.72, stats.color);
+    } else if (stats.name === 'Rally Car') {
+      // Rally Car: Extreme Complex Wildstyle Burner with arrow flourishes
+      // Twin racing background stripes
+      ctx.fillStyle = hex(stats.color);
+      ctx.fillRect(W * 0.15, 0, 48, H);
+      ctx.fillRect(W * 0.85 - 48, 0, 48, H);
+      drawComplexWildstyleBurner(ctx, W * 0.94, H * 0.7, stats.color);
+    } else if (stats.name === 'SUV') {
+      // SUV: Massive Urban Blockbuster 3D "T O W N"
+      drawBlockbusterGraffiti(ctx, W * 0.92, H * 0.7, stats.color);
+    } else if (stats.name === 'Trophy Truck') {
+      // Trophy Truck: Desert Wasteland Military Stencil
+      drawMilitaryStencilGraffiti(ctx, W * 0.9, H * 0.65, stats.color);
+    } else {
+      // Dune Buggy: Skate-Punk Mop Squeezer Tag with dripping runs
+      drawMopDripGraffiti(ctx, W * 0.88, H * 0.72, stats.color);
+    }
+
+    // Corner sticker slaps on the roof
+    ctx.save();
+    ctx.translate(W - 80, 50);
+    drawStickerSlapGraffiti(ctx, 70, 48);
+    ctx.restore();
+
+    ctx.save();
+    ctx.translate(60, H - 55);
+    drawBarcodeGlitchTag(ctx, 80, 42, stats.color);
+    ctx.restore();
+  });
+}
+

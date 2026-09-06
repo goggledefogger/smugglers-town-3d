@@ -24,6 +24,7 @@ export interface VehiclePalette {
   /** Body box faces: [+x right, -x left, +y top, -y bottom, +z back/rear, -z front]. */
   readonly body: MeshPhysicalMaterial[];
   readonly top: MeshPhysicalMaterial;
+  readonly roof: MeshPhysicalMaterial;
   readonly rear: MeshPhysicalMaterial;
   readonly tailgate: MeshPhysicalMaterial;
   readonly hood: MeshPhysicalMaterial;

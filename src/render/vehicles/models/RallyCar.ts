@@ -11,8 +11,9 @@ export function buildRallyCar(b: VehicleMeshBuilder, p: VehiclePalette, r: numbe
   // Main body: p.body face 4 (+Z) renders the Drift Tag "TOWN" across the rear trunk/hatch
   b.box(2.1, 0.5, 4.2, p.body, 0, y, 0);
 
-  // Cabin and glasshouse
-  b.box(1.85, 0.5, 1.9, p.paint, 0, y + 0.45, 0.35);
+  // Cabin and glasshouse: top face displays full-coverage roof street art
+  const cabinMats = [p.paint, p.paint, p.roof, p.paint, p.paint, p.paint];
+  b.box(1.85, 0.5, 1.9, cabinMats, 0, y + 0.45, 0.35);
   b.box(1.8, 0.08, 1.0, p.glass, 0, y + 0.5, -0.78, -0.62); // Raked windshield
   b.box(1.7, 0.08, 0.75, p.glass, 0, y + 0.5, 1.42, 0.7);   // Rear window
   b.box(1.86, 0.28, 1.5, p.glass, 0, y + 0.52, 0.35);       // Side windows
@@ -22,8 +23,9 @@ export function buildRallyCar(b: VehicleMeshBuilder, p: VehiclePalette, r: numbe
     b.box(0.03, 0.16, 3.7, p.accent, x, y + 0.08, 0);
   }
 
-  // High-downforce rear spoiler
-  b.box(2.0, 0.06, 0.42, p.accent, 0, y + 0.85, 1.95);
+  // High-downforce rear spoiler with top graffiti accent
+  const spoilerMats = [p.accent, p.accent, p.roof, p.accent, p.accent, p.accent];
+  b.box(2.0, 0.06, 0.42, spoilerMats, 0, y + 0.85, 1.95);
   for (const x of [-0.7, 0.7]) {
     b.box(0.08, 0.4, 0.08, p.dark, x, y + 0.62, 1.95);
   }

@@ -21,6 +21,7 @@ import {
   drawRibbonSplitMarkerTag,
   liverySide,
   liveryTop,
+  liveryRoof,
   liveryRear,
   liveryTailgate,
   liveryHood
@@ -69,6 +70,12 @@ describe('Modular Vehicles Architecture', () => {
     expect(liveryTop(monster, 0xaa55ff)).toBeDefined();
     expect(liveryTop(rally, 0xff4444)).toBeDefined();
     expect(liveryTop(suv, 0x3399ff)).toBeDefined();
+
+    expect(liveryRoof(rally, 0xff4444)).toBeDefined();
+    expect(liveryRoof(suv, 0x3399ff)).toBeDefined();
+    expect(liveryRoof(buggy, 0xffcc33)).toBeDefined();
+    expect(liveryRoof(trophy, 0x33cc66)).toBeDefined();
+    expect(liveryRoof(monster, 0xaa55ff)).toBeDefined();
 
     expect(liveryRear(suv, 0x3399ff)).toBeDefined();
     expect(liveryRear(rally, 0xff4444)).toBeDefined();

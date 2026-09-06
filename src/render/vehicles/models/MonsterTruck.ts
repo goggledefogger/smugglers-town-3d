@@ -29,7 +29,7 @@ export function buildMonsterTruck(b: VehicleMeshBuilder, p: VehiclePalette, r: n
   b.box(2.1, 0.5, 4.2, p.body, 0, y, 0);
 
   // Cab: top roof face features the Heavy-Metal Chrome Wildstyle "TOWN" graffiti
-  const cabMats = [p.paint, p.paint, p.top, p.paint, p.paint, p.paint];
+  const cabMats = [p.paint, p.paint, p.roof, p.paint, p.paint, p.paint];
   b.box(2.0, 0.7, 1.75, cabMats, 0, y + 0.6, -0.55);
 
   b.box(2.03, 0.34, 1.35, p.glass, 0, y + 0.7, -0.55); // Side glass

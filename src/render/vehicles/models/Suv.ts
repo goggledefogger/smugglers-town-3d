@@ -11,8 +11,9 @@ export function buildSuv(b: VehicleMeshBuilder, p: VehiclePalette, r: number): V
   // Main body box: face 4 (+Z) carries the NYC Subway Bubble Throwie "TOWN"
   b.box(2.2, 0.8, 4.0, p.body, 0, y, 0);
 
-  // Cabin and windows
-  b.box(2.0, 0.75, 2.5, p.paint, 0, y + 0.75, 0.1);
+  // Cabin: top face displays full-coverage roof street art between rack rails
+  const cabinMats = [p.paint, p.paint, p.roof, p.paint, p.paint, p.paint];
+  b.box(2.0, 0.75, 2.5, cabinMats, 0, y + 0.75, 0.1);
   b.box(2.03, 0.4, 2.25, p.glass, 0, y + 0.85, 0.1);
   b.box(1.9, 0.08, 0.75, p.glass, 0, y + 0.85, -1.2, -0.62); // Windshield
 
