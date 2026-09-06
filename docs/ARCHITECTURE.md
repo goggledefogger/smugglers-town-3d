@@ -390,6 +390,25 @@ To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
 This mode serves as both an arcade visual option and the primary QA diagnostic view:
 what you see is physically what you hit by construction, with zero invisible walls.
 
+### Street clutter filter (`render/TileClutterFilter.ts`)
+
+Google's tiles bake parked cars, kerbs and street furniture into the same mesh
+as the buildings, so nothing can be hidden by object. Instead every tile
+material is patched through `onBeforeCompile` to read two textures the physics
+already owns: the ground heightfield, and the collider pass's structure mask
+(building, deck or ramp cells). Outside structure cells the filter either
+flattens geometry under 2.5 m onto the ground plane, turning parked cars into
+road decals while facades keep their ground floors, or discards it entirely,
+leaving buildings and trees over streamed satellite ground. Hidden is the
+default. Every patched material shares one set of uniform objects, so switching
+modes is a value write and a ground refinement is a re-upload, never a
+recompile.
+
+**This is render-side only.** The colliders are built from the same rasters
+regardless of mode, so anything the filter hides is still solid. That is a
+deliberate visual-versus-collision mismatch and worth remembering when a street
+looks clear but drives blocked.
+
 ## 3D Tiles, Collision & Alternative Architectures
 
 Extracting gameplay physics from Google Photorealistic 3D Tiles is a fundamental
@@ -402,7 +421,7 @@ patterns:
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
 | **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
-| **D. Slope-Adaptive Morphology** *(GIS / PMF Standard)* | Scale morphological building thresholds with terrain gradient ($\text{rise} = \text{base} + s \cdot \tan\theta$). | Unifies flat cities (New Orleans, Portland) and steep knolls (SF hills) without arbitrary rule branching. | Requires local slope calculation during opening pass. | **Planned enhancement** for collider pipeline. |
+| **D. Slope-Adaptive Morphology** *(GIS / PMF Standard)* | Scale morphological building thresholds with terrain gradient ($\text{rise} = \text{base} + s \cdot \tan\theta$). | Would unify flat and steep cities without rule branching, if slope were the driver. | Opening is exact on a constant grade, so slope is the wrong variable: measured residual moves 0.32-1.67 m across the slope range but 0.17-4.87 m across curvature. | **Disproven.** See `MAP-PIPELINE-BRIEF.md`; `slopeAdaptiveRiseCoeff` is declared and never read. |
 | **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Candidate for v2 relocation**. |
 
 ## UI notes
@@ -485,24 +504,40 @@ haze below; the fog takes the horizon color.
 The game has to run on modest machines, so cost scales rather than being
 fixed:
 
-- **Adaptive resolution** (`GameRenderer.adapt`): the pixel ratio steps down
-  when frames average under 45 fps and back up when they run under 17 ms,
-  between half and the display's native ratio. Resolution is the knob that
-  scales GPU cost on every machine without changing what the game looks like
-  up close.
+- **Adaptive resolution** (`GameRenderer.adapt`): the base pixel ratio is 1.0
+  on standard displays and capped at 1.5 on high-DPI ones, and three discrete
+  tiers (1.0, 0.86, 0.74) multiply it. A tier change resizes the canvas and
+  reallocates the multisampled backbuffer, roughly a 150 ms stall, so it must
+  answer only sustained GPU load: the trigger is the **median** of the last
+  1.5 s, after a 5 s grace and with 5 s between changes. It used to trigger on
+  a moving average, which any single streaming hitch dragged over the line, so
+  the scaler was itself a reliable source of stutter at match start. The 1.5
+  cap was measured rather than guessed: on an M1 Pro driving Manhattan, 1.25
+  holds 120 Hz while 1.5 and 2.0 both hold a locked 60 Hz.
 - **Draw calls**: props are two `InstancedMesh`es for the whole field;
   vehicles are ~25 meshes each; tiles are one mesh each and capped
   (`MAX_TILES`).
 - **Physics broadphase**: building colliders live in a 40-unit spatial hash;
   each car tests only the 3×3 cells around it instead of every box in the
   city.
-- **Nav**: BFS fields are cached per target and only recomputed when the
-  target moves; the grid is 20 m so a field is ~78k cells (a few ms).
+- **Nav**: the grid is 6 m over the 5600 m field, so a full sweep is ~870k
+  cells and measured 25-60 ms. Fields are cached per target, and the BFS now
+  **expands lazily**, only as far as the cell being asked about. A cell's
+  distance is final on discovery and every neighbour nearer the target is
+  discovered before it, so routing is identical to a full sweep. Respawn asks
+  a local clearance window instead of a whole-grid distance transform.
 - **HUD**: the store pushes at 10 Hz; health-bar textures re-upload only when
   integrity changes; the direction arrow bypasses the store.
-- Known hitches: collider rebuilds during tile streaming (~15–30 ms every
-  1.5 s while tiles change) and the initial tile rasterization — candidates
-  for a worker (see ROADMAP).
+- **Off the frame**: what makes this game feel bad is single-frame stalls, not
+  average framerate — p95 was a perfect 16.7 ms while 60-200 ms stalls landed
+  about once a second. Collider rebuilds moved to a Web Worker; the terrain
+  re-drape copies heights straight from the heightfield grid and takes normals
+  by central differences instead of sampling 315k vertices; tile programs and
+  textures are compiled and uploaded as each tile lands rather than when it
+  first enters the frustum; and the satellite footprint repaint, a 3840²
+  re-upload with mipmaps, is throttled.
+- Remaining known costs: tile rasterization on the main thread, ground-builder
+  completion (~15-25 ms), and satellite patch decode (~10 ms each).
 
 Future work is tracked in [`ROADMAP.md`](ROADMAP.md).
 
