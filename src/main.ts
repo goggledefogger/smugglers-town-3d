@@ -107,6 +107,7 @@ const desertHf = new Heightfield(config.world.mapHalf * 2, 256, desertData);
 const desertTerrain = createDesertTerrain(desertHf);
 
 let game = new Game(desertTerrain, { events, store });
+if (typeof window !== 'undefined') (window as any).__game = game;
 /** What the renderer draws: the local game, or a mirrored world while online. */
 let world: WorldView = game;
 let online: RunningMatch | null = null;
@@ -123,7 +124,7 @@ const renderer = new GameRenderer({ canvas });
 const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
-const pickups = new Pickups(renderer.scene);
+const pickups = new Pickups(renderer.scene, () => renderer.camera);
 const cameraRig = new CameraRig(
   renderer.camera, () => world.terrainProvider.heightfield, (a, b) => world.lineOfSight(a, b)
 );
