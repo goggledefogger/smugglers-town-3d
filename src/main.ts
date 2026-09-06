@@ -632,10 +632,12 @@ function frame(now: number): void {
     if (groundBuilder && tiles) {
       const finished = groundBuilder.step(1.5);
       if (finished && groundBuilder.result) {
-        game.terrainProvider.heightfield.copyFrom(
-          Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell)
-        );
-        terrainMesh.refresh(game.terrainProvider.heightfield);
+        const refined = Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell);
+        world.terrainProvider.heightfield.copyFrom(refined);
+        if (game && (game as unknown) !== world) {
+          game.terrainProvider.heightfield.copyFrom(refined);
+        }
+        terrainMesh.refresh(world.terrainProvider.heightfield);
         if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;
       }
