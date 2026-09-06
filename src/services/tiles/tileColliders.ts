@@ -86,6 +86,10 @@ export interface ColliderThresholds {
   readonly insetExteriorStreetM: number;
   /** Inset for isolated single-cell columns/piers (2.8m to hug structural pillars). */
   readonly insetIsolatedColumnM: number;
+  /** Max bicubic smoothing error in meters between 87m DEM terrain and 10m photogrammetry on steep terrain. */
+  readonly terrainSmoothingToleranceM: number;
+  /** Slope-adaptive rise coefficient scaling building rise with local terrain gradient tan(theta). */
+  readonly slopeAdaptiveRiseCoeff: number;
 }
 
 export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
@@ -117,7 +121,9 @@ export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
   driveableMaxTerrainRiseM: 8.0,
   driveableBaseToleranceM: 1.2,
   insetExteriorStreetM: 1.0,
-  insetIsolatedColumnM: 2.8
+  insetIsolatedColumnM: 2.8,
+  terrainSmoothingToleranceM: 8.0,
+  slopeAdaptiveRiseCoeff: 12.0
 };
 
 /** 10 units = 10 m cells. */
@@ -718,7 +724,14 @@ export function collidersFromRasters(
   };
 
   const getGroundY = (c: number): number => {
-    return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+    const gMorph = ground[c];
+    if (gMorph !== NO_DATA && gMorph !== undefined) {
+      if (terrainTop[c] !== NO_DATA && terrainTop[c] !== undefined) {
+        return Math.max(gMorph, terrainTop[c]! - thresholds.terrainSmoothingToleranceM);
+      }
+      return gMorph;
+    }
+    return terrainTop[c]!;
   };
 
   /**
@@ -1044,6 +1057,10 @@ export function collidersFromRasters(
     // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
+    // An object can only be a building if it also rises above the underlying DEM terrain.
+    // This prevents morphological opening from shaving off isolated natural buttes, hills, and knolls.
+    const terr = terrainTop[c];
+    if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
     // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
     if (isDriveableGround[c]) return false;
