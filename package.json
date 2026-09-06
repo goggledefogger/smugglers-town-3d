@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "Smugglers Town 3D: Turf Wars \u2014 a 4v4 arcade vehicle combat game with real-world terrain",
+  "description": "Smugglers Town 3D: World Tour — a 4v4 arcade vehicle combat game with real-world terrain",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

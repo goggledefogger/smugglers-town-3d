@@ -155,7 +155,7 @@ export class IntroScreen extends LitElement {
     return html`
       <header>
         <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
-        <p class="sub">Turf Wars — one crate of contraband on the map. Grab it, rush it back to your crew's base.
+        <p class="sub">World Tour — one crate of contraband on the map. Grab it, rush it back to your crew's base.
         Get rammed and it changes hands. First to 5, or the leader at the buzzer, wins.</p>
       </header>
       <div class="list">
