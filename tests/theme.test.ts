@@ -11,8 +11,7 @@ import {
   SKY_COLORS,
   LIGHTING_COLORS,
   TERRAIN_COLORS,
-  BUILDING_COLORS,
-  type ColorTheme
+  BUILDING_COLORS
 } from '../src/core/theme.ts';
 
 describe('Modular Color Theme System', () => {
