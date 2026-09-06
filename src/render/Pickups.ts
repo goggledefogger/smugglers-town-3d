@@ -5,14 +5,15 @@
  * pooled: a wave brings four, and the pool grows to whatever the state holds.
  */
 import {
-  Group, Mesh, BoxGeometry, CircleGeometry, RingGeometry, CylinderGeometry, EdgesGeometry, LineSegments,
-  LineBasicMaterial, MeshStandardMaterial, MeshBasicMaterial, PointLight, CanvasTexture, Vector3,
-  DoubleSide, AdditiveBlending, type Material
+  Group, Mesh, CircleGeometry, RingGeometry, CylinderGeometry, BoxGeometry,
+  MeshBasicMaterial, MeshStandardMaterial, PointLight, CanvasTexture, Vector3,
+  DoubleSide, AdditiveBlending, type Camera, type Material
 } from 'three';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
 import type { VehicleBody } from '../core/physics/VehicleBody.ts';
 import { TEAM_COLORS, type Pose } from './VehicleView.ts';
 import { config } from '../app/config.ts';
+import { SmokingToilet } from './ToiletMesh.ts';
 
 /** 1×64 white texture whose alpha fades from opaque at v=0 to clear at v=1. */
 function fadeTexture(): CanvasTexture {
@@ -88,8 +89,7 @@ class Base {
 
 interface CrateView {
   readonly group: Group;
-  readonly box: Mesh;
-  readonly beacon: Mesh;
+  readonly toilet: SmokingToilet;
 }
 
 export class Pickups {
@@ -99,29 +99,25 @@ export class Pickups {
   private readonly _back = new Vector3();
   private visible = true;
 
-  constructor(private readonly scene: { add(o: Group): void }) {
+  constructor(
+    private readonly scene: { add(o: Group): void },
+    private readonly cameraSource?: Camera | (() => Camera | null) | null
+  ) {
     this.bases = [new Base(TEAM_COLORS[0], this.fade), new Base(TEAM_COLORS[1], this.fade)];
     for (const b of this.bases) scene.add(b.group);
   }
 
-  /** One strapped wooden crate, beacon and all. */
+  private getCamera(): Camera | null {
+    if (!this.cameraSource) return null;
+    return typeof this.cameraSource === 'function' ? this.cameraSource() : this.cameraSource;
+  }
+
+  /** One Smoking Golden Toilet with billowing smoke plume and sky beacon. */
   private makeCrate(): CrateView {
-    const group = new Group();
-    const wood = new MeshStandardMaterial({ color: 0x9a6a36, roughness: 0.9 });
-    const strap = new MeshStandardMaterial({ color: 0x2a1c10, roughness: 0.7, metalness: 0.3 });
-    const box = new Mesh(new BoxGeometry(1.6, 1.6, 1.6), wood);
-    box.add(new LineSegments(new EdgesGeometry(box.geometry), new LineBasicMaterial({ color: 0x4a3016 })));
-    for (const [w, d] of [[1.66, 0.3], [0.3, 1.66]] as const) {
-      box.add(new Mesh(new BoxGeometry(w, 1.66, d), strap));
-    }
-    const seal = new Mesh(new BoxGeometry(0.5, 0.5, 0.06), new MeshStandardMaterial({ color: 0xffcc33, emissive: 0xff9900, emissiveIntensity: 1.2 }));
-    seal.position.z = 0.82;
-    box.add(seal);
-    const beacon = beam(0xffc040, 0.5, 1.4, 50, 0.45, this.fade);
-    group.add(box, beacon, new PointLight(0xffaa00, 2, 40, 1.5));
-    group.visible = this.visible;
-    this.scene.add(group);
-    const view: CrateView = { group, box, beacon };
+    const toilet = new SmokingToilet(this.fade);
+    toilet.group.visible = this.visible;
+    this.scene.add(toilet.group);
+    const view: CrateView = { group: toilet.group, toilet };
     this.crates.push(view);
     return view;
   }
@@ -133,10 +129,12 @@ export class Pickups {
     for (const b of this.bases) b.group.visible = v;
   }
 
-  /** poseOf: a carrier's rendered pose, so a carried crate rides the interpolated car. */
+  /** poseOf: a carrier's rendered pose, so a carried toilet rides the interpolated car. */
   sync(state: MatchState, timeS: number, dt: number, poseOf: (body: VehicleBody) => Pose | null): void {
     const live = state.contraband;
+    const camera = this.getCamera();
     while (this.crates.length < live.length) this.makeCrate();
+
     for (let i = 0; i < this.crates.length; i++) {
       const view = this.crates[i]!;
       const crate = live[i];
@@ -147,21 +145,26 @@ export class Pickups {
       }
       view.group.visible = this.visible;
       const pose = crate.carrier ? poseOf(crate.carrier) : null;
-      view.beacon.visible = !crate.carrier;
+      const isCarried = !!crate.carrier;
+      view.toilet.beacon.visible = !isCarried;
+
+      // Update smoke plumes and fire flicker
+      view.toilet.update(dt, timeS + i * 1.3, camera, isCarried);
+
       if (pose) {
         // ride in the bed behind the driver
-        this._back.set(0, 1.4, 1.2).applyQuaternion(pose.quat);
+        this._back.set(0, 1.3, 1.2).applyQuaternion(pose.quat);
         view.group.position.copy(pose.pos).add(this._back);
-        view.box.quaternion.copy(pose.quat);
-        view.box.position.y = 0;
+        view.toilet.model.quaternion.copy(pose.quat);
+        view.toilet.model.position.y = 0;
       } else {
         // carried but its car has no rendered pose (a client mid-join): fall
         // back to the body's own position rather than dropping it at the origin
         const at = crate.carrier ? crate.carrier.pos : crate.pos;
         view.group.position.set(at.x, at.y - 1.6, at.z);
-        // stagger the bob so four crates do not pulse in lockstep
-        view.box.position.y = 1.6 + Math.sin(timeS * 3.3 + i * 1.7) * 0.4;
-        view.box.rotation.y += dt * 1.2;
+        // stagger the bob so four toilets do not pulse in lockstep
+        view.toilet.model.position.y = 1.6 + Math.sin(timeS * 3.3 + i * 1.7) * 0.35;
+        view.toilet.model.rotation.y += dt * 1.2;
       }
     }
     for (const team of [0, 1] as const) {
@@ -172,9 +175,11 @@ export class Pickups {
   }
 
   dispose(): void {
-    const groups = [...this.crates.map(c => c.group), this.bases[0].group, this.bases[1].group];
-    for (const g of groups) {
-      g.traverse(obj => {
+    for (const c of this.crates) {
+      c.toilet.dispose();
+    }
+    for (const b of this.bases) {
+      b.group.traverse(obj => {
         const m = obj as Mesh;
         if (m.geometry) m.geometry.dispose();
         if (m.material) (m.material as Material).dispose();

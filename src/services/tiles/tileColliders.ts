@@ -43,6 +43,13 @@ const GROUND_K = 6;
  */
 const BUILDING_RISE_M = 3.5;
 /**
+ * Height threshold above morphological ground where AmortizedGroundBuilder
+ * flattens the physics ground to the opened base b under buildings and bridge decks.
+ * Kept at 8.0m so gradual slopes, curved hills, knolls, and road embankments
+ * preserve their driveable surface in the physics ground rather than dropping to b.
+ */
+const GROUND_BUILDING_RISE_M = 8.0;
+/**
  * Height gap between the physics ground and photogrammetry surface.
  * Kept at 5cm so 3D tile pavement sits cleanly above the continuous terrain underlay
  * while vehicle tires contact the pavement directly rather than hovering.
@@ -146,17 +153,23 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
 
       if (isSteepWall) {
         // Step along all 3 edges of steep vertical walls so thin facades/piers
-        // continuously stamp every cell they cross without over-stamping far corners
+        // continuously stamp every cell they cross with their true edge segment height
         const stepEdge = (p1: { x: number; y: number; z: number }, p2: { x: number; y: number; z: number }) => {
           const len = Math.hypot(p2.x - p1.x, p2.z - p1.z);
           const steps = Math.max(1, Math.ceil(len / (cell * 0.5)));
-          for (let s = 0; s <= steps; s++) {
-            const f = s / steps;
-            const x = p1.x + (p2.x - p1.x) * f;
-            const z = p1.z + (p2.z - p1.z) * f;
+          for (let s = 0; s < steps; s++) {
+            const f0 = s / steps;
+            const f1 = (s + 1) / steps;
+            const x = p1.x + (p2.x - p1.x) * f0;
+            const z = p1.z + (p2.z - p1.z) * f0;
+            const yA = p1.y + (p2.y - p1.y) * f0;
+            const yB = p1.y + (p2.y - p1.y) * f1;
             if (x >= -half && x < half && z >= -half && z < half) {
-              stampRange(cellOf(x), cellOf(z), minY, maxY);
+              stampRange(cellOf(x), cellOf(z), yA, yB);
             }
+          }
+          if (p2.x >= -half && p2.x < half && p2.z >= -half && p2.z < half) {
+            stamp(cellOf(p2.x), cellOf(p2.z), p2.y);
           }
         };
         stepEdge(a, b);
@@ -167,14 +180,10 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
         continue;
       }
 
-      // Stamp centroid height/range so small triangles register accurately
+      // Stamp centroid height so small triangles register accurately
       const midX = (a.x + b.x + c.x) / 3, midZ = (a.z + b.z + c.z) / 3;
       if (midX >= -half && midX < half && midZ >= -half && midZ < half) {
-        if (isSteepWall) {
-          stampRange(cellOf(midX), cellOf(midZ), minY, maxY);
-        } else {
-          stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
-        }
+        stamp(cellOf(midX), cellOf(midZ), (a.y + b.y + c.y) / 3);
       }
 
       const minX = Math.min(a.x, b.x, c.x), maxX = Math.max(a.x, b.x, c.x);
@@ -190,11 +199,7 @@ export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
           const l2 = ((b.x - a.x) * (cz - a.z) - (cx - a.x) * (b.z - a.z)) / det;
           const l0 = 1 - l1 - l2;
           if (l0 < -1e-6 || l1 < -1e-6 || l2 < -1e-6) continue;
-          if (isSteepWall) {
-            stampRange(i, j, minY, maxY);
-          } else {
-            stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
-          }
+          stamp(i, j, l0 * a.y + l1 * b.y + l2 * c.y);
         }
       }
     }
@@ -325,7 +330,7 @@ export class AmortizedGroundBuilder {
     this.terrainTop = terrainTop;
     this.rasters = rasters;
     this.k = GROUND_K;
-    this.rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+    this.rise = GROUND_BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
 
     const total = this.n * this.n;
     this.top = new Float32Array(total).fill(-Infinity);
@@ -643,54 +648,154 @@ export function collidersFromRasters(
     return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
   };
 
-  /** Check if an elevated span is a narrow roadway ribbon (drops to ground/air on both opposing sides within 2 cells). */
+  /**
+   * Check if an elevated span is a bridge deck, viaduct, overpass, or approach ramp:
+   * 1. Narrow roadway ribbon (width <= 2 cells, i.e. <= 20m in X or Z) - covers 1-2 lane bridges, overpasses, ramps.
+   * 2. Multi-lane bridge ribbon (width <= 6 cells, i.e. <= 60m in X or Z) with significant length
+   *    (length >= 5 cells, i.e. >= 50m, and length >= width + 2) - covers major interstate and river bridges across all lanes.
+   * Broad squarish buildings (e.g. 40m x 40m warehouses with gabled roofs) are excluded.
+   */
   const isNarrowSpan = (c: number): boolean => {
     const cx = c % n;
     const cz = Math.floor(c / n);
 
-    // Narrow in X: must drop to ground/air on West (-X) AND on East (+X)
-    let dropsWest = false;
-    for (const dx of [-1, -2]) {
-      const x = cx + dx;
-      if (x < 0) { dropsWest = true; break; }
-      const nb = cz * n + x;
+    // Continuous elevated span in X (drop on West and East)
+    let spanWest = 0;
+    for (let dx = -1; cx + dx >= 0; dx--) {
+      const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsWest = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanWest++;
+      if (spanWest > 6) break;
     }
-    let dropsEast = false;
-    for (const dx of [1, 2]) {
-      const x = cx + dx;
-      if (x >= n) { dropsEast = true; break; }
-      const nb = cz * n + x;
+    let spanEast = 0;
+    for (let dx = 1; cx + dx < n; dx++) {
+      const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsEast = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanEast++;
+      if (spanEast > 6) break;
     }
-    const narrowInX = dropsWest && dropsEast;
+    const widthX = spanWest + 1 + spanEast;
 
-    // Narrow in Z: must drop to ground/air on South (-Z) AND on North (+Z)
-    let dropsSouth = false;
-    for (const dz of [-1, -2]) {
-      const z = cz + dz;
-      if (z < 0) { dropsSouth = true; break; }
-      const nb = z * n + cx;
+    // Continuous elevated span in Z (drop on South and North)
+    let spanSouth = 0;
+    for (let dz = -1; cz + dz >= 0; dz--) {
+      const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsSouth = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanSouth++;
+      if (spanSouth > 6) break;
     }
-    let dropsNorth = false;
-    for (const dz of [1, 2]) {
-      const z = cz + dz;
-      if (z >= n) { dropsNorth = true; break; }
-      const nb = z * n + cx;
+    let spanNorth = 0;
+    for (let dz = 1; cz + dz < n; dz++) {
+      const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) { dropsNorth = true; break; }
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      spanNorth++;
+      if (spanNorth > 6) break;
     }
-    const narrowInZ = dropsSouth && dropsNorth;
+    const widthZ = spanSouth + 1 + spanNorth;
 
-    return narrowInX || narrowInZ;
+    // Narrow span in either axis (1-2 cells wide: <= 20m)
+    if (widthX <= 2 || widthZ <= 2) return true;
+
+    // Check diagonal extents for angled bridges
+    let diag1 = 0;
+    for (let d = 1; cx + d < n && cz + d < n; d++) {
+      const nb = (cz + d) * n + (cx + d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag1++;
+      if (diag1 > 10) break;
+    }
+    for (let d = 1; cx - d >= 0 && cz - d >= 0; d++) {
+      const nb = (cz - d) * n + (cx - d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag1++;
+      if (diag1 > 10) break;
+    }
+
+    let diag2 = 0;
+    for (let d = 1; cx + d < n && cz - d >= 0; d++) {
+      const nb = (cz - d) * n + (cx + d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag2++;
+      if (diag2 > 10) break;
+    }
+    for (let d = 1; cx - d >= 0 && cz + d < n; d++) {
+      const nb = (cz + d) * n + (cx - d);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      diag2++;
+      if (diag2 > 10) break;
+    }
+
+    const minCross = Math.min(widthX, widthZ);
+    const maxLen = Math.max(widthX, widthZ, diag1 + 1, diag2 + 1);
+
+    // Multi-lane bridge ribbon (width <= 6 cells = 60m, length >= 5 cells = 50m, length >= width + 2)
+    return minCross <= 6 && maxLen >= 5 && maxLen >= minCross + 2;
+  };
+
+  /**
+   * Check if a cell is on a roadway ribbon (width <= 6 cells = 60m in either X or Z)
+   * transitioning down towards ground level.
+   * Unlike isNarrowSpan, this does not require a minimum elevated length of 5 cells,
+   * so approach ramps are recognized all the way down to ground level (<= 1.0m above ground).
+   */
+  const isRoadwayRibbon = (c: number): boolean => {
+    const cx = c % n;
+    const cz = Math.floor(c / n);
+    let spanWest = 0;
+    for (let dx = -1; cx + dx >= 0; dx--) {
+      const nb = cz * n + (cx + dx);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      spanWest++;
+      if (spanWest > 6) break;
+    }
+    let spanEast = 0;
+    for (let dx = 1; cx + dx < n; dx++) {
+      const nb = cz * n + (cx + dx);
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      spanEast++;
+      if (spanEast > 6) break;
+    }
+    let spanSouth = 0;
+    for (let dz = -1; cz + dz >= 0; dz--) {
+      const nb = (cz + dz) * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      spanSouth++;
+      if (spanSouth > 6) break;
+    }
+    let spanNorth = 0;
+    for (let dz = 1; cz + dz < n; dz++) {
+      const nb = (cz + dz) * n + cx;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      spanNorth++;
+      if (spanNorth > 6) break;
+    }
+    const widthX = spanWest + 1 + spanEast;
+    const widthZ = spanSouth + 1 + spanNorth;
+    return widthX <= 6 || widthZ <= 6;
   };
 
   // Pre-classify elevated bridge decks and overhead underpass spans
@@ -745,7 +850,7 @@ export function collidersFromRasters(
 
   // Ramp Continuity Rule: Trace descending road slopes from elevated deck terminals
   // down to ground level to unblock solid approach viaducts (e.g. Brooklyn Bridge earthen approaches).
-  // Ramps must be narrow roadway ribbons (isNarrowSpan), not broad gabled or pitched building roofs.
+  // Ramps must be narrow roadway ribbons (isNarrowSpan or isRoadwayRibbon), not broad gabled or pitched building roofs.
   let head = 0;
   while (head < queue.length) {
     const curr = queue[head++]!;
@@ -765,13 +870,15 @@ export function collidersFromRasters(
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
       if (tNb === NO_DATA || gNb === NO_DATA) continue;
-      // Only road surface layers (thickness <= 6.0m), NOT thick vertical columns/piers (t - l >= 10m)
+      // Only road surface layers (thickness <= 6.0m) or elevated ramp decks with open driving clearance below
+      // Thick vertical columns/piers (t - l >= 10m without clearance) are skipped
       const lNb = low[nb];
-      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0) continue;
+      const clearanceOk = !hasMask || hasGroundClearance(nb, gNb, tNb);
+      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0 && !clearanceOk) continue;
 
       // Ramp MUST descend strictly towards the ground along a narrow roadway span
       const drop = currT - tNb;
-      if (drop > 0.05 && drop <= 2.8 && tNb >= gNb && isNarrowSpan(nb)) {
+      if (drop > 0.05 && drop <= 4.5 && tNb >= gNb && (isNarrowSpan(nb) || isRoadwayRibbon(nb))) {
         isRamp[nb] = 1;
         if (outDeckGrid) outDeckGrid[nb] = tNb;
         // Continue downward towards ground; stop once ground level is reached (within 1m of ground)
@@ -779,6 +886,79 @@ export function collidersFromRasters(
           queue.push(nb);
         }
       }
+    }
+  }
+
+  /**
+   * Identify cells that are part of gradual, driveable terrain (slopes, hillsides,
+   * knolls, crests, road embankments, earth berms) connected to the ground.
+   *
+   * Morphological opening erases terrain features narrower than the 120m window,
+   * under-estimating ground by 3.5m - 7m on curved slopes and knolls.
+   * When BUILDING_RISE_M = 3.5m, this causes driveable terrain to be falsely flagged
+   * as building colliders ("black boxes").
+   *
+   * A cell is genuine driveable terrain if it is reachable from ground level
+   * (top <= ground + 1.2m) via a continuous path of driveable steps
+   * (|top[A] - top[B]| <= 2.8m per 10m cell, <= 28% grade) with no vertical building
+   * wall facades (top - low <= 2.8m) and height within 8m of estimated ground.
+   *
+   * Low-rise buildings (e.g. 4.5m tall in New Orleans) are enclosed by vertical
+   * walls (drop >= 3.5m to street, top - low >= 3.5m) so the driveable flood-fill
+   * cannot climb onto them; they remain solid building colliders.
+   */
+  const isDriveableGround = new Uint8Array(n * n);
+  const driveQueue: number[] = [];
+  const maxDriveStep = 2.8 * WORLD_M_PER_M * reliefBoost;
+  const maxCellThick = 2.8 * WORLD_M_PER_M * reliefBoost;
+  const maxTerrainRise = 8.0 * WORLD_M_PER_M * reliefBoost;
+  const groundBaseTolerance = 1.2 * WORLD_M_PER_M * reliefBoost;
+
+  // Seed with base ground cells (within 1.2m of ground level)
+  for (let c = 0; c < n * n; c++) {
+    const t = top[c]!;
+    const g = getGroundY(c);
+    if (t === NO_DATA || g === NO_DATA) continue;
+    if (t <= g + groundBaseTolerance) {
+      isDriveableGround[c] = 1;
+      driveQueue.push(c);
+    }
+  }
+
+  let driveHead = 0;
+  while (driveHead < driveQueue.length) {
+    const curr = driveQueue[driveHead++]!;
+    const cx = curr % n;
+    const cz = Math.floor(curr / n);
+    const currT = top[curr]!;
+
+    const neighbors = [
+      cx > 0 ? curr - 1 : -1,
+      cx < n - 1 ? curr + 1 : -1,
+      cz > 0 ? curr - n : -1,
+      cz < n - 1 ? curr + n : -1,
+    ];
+
+    for (const nb of neighbors) {
+      if (nb < 0 || isDriveableGround[nb]) continue;
+      const tNb = top[nb]!;
+      const gNb = getGroundY(nb);
+      if (tNb === NO_DATA || gNb === NO_DATA) continue;
+
+      // Only within 8.0m of estimated ground (shaving lag on hills/embankments);
+      // taller structures (>= 8.0m) are buildings or bridges
+      if (tNb > gNb + maxTerrainRise) continue;
+
+      // Single surface sheet: no vertical building walls/facades in cell (thickness <= 2.8m)
+      const lNb = low[nb];
+      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > maxCellThick) continue;
+
+      // Driveable grade: step between adjacent 10m cells <= 2.8m (<= 28% slope)
+      const step = Math.abs(tNb - currT);
+      if (step > maxDriveStep) continue;
+
+      isDriveableGround[nb] = 1;
+      driveQueue.push(nb);
     }
   }
 
@@ -790,6 +970,8 @@ export function collidersFromRasters(
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
+    // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
+    if (isDriveableGround[c]) return false;
     return true;
   };
 
