@@ -4,35 +4,13 @@ What would bring this closer to Smugglers Run, ordered by payoff against
 risk. Items marked **(play-test)** change how the game feels and should be
 tuned with a controller in hand, not shipped blind.
 
-## 1. World scale 1:1 **(play-test)** — the biggest correctness gap
+## 1. World scale 1:1 — Done
 
-Today 1 real meter = 0.15 world units (`WORLD_M_PER_M`), chosen so a 5.5 km
-terrain fits the 840-unit field while keeping the prototype's physics
-numbers. Cars are 4 units long, which makes them 27 m long in the real city:
-6.7× life size. The km/h gauge, the delivery radius (147 m real), spawn
-clearances and the relief boost all inherit that mismatch, and downtown
-reads as a model village from the driver's seat.
-
-Recipe (all units become meters; the physics numbers already read sensibly
-as m/s — 78 m/s top speed is 280 km/h, gravity 22 stays arcade-floaty):
-
-- `WORLD_M_PER_M = 1`, `config.world.mapHalf = 2800`.
-- Procedural desert: heights are absolute (`h * 16`, butte 40, canyon 14) and
-  the noise lattice is normalized, so multiply heights by ~6.7 or regenerate
-  in meters.
-- Renderer: camera far plane 2000 → 8000, fog 200/700 → 1500/5000.
-- Colliders: `CELL` 1.5 → 10 (cells were already 10 m), thresholds unchanged.
-- Spawns: open-spot search ±210/30 → ±1000/60; ring radii ×3; base offset
-  `0.65 · mapHalf` → ~0.45 or matches last too long.
-- Relief boost: 2.2× tall buildings next to life-size cars will look wrong;
-  cap at ~1.3 or drop it and add jump ramps as props instead.
-- Props: counts ×5, rock sizes in meters.
-- Tests: the 840-unit heightfields in `tests/physics.test.ts` and
-  `tests/gameplay.test.ts` become 5600.
-
-Expected feel: everything is larger and slower relative to the car; a
-cross-field run takes ~70 s at top speed instead of ~11 s. That is closer to
-the original, but it changes pacing enough to warrant a round timer (item 2).
+Migrated in `feat/scale-1-1`:
+- Standardized world scale: 1 real meter = 1.0 world units (`WORLD_M_PER_M = 1`).
+- Field half-size scaled to 2800 m (`config.world.mapHalf = 2800`), matching true 5.5 km real-world terrain grids.
+- Vehicle dimensions (4m length), terminal speed (78 m/s = 280 km/h), gravity (22 m/s²), and physics stats operate in physical SI units.
+- Camera frustum, fog distances, and test heightfields updated to meter scale. Downtowns now read at true life size from the driver's perspective.
 
 ## 1b. Menus
 
@@ -123,17 +101,39 @@ phase plan. The per-driver input-source interface now exists
 
 ## 9. Relocation polish
 
-- Bridge decks and overpasses: the shared ground is one layer, so a deck is
-  scenery and the car drives under it. Needs a second drivable layer or
-  deck colliders that act as platforms.
-- The ground refresh while streaming costs ~50 ms every 6 s (opening filter
-  plus a 313k-vertex drape update). Move it to a worker or refresh only the
-  cells that changed.
+- **Bridge decks and overpasses (Done v1)**: Implemented 2.5D `deckGrid` with $O(1)$
+  bilinear lookup (`Tileset.surfaceElevation`) and vertical underpass clearance
+  detection. Vehicle drives on bridge decks while open street underpasses remain clear.
+- **Ground refresh hitching (Done v1)**: Solved via `AmortizedGroundBuilder`,
+  amortizing the morphological opening filter across frames within a 1.5 ms budget.
 - Bicubic sampling for the 10 m tile ground if it feels like gravel at
   speed; the four-wheel mean and suspension hide most of it.
-
-- Remember the last place and offer a few presets (Portland, SF, Tokyo).
+- Remember the last place and offer a few presets (Portland, SF, Tokyo) — presets done in scenario catalog (`testScenarios.ts`).
 - Progress with tile counts and byte totals; a clear message when the key is
   missing one of the four APIs.
 - If a place has too little tile data near the center for the measured datum
   shift, fall back to an EGM96 geoid lookup.
+
+## 10. 3D Tiles, Collision & Physics Architecture
+
+- **Automated Scenario Regression Harness**:
+  Serialize real tile rasters from the 17 curated scenarios (`src/core/geo/testScenarios.ts`)
+  as test fixtures. Implement `tests/scenarios.harness.test.ts` to assert semantic claims
+  (drivable decks, open underpasses, slope driveability) across all 17 cities simultaneously.
+  Replaces city-by-city threshold guessing with systematic multi-city regression checks.
+- **Slope-Adaptive Morphological Thresholding**:
+  Replace static `BUILDING_RISE_M = 3.5` with gradient-scaled rise ($\text{rise} = \text{base} + s \cdot \tan\theta$),
+  standard in GIS progressive morphological filtering (PMF). Naturally unifies low-rise
+  flat districts (New Orleans, Portland) and steep terrain knolls (San Francisco) without
+  ad-hoc rule branching.
+- **Workerized Collider Rebuild**:
+  Move `collidersFromRasters` and raster clearance scans into a Web Worker, eliminating
+  the remaining 15–30 ms main-thread spike during tile LOD streaming.
+- **Game 3D Procedural Aesthetic Upgrades**:
+  Enhance the stylized "Game 3D" visual mode (`BuildingMeshView.ts`) with architectural
+  window textures, asphalt road ribbons, and edge bevels to serve as a premium arcade
+  visual alternative with 100% collision parity.
+- **Vector Road Hybrid (OSM / Overpass API)**:
+  Explore querying OpenStreetMap road centerlines (`bridge=yes`, `layer=*`) for the
+  2.8 km match bounds to authoritatively generate smooth drivable ribbons over
+  complex multi-tier bridges and highway interchanges with zero heuristic guessing.

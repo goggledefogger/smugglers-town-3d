@@ -61,6 +61,18 @@ export const TEST_SCENARIOS: readonly TestScenario[] = [
     testFocus: 'Truss bridge roadway driving; low-clearance piers; connection to city street grid.',
     recommendedVehicleType: 0 // buggy
   },
+  {
+    id: 'st_johns_bridge',
+    name: 'St. Johns Bridge, Portland',
+    category: 'bridge_water',
+    categoryLabel: '🌉 Bridges & Water',
+    lat: 45.5898,
+    lon: -122.7661,
+    label: 'St. Johns Bridge & Cathedral Park, Portland, OR',
+    description: 'Gothic suspension bridge with soaring 120m steel towers and Cathedral Park underpass.',
+    testFocus: 'Cathedral Park underpass drivability; tower pier box colliders; elevated deck above river.',
+    recommendedVehicleType: 1 // muscle
+  },
 
   // ---- 2. Dense 3D Photogrammetry Cities ----
   {
@@ -110,6 +122,18 @@ export const TEST_SCENARIOS: readonly TestScenario[] = [
     description: 'Compact 60m (200ft) block downtown grid with light rail tracks and street trees.',
     testFocus: 'Sidewalk tree canopy exclusion; curb contact; short-block turning maneuverability.',
     recommendedVehicleType: 0 // buggy
+  },
+  {
+    id: 'market_street_sf',
+    name: 'Market & Montgomery, SF',
+    category: 'dense_city',
+    categoryLabel: '🏙️ Dense 3D Cities',
+    lat: 37.7897,
+    lon: -122.4014,
+    label: 'Market St & Montgomery St, Financial District, San Francisco, CA',
+    description: 'Diagonal grand boulevard cutting across orthogonal street grid flanked by skyscrapers.',
+    testFocus: 'Diagonal street canyon; building corner insets; transition towards steep Nob Hill grade.',
+    recommendedVehicleType: 4 // coupe
   },
 
   // ---- 3. Open Ground & Rural Plains (Pure 2D Satellite) ----

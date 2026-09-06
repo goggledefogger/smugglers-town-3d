@@ -27,34 +27,109 @@ import { WORLD_M_PER_M } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
 
+export interface ColliderThresholds {
+  /** 10 units = 10 m cells. */
+  readonly cell: number;
+  /** Opening radius in cells (6 = 60 m, a 120 m window) to erase buildings from ground. */
+  readonly groundOpeningK: number;
+  /** Real meters above estimated ground that make a cell a building (New Orleans 1-story buildings). */
+  readonly buildingRiseM: number;
+  /** Height threshold above ground where AmortizedGroundBuilder flattens physics ground to base b (preserves gradual slopes). */
+  readonly groundBuildingRiseM: number;
+  /** Height gap between physics ground and 3D tile surface (5cm to contact pavement cleanly). */
+  readonly tileGroundGap: number;
+  /** Percentile used for WGS84 ellipsoid vs MSL geoid datum calibration (Portland river valley vs SF hills). */
+  readonly datumPercentile: number;
+  /** Vertical bin size in meters for underpass clearance detection bitmask. */
+  readonly verticalBinSizeM: number;
+  /** Vehicle underpass clearance zone: min height above ground road. */
+  readonly clearanceDriveMinM: number;
+  /** Vehicle underpass clearance zone: max height above ground road to test for open overhead underpass. */
+  readonly clearanceDriveMaxM: number;
+  /** Clearance margin below structure top surface. */
+  readonly clearanceTopMarginM: number;
+  /** Min thickness of elevated road slab (m). */
+  readonly deckMinThicknessM: number;
+  /** Max thickness of elevated road slab (m) (covers roadbed and underside truss). */
+  readonly deckMaxThicknessM: number;
+  /** Min vertical open clearance below deck (m) (requires at least 4m headroom). */
+  readonly deckMinClearanceBelowM: number;
+  /** Drop off edge height above ground for bridge ribbon (m). */
+  readonly deckDropThresholdM: number;
+  /** High overhead underpass span min height (m). */
+  readonly underpassMinHeightM: number;
+  /** Max width in cells for narrow 1-2 lane bridge spans (2 cells = 20m). */
+  readonly narrowSpanMaxWidthCells: number;
+  /** Max width in cells for multi-lane bridge spans (6 cells = 60m). */
+  readonly multiLaneMaxWidthCells: number;
+  /** Min length in cells for multi-lane bridge ribbons (5 cells = 50m). */
+  readonly multiLaneMinLengthCells: number;
+  /** Min aspect ratio margin (length >= width + aspectMargin). */
+  readonly multiLaneAspectMarginCells: number;
+  /** Max thickness of approach ramp surface layer (m). */
+  readonly rampMaxThicknessM: number;
+  /** Max vertical step drop allowed per 10m cell along a descending ramp (m). */
+  readonly rampMaxDropPerStepM: number;
+  /** Min vertical drop per step to ensure strictly descending ramp (m). */
+  readonly rampMinDropPerStepM: number;
+  /** Proximity to ground level to terminate ramp tracing (m). */
+  readonly rampGroundProximityM: number;
+  /** Max elevation step between adjacent 10m cells for driveable terrain (2.8m = 28% grade). */
+  readonly driveableMaxStepM: number;
+  /** Max cell thickness for driveable terrain (2.8m = single surface sheet, no vertical walls). */
+  readonly driveableMaxThicknessM: number;
+  /** Max elevation rise above estimated ground for driveable terrain (8.0m = knoll/embankment lag). */
+  readonly driveableMaxTerrainRiseM: number;
+  /** Ground base tolerance to seed driveable terrain flood fill (1.2m). */
+  readonly driveableBaseToleranceM: number;
+  /** Inset for exterior building faces bordering street lanes (1.0m to clear 10m quantization). */
+  readonly insetExteriorStreetM: number;
+  /** Inset for isolated single-cell columns/piers (2.8m to hug structural pillars). */
+  readonly insetIsolatedColumnM: number;
+  /** Max bicubic smoothing error in meters between 87m DEM terrain and 10m photogrammetry on steep terrain. */
+  readonly terrainSmoothingToleranceM: number;
+  /** Slope-adaptive rise coefficient scaling building rise with local terrain gradient tan(theta). */
+  readonly slopeAdaptiveRiseCoeff: number;
+}
+
+export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
+  cell: 10,
+  groundOpeningK: 6,
+  buildingRiseM: 3.5,
+  groundBuildingRiseM: 8.0,
+  tileGroundGap: 0.05,
+  datumPercentile: 0.15,
+  verticalBinSizeM: 1.5,
+  clearanceDriveMinM: 1.2,
+  clearanceDriveMaxM: 4.5,
+  clearanceTopMarginM: 1.5,
+  deckMinThicknessM: 0.8,
+  deckMaxThicknessM: 7.0,
+  deckMinClearanceBelowM: 4.0,
+  deckDropThresholdM: 2.5,
+  underpassMinHeightM: 13.0,
+  narrowSpanMaxWidthCells: 2,
+  multiLaneMaxWidthCells: 6,
+  multiLaneMinLengthCells: 5,
+  multiLaneAspectMarginCells: 2,
+  rampMaxThicknessM: 6.0,
+  rampMaxDropPerStepM: 4.5,
+  rampMinDropPerStepM: 0.05,
+  rampGroundProximityM: 1.0,
+  driveableMaxStepM: 2.8,
+  driveableMaxThicknessM: 2.8,
+  driveableMaxTerrainRiseM: 8.0,
+  driveableBaseToleranceM: 1.2,
+  insetExteriorStreetM: 1.0,
+  insetIsolatedColumnM: 2.8,
+  terrainSmoothingToleranceM: 8.0,
+  slopeAdaptiveRiseCoeff: 12.0
+};
+
 /** 10 units = 10 m cells. */
-const CELL = 10;
-/**
- * Opening radius in cells (6 = 60 m, a 120 m window). Wider than a city
- * block so buildings are erased from the ground estimate; narrow enough that
- * only a sharp hill crest gets shaved, and then by well under the threshold.
- */
-const GROUND_K = 6;
-/**
- * Real meters above the estimated ground that make a cell a building.
- * Set to 3.5m (~12ft) to capture 1-story commercial/residential structures,
- * building annexes, and low-rise historical architecture (e.g. New Orleans French Quarter)
- * while ignoring road crowns, curbs, and parked vehicles (<2m).
- */
-const BUILDING_RISE_M = 3.5;
-/**
- * Height threshold above morphological ground where AmortizedGroundBuilder
- * flattens the physics ground to the opened base b under buildings and bridge decks.
- * Kept at 8.0m so gradual slopes, curved hills, knolls, and road embankments
- * preserve their driveable surface in the physics ground rather than dropping to b.
- */
-const GROUND_BUILDING_RISE_M = 8.0;
-/**
- * Height gap between the physics ground and photogrammetry surface.
- * Kept at 5cm so 3D tile pavement sits cleanly above the continuous terrain underlay
- * while vehicle tires contact the pavement directly rather than hovering.
- */
-export const TILE_GROUND_GAP = 0.05;
+const CELL = DEFAULT_COLLIDER_THRESHOLDS.cell;
+const GROUND_K = DEFAULT_COLLIDER_THRESHOLDS.groundOpeningK;
+export const TILE_GROUND_GAP = DEFAULT_COLLIDER_THRESHOLDS.tileGroundGap;
 
 export interface Grid {
   readonly cell: number;
@@ -323,14 +398,15 @@ export class AmortizedGroundBuilder {
     rasters: readonly (TileRaster | null)[],
     grid: Grid,
     terrainTop: Float32Array,
-    reliefBoost = 1
+    reliefBoost = 1,
+    thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
   ) {
     this.n = grid.n;
     this.cell = grid.cell;
     this.terrainTop = terrainTop;
     this.rasters = rasters;
-    this.k = GROUND_K;
-    this.rise = GROUND_BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
+    this.k = thresholds.groundOpeningK;
+    this.rise = thresholds.groundBuildingRiseM * WORLD_M_PER_M * reliefBoost;
 
     const total = this.n * this.n;
     this.top = new Float32Array(total).fill(-Infinity);
@@ -552,9 +628,10 @@ export function groundField(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
   terrainTop: Float32Array,
-  reliefBoost = 1
+  reliefBoost = 1,
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
 ): Float32Array {
-  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost);
+  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost, thresholds);
   builder.step(Infinity);
   return builder.result!;
 }
@@ -577,10 +654,11 @@ export function tileGroundOffset(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
   terrainTop: Float32Array,
-  coreHalfUnits = 200
+  coreHalfUnits = 200,
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
 ): number | null {
   const { n, cell } = grid;
-  const ground = groundEstimate(compositeTops(rasters, n), n);
+  const ground = groundEstimate(compositeTops(rasters, n), n, thresholds.groundOpeningK);
   const c0 = Math.max(0, Math.floor(n / 2 - coreHalfUnits / cell));
   const c1 = Math.min(n - 1, Math.ceil(n / 2 + coreHalfUnits / cell));
   const diffs: number[] = [];
@@ -592,7 +670,7 @@ export function tileGroundOffset(
   }
   if (diffs.length < 100) return null;
   diffs.sort((a, b) => a - b);
-  return diffs[Math.floor(diffs.length * 0.15)]!;
+  return diffs[Math.floor(diffs.length * thresholds.datumPercentile)]!;
 }
 
 export function collidersFromRasters(
@@ -600,14 +678,15 @@ export function collidersFromRasters(
   grid: Grid,
   terrainTop: Float32Array,
   reliefBoost = 1,
-  outDeckGrid?: Float32Array
+  outDeckGrid?: Float32Array,
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
   const low = compositeLows(rasters, n);
-  const ground = groundEstimate(top, n);
-  const rise = BUILDING_RISE_M * WORLD_M_PER_M * reliefBoost;
-  const BIN_SIZE = 1.5;
+  const ground = groundEstimate(top, n, thresholds.groundOpeningK);
+  const rise = thresholds.buildingRiseM * WORLD_M_PER_M * reliefBoost;
+  const BIN_SIZE = thresholds.verticalBinSizeM;
 
   if (outDeckGrid) {
     outDeckGrid.fill(NO_DATA);
@@ -618,7 +697,7 @@ export function collidersFromRasters(
    * has no geometry in any tile raster covering cell c. If clear, the space is an open underpass / bridge span.
    */
   const hasGroundClearance = (c: number, g: number, t: number): boolean => {
-    const y2 = Math.min(g + 4.5, t - 1.5);
+    const y2 = Math.min(g + thresholds.clearanceDriveMaxM, t - thresholds.clearanceTopMarginM);
     let foundRaster = false;
     for (const r of rasters) {
       if (!r || !r.mask || r.y0 === undefined) continue;
@@ -645,7 +724,14 @@ export function collidersFromRasters(
   };
 
   const getGroundY = (c: number): number => {
-    return ground[c] !== NO_DATA ? ground[c]! : terrainTop[c]!;
+    const gMorph = ground[c];
+    if (gMorph !== NO_DATA && gMorph !== undefined) {
+      if (terrainTop[c] !== NO_DATA && terrainTop[c] !== undefined) {
+        return Math.max(gMorph, terrainTop[c]! - thresholds.terrainSmoothingToleranceM);
+      }
+      return gMorph;
+    }
+    return terrainTop[c]!;
   };
 
   /**
@@ -665,18 +751,18 @@ export function collidersFromRasters(
       const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       spanWest++;
-      if (spanWest > 6) break;
+      if (spanWest > thresholds.multiLaneMaxWidthCells) break;
     }
     let spanEast = 0;
     for (let dx = 1; cx + dx < n; dx++) {
       const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       spanEast++;
-      if (spanEast > 6) break;
+      if (spanEast > thresholds.multiLaneMaxWidthCells) break;
     }
     const widthX = spanWest + 1 + spanEast;
 
@@ -686,23 +772,23 @@ export function collidersFromRasters(
       const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       spanSouth++;
-      if (spanSouth > 6) break;
+      if (spanSouth > thresholds.multiLaneMaxWidthCells) break;
     }
     let spanNorth = 0;
     for (let dz = 1; cz + dz < n; dz++) {
       const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       spanNorth++;
-      if (spanNorth > 6) break;
+      if (spanNorth > thresholds.multiLaneMaxWidthCells) break;
     }
     const widthZ = spanSouth + 1 + spanNorth;
 
     // Narrow span in either axis (1-2 cells wide: <= 20m)
-    if (widthX <= 2 || widthZ <= 2) return true;
+    if (widthX <= thresholds.narrowSpanMaxWidthCells || widthZ <= thresholds.narrowSpanMaxWidthCells) return true;
 
     // Check diagonal extents for angled bridges
     let diag1 = 0;
@@ -710,7 +796,7 @@ export function collidersFromRasters(
       const nb = (cz + d) * n + (cx + d);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       diag1++;
       if (diag1 > 10) break;
     }
@@ -718,7 +804,7 @@ export function collidersFromRasters(
       const nb = (cz - d) * n + (cx - d);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       diag1++;
       if (diag1 > 10) break;
     }
@@ -728,7 +814,7 @@ export function collidersFromRasters(
       const nb = (cz - d) * n + (cx + d);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       diag2++;
       if (diag2 > 10) break;
     }
@@ -736,7 +822,7 @@ export function collidersFromRasters(
       const nb = (cz + d) * n + (cx - d);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 2.5) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.deckDropThresholdM) break;
       diag2++;
       if (diag2 > 10) break;
     }
@@ -745,7 +831,9 @@ export function collidersFromRasters(
     const maxLen = Math.max(widthX, widthZ, diag1 + 1, diag2 + 1);
 
     // Multi-lane bridge ribbon (width <= 6 cells = 60m, length >= 5 cells = 50m, length >= width + 2)
-    return minCross <= 6 && maxLen >= 5 && maxLen >= minCross + 2;
+    return minCross <= thresholds.multiLaneMaxWidthCells &&
+      maxLen >= thresholds.multiLaneMinLengthCells &&
+      maxLen >= minCross + thresholds.multiLaneAspectMarginCells;
   };
 
   /**
@@ -762,40 +850,40 @@ export function collidersFromRasters(
       const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.rampGroundProximityM) break;
       spanWest++;
-      if (spanWest > 6) break;
+      if (spanWest > thresholds.multiLaneMaxWidthCells) break;
     }
     let spanEast = 0;
     for (let dx = 1; cx + dx < n; dx++) {
       const nb = cz * n + (cx + dx);
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.rampGroundProximityM) break;
       spanEast++;
-      if (spanEast > 6) break;
+      if (spanEast > thresholds.multiLaneMaxWidthCells) break;
     }
     let spanSouth = 0;
     for (let dz = -1; cz + dz >= 0; dz--) {
       const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.rampGroundProximityM) break;
       spanSouth++;
-      if (spanSouth > 6) break;
+      if (spanSouth > thresholds.multiLaneMaxWidthCells) break;
     }
     let spanNorth = 0;
     for (let dz = 1; cz + dz < n; dz++) {
       const nb = (cz + dz) * n + cx;
       const tNb = top[nb]!;
       const gNb = getGroundY(nb);
-      if (tNb === NO_DATA || tNb <= gNb + 1.0) break;
+      if (tNb === NO_DATA || tNb <= gNb + thresholds.rampGroundProximityM) break;
       spanNorth++;
-      if (spanNorth > 6) break;
+      if (spanNorth > thresholds.multiLaneMaxWidthCells) break;
     }
     const widthX = spanWest + 1 + spanEast;
     const widthZ = spanSouth + 1 + spanNorth;
-    return widthX <= 6 || widthZ <= 6;
+    return widthX <= thresholds.multiLaneMaxWidthCells || widthZ <= thresholds.multiLaneMaxWidthCells;
   };
 
   // Pre-classify elevated bridge decks and overhead underpass spans
@@ -815,15 +903,15 @@ export function collidersFromRasters(
     // clearance below, and a narrow roadway ribbon (1-2 cells wide) dropping off to ground on its sides
     const isThinElevatedDeck =
       l !== Infinity &&
-      t - l >= 0.8 &&
-      t - l <= 7.0 &&
-      l - g >= 4.0 &&
+      t - l >= thresholds.deckMinThicknessM &&
+      t - l <= thresholds.deckMaxThicknessM &&
+      l - g >= thresholds.deckMinClearanceBelowM &&
       clearanceOk &&
       isNarrowSpan(c);
     // High overhead underpass span: at least 13m high, narrow span, with confirmed open driving clearance below from mesh mask
     const isUnderpassDeck =
       hasMask &&
-      t - g >= 13.0 &&
+      t - g >= thresholds.underpassMinHeightM &&
       hasGroundClearance(c, g, t) &&
       isNarrowSpan(c);
 
@@ -874,15 +962,15 @@ export function collidersFromRasters(
       // Thick vertical columns/piers (t - l >= 10m without clearance) are skipped
       const lNb = low[nb];
       const clearanceOk = !hasMask || hasGroundClearance(nb, gNb, tNb);
-      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > 6.0 && !clearanceOk) continue;
+      if (lNb !== undefined && lNb !== Infinity && tNb - lNb > thresholds.rampMaxThicknessM && !clearanceOk) continue;
 
       // Ramp MUST descend strictly towards the ground along a narrow roadway span
       const drop = currT - tNb;
-      if (drop > 0.05 && drop <= 4.5 && tNb >= gNb && (isNarrowSpan(nb) || isRoadwayRibbon(nb))) {
+      if (drop > thresholds.rampMinDropPerStepM && drop <= thresholds.rampMaxDropPerStepM && tNb >= gNb && (isNarrowSpan(nb) || isRoadwayRibbon(nb))) {
         isRamp[nb] = 1;
         if (outDeckGrid) outDeckGrid[nb] = tNb;
         // Continue downward towards ground; stop once ground level is reached (within 1m of ground)
-        if (tNb > gNb + 1.0) {
+        if (tNb > gNb + thresholds.rampGroundProximityM) {
           queue.push(nb);
         }
       }
@@ -909,10 +997,10 @@ export function collidersFromRasters(
    */
   const isDriveableGround = new Uint8Array(n * n);
   const driveQueue: number[] = [];
-  const maxDriveStep = 2.8 * WORLD_M_PER_M * reliefBoost;
-  const maxCellThick = 2.8 * WORLD_M_PER_M * reliefBoost;
-  const maxTerrainRise = 8.0 * WORLD_M_PER_M * reliefBoost;
-  const groundBaseTolerance = 1.2 * WORLD_M_PER_M * reliefBoost;
+  const maxDriveStep = thresholds.driveableMaxStepM * WORLD_M_PER_M * reliefBoost;
+  const maxCellThick = thresholds.driveableMaxThicknessM * WORLD_M_PER_M * reliefBoost;
+  const maxTerrainRise = thresholds.driveableMaxTerrainRiseM * WORLD_M_PER_M * reliefBoost;
+  const groundBaseTolerance = thresholds.driveableBaseToleranceM * WORLD_M_PER_M * reliefBoost;
 
   // Seed with base ground cells (within 1.2m of ground level)
   for (let c = 0; c < n * n; c++) {
@@ -969,6 +1057,10 @@ export function collidersFromRasters(
     // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
+    // An object can only be a building if it also rises above the underlying DEM terrain.
+    // This prevents morphological opening from shaving off isolated natural buttes, hills, and knolls.
+    const terr = terrainTop[c];
+    if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
     // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
     if (isDriveableGround[c]) return false;
@@ -1060,7 +1152,7 @@ export function collidersFromRasters(
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
     const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
-    const insetMax = isIsolatedColumn ? 2.8 : 1.0;
+    const insetMax = isIsolatedColumn ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
     const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
     const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
 
@@ -1074,10 +1166,20 @@ export function collidersFromRasters(
 }
 
 /** Colliders straight from a group of meshes (tests and one-shot use). */
-export function buildingCollidersFrom(tiles: Object3D, ground: Heightfield, reliefBoost = 1): BuildingCollider[] {
+export function buildingCollidersFrom(
+  tiles: Object3D,
+  ground: Heightfield,
+  reliefBoost = 1,
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+): BuildingCollider[] {
   const grid = gridFor(ground);
   tiles.updateMatrixWorld(true);
   return collidersFromRasters(
-    tiles.children.map(c => rasterizeTile(c, grid)), grid, sampleTerrain(grid, ground), reliefBoost
+    tiles.children.map(c => rasterizeTile(c, grid)),
+    grid,
+    sampleTerrain(grid, ground),
+    reliefBoost,
+    undefined,
+    thresholds
   );
 }
