@@ -8,7 +8,7 @@ import { Bindings, HOTKEY_ACTIONS } from '../src/input/bindings.ts';
 const litShader = () => ({
   uniforms: {} as Record<string, { value: unknown }>,
   vertexShader: '#include <normal_pars_vertex>\nvoid main() {\n#include <begin_vertex>\n#include <project_vertex>\n}',
-  fragmentShader: 'void main() {}'
+  fragmentShader: 'void main() {\n#include <clipping_planes_fragment>\n}'
 });
 
 const patchOne = (filter: TileClutterFilter) => {
@@ -46,6 +46,7 @@ describe('TileClutterFilter', () => {
     const f = new TileClutterFilter(hf(), mask(), 4);
     expect(f.mode).toBe('off');
     expect(f.cycleMode()).toBe('flatten');
+    expect(f.cycleMode()).toBe('hidden');
     expect(f.cycleMode()).toBe('off');
   });
 
@@ -64,7 +65,9 @@ describe('TileClutterFilter', () => {
     expect(shader.vertexShader).toContain('uClutterMask, cuv).r * 255.0');
     expect(shader.vertexShader).toContain('#include <project_vertex>\n');
     expect(shader.vertexShader).toContain('vNormal');
-    expect(shader.fragmentShader).toBe('void main() {}');
+    expect(shader.vertexShader).toContain('vClutterStructure = cStructure');
+    expect(shader.fragmentShader).toContain('#include <clipping_planes_fragment>\n');
+    expect(shader.fragmentShader).toContain('discard');
   });
 
   it('leaves the normal fix out of unlit materials', () => {

@@ -43,12 +43,14 @@ export class GroundStreamer {
   readonly group = new Group();
   private readonly apiKey: string;
   private readonly center: { lat: number; lon: number };
-  private readonly heightfield: Heightfield;
+  private heightfield: Heightfield;
   private readonly anisotropy: number;
   private readonly zoom: number;
   private readonly keepRadiusUnits: number;
   private readonly maxPatches: number;
   private readonly isTileCovered?: ((wx: number, wz: number) => boolean) | undefined;
+  /** Stream under 3D tiles too: the clutter filter's hidden mode shows the ground beneath them. */
+  underTiles = false;
 
   private readonly cosLat: number;
   readonly tileSizeUnits: number;
@@ -95,6 +97,12 @@ export class GroundStreamer {
   }
 
   /** Re-sample vertex heights if heightfield is updated (e.g. 3D tiles datum calibration). */
+  /** Drape on another field from now on: the game plays on the ground cut from the tiles, not the elevation grid. */
+  useHeightfield(hf: Heightfield): void {
+    this.heightfield = hf;
+    this.refresh();
+  }
+
   refresh(): void {
     for (const p of this.patches.values()) {
       const pos = p.mesh.geometry.attributes.position as BufferAttribute;
@@ -153,7 +161,7 @@ export class GroundStreamer {
         const cellWx = c * this.tileSizeUnits;
         const cellWz = r * this.tileSizeUnits;
         if (cellWx < -half || cellWx > half || cellWz < -half || cellWz > half) continue;
-        if (this.isTileCovered?.(cellWx, cellWz)) continue;
+        if (!this.underTiles && this.isTileCovered?.(cellWx, cellWz)) continue;
 
         const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
         if (dist < bestDist) {

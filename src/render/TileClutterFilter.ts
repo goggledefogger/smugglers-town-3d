@@ -6,10 +6,13 @@
  * material gets a shader patch (onBeforeCompile) that reads two textures the
  * physics already computes: the ground heightfield and the collider pass's
  * structure mask (building, deck or ramp cells, 10 m). Outside structure
- * cells, vertices less than CLUTTER_RISE_M above the ground drop onto the
- * ground plane, so cars become decals on the road while facades keep their
- * ground floors. The heightfield is the same one the car drives on, so
- * flattened streets also line up with the physics surface.
+ * cells:
+ * - flatten: vertices less than CLUTTER_RISE_M above the ground drop onto the
+ *   ground plane, so cars become decals on the road while facades keep their
+ *   ground floors. The heightfield is the same one the car drives on, so
+ *   flattened streets also line up with the physics surface.
+ * - hidden: fragments are discarded, leaving the buildings, bridges and
+ *   trees over the draped satellite terrain.
  *
  * Every patched material shares the same uniform objects: switching modes is
  * a value write, and both textures wrap the buffers physics owns, so a ground
@@ -22,8 +25,8 @@ import {
 } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
 
-export type ClutterMode = 'off' | 'flatten';
-export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten'];
+export type ClutterMode = 'off' | 'flatten' | 'hidden';
+export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden'];
 
 /** Real metres above the ground estimate under which tile geometry is street clutter (a car is ~1.5 m). */
 export const CLUTTER_RISE_M = 2.5;
@@ -34,6 +37,7 @@ uniform sampler2D uClutterMask;
 uniform float uClutterMode;
 uniform vec2 uClutterField;
 uniform float uClutterRise;
+varying float vClutterStructure;
 `;
 
 /**
@@ -43,12 +47,14 @@ uniform float uClutterRise;
  */
 const VERTEX_BODY = `
 float cClutterDy = 0.0;
+vClutterStructure = 1.0;
 if (uClutterMode > 0.5) {
   vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 cuv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
   // an R8 UNSIGNED_BYTE texture samples normalised, so the mask's 1 reads as 1/255:
   // scale back up before comparing, bilinear blends between cells still land in 0..1
   float cStructure = min(1.0, texture2D(uClutterMask, cuv).r * 255.0);
+  vClutterStructure = cStructure;
   vec2 cf = cuv * uClutterField.y;
   vec2 c0 = min(floor(cf), uClutterField.y - 1.0);
   vec2 ct = cf - c0;
@@ -58,7 +64,7 @@ if (uClutterMode > 0.5) {
     mix(texelFetch(uClutterGround, ci + ivec2(0, 1), 0).r, texelFetch(uClutterGround, ci + ivec2(1, 1), 0).r, ct.x),
     ct.y);
   float crise = cwp.y - cg;
-  if (cStructure < 0.5 && abs(crise) < uClutterRise) cClutterDy = -crise;
+  if (uClutterMode < 1.5 && cStructure < 0.5 && abs(crise) < uClutterRise) cClutterDy = -crise;
 }
 `;
 
@@ -72,6 +78,16 @@ if (cClutterDy != 0.0) vNormal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0
 const VERTEX_PROJECT = `
 mvPosition.xyz += (viewMatrix * vec4(0.0, cClutterDy, 0.0, 0.0)).xyz;
 gl_Position = projectionMatrix * mvPosition;
+`;
+
+const FRAGMENT_PARS = `
+uniform float uClutterMode;
+varying float vClutterStructure;
+`;
+
+/** Interpolated mask, so the cut between kept and hidden runs between cell centres, not per triangle. */
+const FRAGMENT_CUT = `
+if (uClutterMode > 1.5 && vClutterStructure < 0.5) discard;
 `;
 
 type Patchable = Material & { _clutterPatched?: boolean };
@@ -173,6 +189,8 @@ export class TileClutterFilter {
     shader.vertexShader = VERTEX_PARS + shader.vertexShader
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERTEX_BODY + (lit ? VERTEX_NORMAL : ''))
       .replace('#include <project_vertex>', '#include <project_vertex>' + VERTEX_PROJECT);
+    shader.fragmentShader = FRAGMENT_PARS + shader.fragmentShader
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + FRAGMENT_CUT);
   }
 
   dispose(): void {

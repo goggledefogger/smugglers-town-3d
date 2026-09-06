@@ -68,7 +68,7 @@ app.innerHTML = `
       <button id="view-mode-btn" class="hud-btn" type="button" title="Toggle 3D Visual Mode (Hotkey: V or G)">
         <span>🎮</span> <span id="view-mode-text">VIEW: REAL 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
       </button>
-      <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road (Hotkey: F)">
+      <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, or hide everything but buildings (Hotkey: F)">
         <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
       </button>
     </div>
@@ -152,7 +152,7 @@ let clutterFilter: TileClutterFilter | null = null;
 let clutterMode: ClutterMode = 'off';
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
 const clutterText = document.getElementById('clutter-text') as HTMLSpanElement | null;
-const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT' };
+const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN' };
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
@@ -164,6 +164,7 @@ function updateClutterUi(): void {
 function cycleClutterMode(): void {
   if (!clutterFilter) return;
   clutterMode = clutterFilter.cycleMode();
+  if (groundStreamer) groundStreamer.underTiles = clutterMode === 'hidden';
   updateClutterUi();
 }
 
@@ -175,6 +176,11 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
   clutterFilter.mode = clutterMode;
+  if (groundStreamer) {
+    // the tiles shifted the ground datum; patches under them must sit on the same field the car drives on
+    groundStreamer.useHeightfield(terrain.heightfield);
+    groundStreamer.underTiles = clutterMode === 'hidden';
+  }
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.onTileLoaded = g => {
