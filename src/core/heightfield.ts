@@ -78,4 +78,9 @@ export class Heightfield {
     if (v === undefined) throw new Error(`heightfield index ${idx} out of range`);
     return v;
   }
+
+  /** Direct read access to the underlying Float32Array buffer for GPU textures. */
+  get raw(): Float32Array {
+    return this.data;
+  }
 }

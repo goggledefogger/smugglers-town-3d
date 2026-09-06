@@ -30,7 +30,7 @@ export type BindingTable = Record<LogicalAction, Binding[]>;
 export const DRIVING_ACTIONS: readonly LogicalAction[] = [
   'accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'
 ];
-export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset', 'viewMode'];
+export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset', 'viewMode', 'clutterMode'];
 export const UI_ACTIONS: readonly LogicalAction[] = [
   'uiUp', 'uiDown', 'uiLeft', 'uiRight', 'uiConfirm', 'uiBack', 'uiTab', 'uiPause'
 ];
@@ -54,6 +54,7 @@ const DEFAULTS_KEYBOARD: BindingTable = {
   camera: [{ kind: 'key', code: 'KeyC' }],
   reset: [{ kind: 'key', code: 'KeyR' }],
   viewMode: [{ kind: 'key', code: 'KeyV' }, { kind: 'key', code: 'KeyG' }],
+  clutterMode: [{ kind: 'key', code: 'KeyF' }],
   uiUp: [{ kind: 'key', code: 'ArrowUp' }],
   uiDown: [{ kind: 'key', code: 'ArrowDown' }],
   uiLeft: [{ kind: 'key', code: 'ArrowLeft' }],
@@ -80,6 +81,7 @@ const DEFAULTS_GAMEPAD: BindingTable = {
   camera: [{ kind: 'button', index: 8 }],          // Select
   reset: [{ kind: 'button', index: 9 }],            // Start/Options
   viewMode: [],
+  clutterMode: [],
   uiUp: [{ kind: 'button', index: 12 }, { kind: 'axis', index: 1, sign: -1 }],   // dpad-up + stick up
   uiDown: [{ kind: 'button', index: 13 }, { kind: 'axis', index: 1, sign: 1 }],  // dpad-down + stick down
   uiLeft: [{ kind: 'button', index: 14 }, { kind: 'axis', index: 0, sign: -1 }], // dpad-left + stick left
@@ -97,7 +99,7 @@ const STORAGE_KEY = 'stt.bindings';
  * an older default (e.g. the pre-redesign layout that mapped A→jump) can't
  * override the corrected defaults. Forward-compatible: bumping re-invalidates.
  */
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 export interface SavedBindings {
   readonly keyboard: BindingTable;

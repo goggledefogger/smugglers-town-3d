@@ -349,6 +349,10 @@ export class TileStreamer {
   private lastPickMs = 0;
   private dirty = false;
   private shiftY = 0;
+  /** n*n cells, 1 = building/deck/ramp as of the last colliders() call; render filters sample it. */
+  readonly structureGrid: Uint8Array;
+  /** Called with each tile's scene graph as it loads, before it joins the group. */
+  onTileLoaded: ((group: Group) => void) | null = null;
 
   constructor(
     private readonly apiKey: string,
@@ -364,6 +368,7 @@ export class TileStreamer {
     this.placement = glbPlacement(origin, ecef0, terrain.reliefBoost);
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
     this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
+    this.structureGrid = new Uint8Array(this.grid.n * this.grid.n);
   }
 
   get tileCount(): number {
@@ -637,7 +642,9 @@ export class TileStreamer {
       this.grid,
       this.terrainTop,
       this.reliefBoost,
-      this.deckGrid
+      this.deckGrid,
+      undefined,
+      this.structureGrid
     );
   }
 
@@ -655,6 +662,7 @@ export class TileStreamer {
       noteFailure('parse failed', e);
     }
     if (!g) return null;
+    this.onTileLoaded?.(g);
     return { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
   }
 
