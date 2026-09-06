@@ -13,6 +13,7 @@ import {
   CanvasTexture, DoubleSide, NormalBlending, AdditiveBlending,
   type Camera, type Material
 } from 'three';
+import { vehicleEnvMap } from './vehicleMeshes.ts';
 
 /** Generates a procedural radial soft-smoke alpha texture with turbulent density. */
 function createSmokeTexture(): CanvasTexture {
@@ -71,24 +72,31 @@ export class SmokingToilet {
     this.planeGeom = new PlaneGeometry(1, 1);
 
     // --- MATERIALS ---
+    const env = vehicleEnvMap();
     const goldMat = new MeshStandardMaterial({
       color: 0xf5c024,
       metalness: 0.88,
       roughness: 0.24,
       emissive: 0x4a3200,
-      emissiveIntensity: 0.15
+      emissiveIntensity: 0.15,
+      envMap: env ?? undefined,
+      envMapIntensity: 1.0
     });
 
     const goldAccent = new MeshStandardMaterial({
       color: 0xffd952,
       metalness: 0.94,
-      roughness: 0.16
+      roughness: 0.16,
+      envMap: env ?? undefined,
+      envMapIntensity: 1.1
     });
 
     const chromeMat = new MeshStandardMaterial({
       color: 0xffffff,
       metalness: 0.95,
-      roughness: 0.1
+      roughness: 0.1,
+      envMap: env ?? undefined,
+      envMapIntensity: 1.2
     });
 
     const cavityMat = new MeshStandardMaterial({

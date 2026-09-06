@@ -19,6 +19,11 @@ export function setVehicleEnvMap(t: Texture | null): void {
   envMap = t;
 }
 
+/** The studio envmap shared with reflective props like the golden toilet. */
+export function vehicleEnvMap(): Texture | null {
+  return envMap;
+}
+
 export interface VehicleMesh {
   readonly root: Group;
   /** Spin groups (rotate about local Y = the axle) with their radii. */
