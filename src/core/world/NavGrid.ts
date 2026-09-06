@@ -1,9 +1,14 @@
 /**
  * Coarse occupancy grid over the play field with BFS flow fields, so bots
  * route around buildings and props instead of driving straight at a target.
- * Cells are 3 units (20 m); a cell is blocked when its center lies within a
- * car's half-width of any collider footprint. A flow field is the BFS
- * distance from a target cell; following it downhill is the route.
+ * A cell is blocked when its center lies within a car's half-width of any
+ * collider footprint. A flow field is the BFS distance from a target cell;
+ * following it downhill is the route.
+ *
+ * `Game` builds this at 6 units per cell over the 5600-unit field: ~870k
+ * cells, so anything that sweeps the whole grid costs tens of milliseconds.
+ * Both full sweeps here are therefore avoided rather than optimised — see
+ * `FlowField.reach` and `clearWithin`.
  */
 import { Vector3 } from 'three';
 import type { BuildingCollider } from '../physics/VehicleBody.ts';
@@ -120,8 +125,8 @@ export class NavGrid implements OpenSpace {
   /**
    * clearance() >= k at cell (i0, j0) without the field: no blocked cell and
    * no world edge within k - 1 cells. A respawn asks this for a few cells
-   * near a base; the multi-source BFS it replaced was a 30 ms hitch after
-   * every collider rebuild.
+   * near a base; the whole-grid multi-source BFS it replaced measured a 30 ms
+   * hitch after every collider rebuild.
    */
   private clearWithin(i0: number, j0: number, k: number): boolean {
     const n = this.n;
@@ -195,8 +200,8 @@ export class NavGrid implements OpenSpace {
   /**
    * BFS distance in cells from the target (nearest free cell if it is
    * blocked). The search runs lazily, only as far as the cells that are
-   * queried: the grid is 3.5M cells and a full sweep is a 40 ms hitch, while
-   * a bot a few streets away needs a few thousand.
+   * queried: sweeping all ~870k cells measured 25-60 ms, while a bot a few
+   * streets away needs a few thousand of them.
    */
   flowField(tx: number, tz: number): FlowField {
     let start = this.cellOf(tz) * this.n + this.cellOf(tx);
