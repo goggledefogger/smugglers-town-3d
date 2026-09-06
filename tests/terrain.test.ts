@@ -45,6 +45,26 @@ describe('TerrainMesh continuous underlay', () => {
     expect(tm.mesh).toBeNull();
   });
 
+  it('drapes vertices straight from the heightfield grid, matching per-vertex sampling', async () => {
+    const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
+    const { createDesertTerrain } = await import('../src/core/terrain/ProceduralTerrain.ts');
+    const { Heightfield } = await import('../src/core/heightfield.ts');
+    const data = Float32Array.from({ length: 6 * 6 }, (_, k) => Math.sin(k * 0.7) * 20);
+    const hf = new Heightfield(100, 5, data);
+    const tm = new TerrainMesh();
+    const mesh = tm.build(createDesertTerrain(hf), 1);
+    const refreshed = new Heightfield(100, 5, data.map(v => v * 0.5 + 3));
+    tm.refresh(refreshed);
+    const pos = mesh.geometry.attributes.position!;
+    const nrm = mesh.geometry.attributes.normal!;
+    for (let i = 0; i < pos.count; i++) {
+      expect(pos.getY(i)).toBeCloseTo(refreshed.sample(pos.getX(i), pos.getZ(i)), 5);
+      expect(nrm.getY(i)).toBeGreaterThan(0);
+      expect(Math.hypot(nrm.getX(i), nrm.getY(i), nrm.getZ(i))).toBeCloseTo(1, 5);
+    }
+    tm.dispose();
+  });
+
   it('generates high-res sand detail texture and grid texture with anisotropic filtering', async () => {
     const { TerrainMesh } = await import('../src/render/TerrainMesh.ts');
     const { createDesertTerrain } = await import('../src/core/terrain/ProceduralTerrain.ts');
