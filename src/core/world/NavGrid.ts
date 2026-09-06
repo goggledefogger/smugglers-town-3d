@@ -117,13 +117,30 @@ export class NavGrid implements OpenSpace {
     return this.clearance()[c]! * this.cell;
   }
 
+  /**
+   * clearance() >= k at cell (i0, j0) without the field: no blocked cell and
+   * no world edge within k - 1 cells. A respawn asks this for a few cells
+   * near a base; the multi-source BFS it replaced was a 30 ms hitch after
+   * every collider rebuild.
+   */
+  private clearWithin(i0: number, j0: number, k: number): boolean {
+    const n = this.n;
+    const r = k - 1;
+    if (i0 - r < 1 || j0 - r < 1 || i0 + r > n - 2 || j0 + r > n - 2) return false;
+    for (let j = j0 - r; j <= j0 + r; j++) {
+      const row = j * n;
+      for (let i = i0 - r; i <= i0 + r; i++) if (this.blocked[row + i]) return false;
+    }
+    return true;
+  }
+
   findOpen(x: number, z: number, need: number): Vec2 | null {
-    const dist = this.clearance();
     const n = this.n;
     const needCells = Math.ceil(need / this.cell);
     const i0 = this.cellOf(x), j0 = this.cellOf(z);
-    if (dist[j0 * n + i0]! >= needCells) return { x, z };
-    for (let r = 1; r < n; r++) {
+    if (this.clearWithin(i0, j0, needCells)) return { x, z };
+    // ponytail: 100 cells (300 units) is as far as a respawn looks; SpawnPlanner falls back to mostOpen
+    for (let r = 1; r < 100; r++) {
       let best = -1;
       let bestD = Infinity;
       for (let dj = -r; dj <= r; dj++) {
@@ -132,7 +149,7 @@ export class NavGrid implements OpenSpace {
           const i = i0 + di, j = j0 + dj;
           if (i < 0 || j < 0 || i >= n || j >= n) continue;
           const c = j * n + i;
-          if (dist[c]! < needCells) continue;
+          if (!this.clearWithin(i, j, needCells)) continue;
           const d = di * di + dj * dj;
           if (d < bestD) {
             bestD = d;
@@ -175,36 +192,16 @@ export class NavGrid implements OpenSpace {
     return { x: this.centerOf(i), z: this.centerOf((c - i) / this.n) };
   }
 
-  /** BFS distance in cells from the target (nearest free cell if it is blocked). */
+  /**
+   * BFS distance in cells from the target (nearest free cell if it is
+   * blocked). The search runs lazily, only as far as the cells that are
+   * queried: the grid is 3.5M cells and a full sweep is a 40 ms hitch, while
+   * a bot a few streets away needs a few thousand.
+   */
   flowField(tx: number, tz: number): FlowField {
-    const n = this.n;
-    const dist = new Uint16Array(n * n).fill(UNREACHED);
-    let start = this.cellOf(tz) * n + this.cellOf(tx);
+    let start = this.cellOf(tz) * this.n + this.cellOf(tx);
     if (this.blocked[start]) start = this.nearestFree(start);
-    if (start < 0) return new FlowField(this, dist);
-    const queue = new Int32Array(n * n);
-    let head = 0, tail = 0;
-    dist[start] = 0;
-    queue[tail++] = start;
-    while (head < tail) {
-      const c = queue[head++]!;
-      const d = dist[c]! + 1;
-      const i = c % n, j = (c - i) / n;
-      for (let dj = -1; dj <= 1; dj++) {
-        for (let di = -1; di <= 1; di++) {
-          if (di === 0 && dj === 0) continue;
-          const ni = i + di, nj = j + dj;
-          if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
-          const nc = nj * n + ni;
-          if (this.blocked[nc] || dist[nc] !== UNREACHED) continue;
-          // no cutting corners between two blocked orthogonal neighbours
-          if (di !== 0 && dj !== 0 && (this.blocked[j * n + ni] || this.blocked[nj * n + i])) continue;
-          dist[nc] = d;
-          queue[tail++] = nc;
-        }
-      }
-    }
-    return new FlowField(this, dist);
+    return new FlowField(this, this.blocked, start);
   }
 
   private nearestFree(c: number): number {
@@ -225,13 +222,76 @@ export class NavGrid implements OpenSpace {
 }
 
 export class FlowField {
+  private readonly dist: Uint16Array;
+  private queue = new Int32Array(1 << 14);
+  private head = 0;
+  private tail = 0;
+
   constructor(
     private readonly grid: NavGrid,
-    private readonly dist: Uint16Array
-  ) {}
+    private readonly blocked: Uint8Array,
+    start: number
+  ) {
+    this.dist = new Uint16Array(grid.n * grid.n).fill(UNREACHED);
+    if (start >= 0) {
+      this.dist[start] = 0;
+      this.queue[this.tail++] = start;
+    }
+  }
+
+  /**
+   * Expand the search until `c` has a distance or nothing is left. A cell's
+   * distance is final on discovery and every neighbour closer to the target
+   * was discovered before it, so a reached cell can be routed from at once.
+   */
+  private reach(c: number): void {
+    const n = this.grid.n;
+    const dist = this.dist;
+    const blocked = this.blocked;
+    while (this.head < this.tail && dist[c] === UNREACHED) {
+      const cur = this.queue[this.head++]!;
+      const d = dist[cur]! + 1;
+      const i = cur % n, j = (cur - i) / n;
+      for (let dj = -1; dj <= 1; dj++) {
+        for (let di = -1; di <= 1; di++) {
+          if (di === 0 && dj === 0) continue;
+          const ni = i + di, nj = j + dj;
+          if (ni < 0 || nj < 0 || ni >= n || nj >= n) continue;
+          const nc = nj * n + ni;
+          if (blocked[nc] || dist[nc] !== UNREACHED) continue;
+          // no cutting corners between two blocked orthogonal neighbours
+          if (di !== 0 && dj !== 0 && (blocked[j * n + ni] || blocked[nj * n + i])) continue;
+          dist[nc] = d;
+          if (this.tail === this.queue.length) {
+            const bigger = new Int32Array(this.queue.length * 2);
+            bigger.set(this.queue);
+            this.queue = bigger;
+          }
+          this.queue[this.tail++] = nc;
+        }
+      }
+    }
+  }
+
+  /** Reach `c`, or if it is blocked and can never be reached, its free neighbours. */
+  private reachAround(c: number): void {
+    this.reach(c);
+    if (this.dist[c] !== UNREACHED || !this.blocked[c]) return;
+    const n = this.grid.n;
+    const i0 = c % n, j0 = (c - i0) / n;
+    for (let dj = -1; dj <= 1; dj++) {
+      for (let di = -1; di <= 1; di++) {
+        const i = i0 + di, j = j0 + dj;
+        if (i < 0 || j < 0 || i >= n || j >= n) continue;
+        if (!this.blocked[j * n + i]) this.reach(j * n + i);
+      }
+    }
+  }
 
   distanceAt(x: number, z: number): number {
-    const d = this.dist[this.grid.cellOf(z) * this.grid.n + this.grid.cellOf(x)]!;
+    const c = this.grid.cellOf(z) * this.grid.n + this.grid.cellOf(x);
+    this.reach(c);
+    const d = this.dist[c]!;
     return d === UNREACHED ? Infinity : d;
   }
 
@@ -243,6 +303,7 @@ export class FlowField {
   waypoint(x: number, z: number, lookahead: number, out: Vector3): Vector3 | null {
     const n = this.grid.n;
     let c = this.grid.cellOf(z) * n + this.grid.cellOf(x);
+    this.reachAround(c);
     if (this.dist[c] === UNREACHED) {
       c = this.bestNeighbour(c);
       if (c < 0) return null;

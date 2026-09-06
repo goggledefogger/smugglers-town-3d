@@ -73,10 +73,10 @@ describe('GameRenderer adaptive resolution', () => {
     gr.dispose();
   });
 
-  it('caps at 1.25 on high-DPI Retina screens to preserve GPU fill-rate', () => {
+  it('caps at 1.5 on high-DPI Retina screens: sharp, and measured to hold 60 Hz on an M1 Pro', () => {
     (globalThis as any).window.devicePixelRatio = 2.0;
     const gr = new GameRenderer({ canvas: mockCanvas });
-    expect(gr.pixelRatio).toBeCloseTo(1.25, 2);
+    expect(gr.pixelRatio).toBeCloseTo(1.5, 2);
     gr.dispose();
   });
 
@@ -112,6 +112,20 @@ describe('GameRenderer adaptive resolution', () => {
     gr.dispose();
   });
 
+  it('ignores isolated hitches: a 200 ms frame among 60 FPS frames never drops a tier', () => {
+    const gr = new GameRenderer({ canvas: mockCanvas });
+    const initialRatio = gr.pixelRatio;
+    let time = 100;
+    for (let i = 0; i < 600; i++) {
+      // a streaming hitch every 45 frames would have dragged a moving average over 18.5 ms
+      const dt = i % 45 === 0 ? 0.14 : 0.0167;
+      time += dt * 1000;
+      gr.adapt(dt, time);
+    }
+    expect(gr.pixelRatio).toBe(initialRatio);
+    gr.dispose();
+  });
+
   it('downscales under sustained load after settling and recovers smoothly when framerate improves', () => {
     const gr = new GameRenderer({ canvas: mockCanvas });
     const initialScale = gr.pixelRatio;
@@ -130,8 +144,8 @@ describe('GameRenderer adaptive resolution', () => {
     expect(gr.pixelRatio).toBeLessThan(initialScale);
     const reducedRatio = gr.pixelRatio;
 
-    // Now simulate sustained fast recovery (0.016s = 62 FPS)
-    for (let i = 0; i < 180; i++) {
+    // Now simulate sustained fast recovery (0.016s = 62 FPS) past the 5 s hold
+    for (let i = 0; i < 400; i++) {
       time += 16;
       gr.adapt(0.016, time);
     }

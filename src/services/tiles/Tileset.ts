@@ -31,6 +31,7 @@ import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
+import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
   AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
@@ -631,12 +632,9 @@ export class TileStreamer {
       });
   }
 
-  /** Rebuild building colliders from the current tiles (~15 ms for a city). */
+  /** Rebuild building colliders from the current tiles, on this thread (~30 ms for a city). */
   colliders(): BuildingCollider[] {
     this.dirty = false;
-    if (!this.deckGrid || this.deckGrid.length !== this.grid.n * this.grid.n) {
-      this.deckGrid = new Float32Array(this.grid.n * this.grid.n);
-    }
     return collidersFromRasters(
       this.tiles.map(t => t.raster),
       this.grid,
@@ -648,10 +646,40 @@ export class TileStreamer {
     );
   }
 
+  private worker: Worker | null = null;
+
+  /**
+   * The same rebuild in a worker, for the streaming loop: the frame pays a
+   * clone of the rasters, not the pass. Falls back to the sync pass where
+   * workers do not exist (tests).
+   */
+  collidersAsync(): Promise<BuildingCollider[]> {
+    if (typeof Worker === 'undefined') return Promise.resolve(this.colliders());
+    this.dirty = false;
+    const worker = this.worker ??= new Worker(new URL('./colliderWorker.ts', import.meta.url), { type: 'module' });
+    return new Promise((resolve, reject) => {
+      worker.onmessage = (e: MessageEvent<ColliderResult>) => {
+        this.deckGrid.set(e.data.deckGrid);
+        this.structureGrid.set(e.data.structureGrid);
+        resolve(e.data.boxes.map(b => ({
+          min: new Vector3(b.min.x, b.min.y, b.min.z),
+          max: new Vector3(b.max.x, b.max.y, b.max.z)
+        })));
+      };
+      worker.onerror = e => reject(new Error(e.message));
+      const job: ColliderJob = {
+        rasters: this.tiles.map(t => t.raster), grid: this.grid, terrainTop: this.terrainTop, reliefBoost: this.reliefBoost
+      };
+      worker.postMessage(job);
+    });
+  }
+
   dispose(): void {
     for (const t of this.tiles) disposeTiles(t.group);
     this.tiles.length = 0;
     this.group.clear();
+    this.worker?.terminate();
+    this.worker = null;
   }
 
   private async loadChild(tile: CollectedTile): Promise<LoadedTile | null> {

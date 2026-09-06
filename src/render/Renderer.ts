@@ -6,7 +6,8 @@
 import {
   WebGLRenderer, Scene, PerspectiveCamera, Fog, Vector3,
   DirectionalLight, AmbientLight, HemisphereLight,
-  SRGBColorSpace, ACESFilmicToneMapping
+  SRGBColorSpace, ACESFilmicToneMapping,
+  type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { makeSkyTexture, SKY_HORIZON, SKY_MID_LIGHT } from './skyTexture.ts';
 import { LIGHTING_COLORS } from '../core/theme.ts';
@@ -31,8 +32,11 @@ export class GameRenderer {
   private scale = 1;
   private tierIndex = 0;
   private readonly tiers = [1.0, 0.86, 0.74];
-  private frameAvg = 1 / 60;
-  private lastAdjustMs = 0;
+  // last 1.5 s of frame times; the median ignores the hitches a mean does not
+  private readonly frameWindow = new Float32Array(90);
+  private frameCount = 0;
+  private firstFrameMs = 0;
+  private lastAdjustMs = -Infinity;
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -41,10 +45,11 @@ export class GameRenderer {
     if (dpr <= 1.25) {
       return { baseRatio: 1.0, minScale: 0.85 };
     }
-    // On high-DPI displays (Retina, mobile, 4K): target 1.25x.
-    // 1.25x provides subpixel antialiased edges on Retina (>220 PPI) while saving
-    // ~49% fragment fill-rate over 1.75x and ~61% over 2.0x to guarantee smooth 60 FPS.
-    const baseRatio = Math.min(dpr, 1.25);
+    // High-DPI (Retina, mobile, 4K): 1.5x. Measured on an M1 Pro 14" driving
+    // Manhattan: 1.25 holds 120 Hz, 1.5 and 2.0 both hold a solid 60 Hz with
+    // no spikes, so 1.5 buys the sharper image for nothing visible; the tiers
+    // below take weaker GPUs down to 1.29 and 1.11.
+    const baseRatio = Math.min(dpr, 1.5);
     return { baseRatio, minScale: 0.72 };
   }
 
@@ -99,52 +104,42 @@ export class GameRenderer {
   }
 
   /**
-   * Adaptive resolution: call once per frame with the raw frame delta.
-   * On 1x displays, locks native 1:1 pixel mapping (1.0). On high-DPI displays,
-   * scales across discrete tiers (1.25 -> 1.08 -> 0.90) to preserve smooth 60 FPS
-   * without WebGL backbuffer reallocation stutter.
+   * Adaptive resolution: call once per frame with the raw frame delta. On 1x
+   * displays this locks 1:1; on high-DPI it steps through discrete tiers
+   * (1.25 -> 1.08 -> 0.93). A tier change resizes the canvas and reallocates
+   * the multisampled backbuffer, a ~150 ms stall, so it must only answer
+   * sustained GPU overload: the trigger is the median of the last 1.5 s
+   * (a single 200 ms hitch cannot move it, where it dragged the old moving
+   * average over the line), after a 5 s grace and with 5 s between changes.
    */
   adapt(dt: number, nowMs: number): void {
     // Ignore invalid or paused frames (background tab, modal pause, tab switch)
     if (dt > 0.15 || dt <= 0) return;
+    this.frameWindow[this.frameCount++ % this.frameWindow.length] = dt;
 
-    // Smooth moving average over ~30 frames
-    this.frameAvg += (dt - this.frameAvg) * 0.04;
+    if (this.firstFrameMs === 0) this.firstFrameMs = nowMs;
+    if (nowMs - this.firstFrameMs < 5000 || nowMs - this.lastAdjustMs < 5000) return;
+    const filled = Math.min(this.frameCount, this.frameWindow.length);
+    if (filled < 30) return;
 
-    // Grace period for initial page load / shader compilation (2.5s)
-    if (this.lastAdjustMs === 0) {
-      this.lastAdjustMs = nowMs + 2500;
-      return;
-    }
-    // Require at least 2.5s between tier shifts to prevent backbuffer reallocation stutter
-    if (nowMs - this.lastAdjustMs < 2500) return;
+    const sorted = this.frameWindow.slice(0, filled).sort();
+    const median = sorted[filled >> 1]!;
+    // 18.5 ms (< 54 FPS) for most frames means the GPU is the bottleneck: drop a tier
+    if (median > 1 / 54 && this.tierIndex < this.tiers.length - 1) this.setTier(this.tierIndex + 1, nowMs, median);
+    // recover once frames are solidly under 16.9 ms (59+ FPS)
+    else if (median < 1 / 59 && this.tierIndex > 0) this.setTier(this.tierIndex - 1, nowMs, median);
+  }
 
-    // Target 60 FPS (16.6ms). If frame time averages > 18.5ms (< 54 FPS), drop a tier
-    if (this.frameAvg > 1 / 54 && this.tierIndex < this.tiers.length - 1) {
-      this.tierIndex++;
-      this.scale = Math.max(this.minScale, this.tiers[this.tierIndex]!);
-      this.lastAdjustMs = nowMs;
-      this.renderer.setPixelRatio(this.baseRatio * this.scale);
-      log.debug('render scale down', {
-        tier: this.tierIndex,
-        scale: Number(this.scale.toFixed(3)),
-        pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
-        fps: Math.round(1 / this.frameAvg)
-      });
-    }
-    // Only recover upward if sustained framerate is solidly 59+ FPS (< 16.9ms)
-    else if (this.frameAvg < 1 / 59 && this.tierIndex > 0) {
-      this.tierIndex--;
-      this.scale = Math.max(this.minScale, this.tiers[this.tierIndex]!);
-      this.lastAdjustMs = nowMs;
-      this.renderer.setPixelRatio(this.baseRatio * this.scale);
-      log.debug('render scale up', {
-        tier: this.tierIndex,
-        scale: Number(this.scale.toFixed(3)),
-        pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
-        fps: Math.round(1 / this.frameAvg)
-      });
-    }
+  private setTier(tier: number, nowMs: number, median: number): void {
+    this.tierIndex = tier;
+    this.scale = Math.max(this.minScale, this.tiers[tier]!);
+    this.lastAdjustMs = nowMs;
+    this.renderer.setPixelRatio(this.baseRatio * this.scale);
+    log.debug('render scale', {
+      tier,
+      pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
+      medianMs: Number((median * 1000).toFixed(1))
+    });
   }
 
   get pixelRatio(): number {
@@ -153,6 +148,24 @@ export class GameRenderer {
 
   render(): void {
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /**
+   * Compile an object's programs and upload its textures now. three does both
+   * lazily on the first frame an object is drawn, so a turn that brings fifty
+   * streamed tiles into view was a 200 ms stall; doing it as each tile lands
+   * spreads the same work over the download.
+   */
+  warm(obj: Object3D): void {
+    this.renderer.compile(obj, this.camera, this.scene);
+    obj.traverse(o => {
+      const mesh = o as Mesh;
+      if (!mesh.isMesh) return;
+      for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) {
+        const map = (m as Material & { map?: Texture | null }).map;
+        if (map) this.renderer.initTexture(map);
+      }
+    });
   }
 
   get maxAnisotropy(): number {

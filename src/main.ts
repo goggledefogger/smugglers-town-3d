@@ -29,6 +29,7 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
+import type { BuildingCollider } from './core/physics/VehicleBody.ts';
 import { InputManager } from './input/InputManager.ts';
 import type { UiAction } from './input/types.ts';
 import { logger } from './app/log.ts';
@@ -141,6 +142,7 @@ let tiles: TileStreamer | null = null;
 let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
 let colliderGeneration = 0;
+let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
@@ -167,14 +169,18 @@ function cycleClutterMode(): void {
 
 clutterBtn?.addEventListener('click', cycleClutterMode);
 
-/** Patch the streamed tiles so the clutter filter runs on every tile, now and as they refine. */
-function attachClutterFilter(streamer: TileStreamer, terrain: TerrainProvider): void {
+/** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
+function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
   clutterFilter.mode = clutterMode;
   clutterFilter.patch(streamer.group);
-  streamer.onTileLoaded = g => clutterFilter?.patch(g);
+  renderer.warm(streamer.group);
+  streamer.onTileLoaded = g => {
+    clutterFilter?.patch(g);
+    renderer.warm(g);
+  };
   updateClutterUi();
 }
 
@@ -207,10 +213,25 @@ viewModeBtn?.addEventListener('click', () => {
   toggleViewMode();
 });
 
-/** Buildings from the streamed tiles plus the scattered props. */
+/** Buildings from the streamed tiles plus the scattered props; sync, so a match can spawn clear of them. */
 function applyColliders(): void {
+  applyTileColliders(tiles?.colliders() ?? []);
+}
+
+let colliderJob: Promise<void> | null = null;
+
+/** The streaming loop's rebuild, in the tile worker; tiles that change meanwhile re-dirty for the next one. */
+function refreshColliders(): void {
+  if (!tiles || colliderJob) return;
+  colliderJob = tiles.collidersAsync()
+    .then(applyTileColliders)
+    .catch(e => log.warn('collider rebuild failed', e))
+    .finally(() => { colliderJob = null; });
+}
+
+function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
-  const colliders = [...(tiles?.colliders() ?? []), ...propScatter.colliders];
+  const colliders = [...tileBoxes, ...propScatter.colliders];
   clutterFilter?.maskChanged();
   game.setBuildingColliders(colliders);
   buildingMeshView.update(
@@ -219,7 +240,13 @@ function applyColliders(): void {
     tiles?.activeGrid,
     (x, z) => world.terrainProvider.heightfield.sample(x, z)
   );
-  terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2, colliderGeneration);
+  // the repaint re-uploads a 3840² satellite texture with mipmaps, a 50-150 ms
+  // stall, for ground the tiles mostly cover: once at match start, then rarely
+  const now = performance.now();
+  if (now - footprintPaintAt > 20000) {
+    footprintPaintAt = now;
+    terrainMesh.neutralizeBuildingFootprints(colliders, config.world.mapHalf * 2, colliderGeneration);
+  }
 }
 
 function rebuildViews(): void {
@@ -242,6 +269,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 }
 
 function clearTiles(): void {
+  footprintPaintAt = -Infinity;
   game.setSurfaceProvider(undefined);
   groundBuilder = null;
   if (groundStreamer) {
@@ -431,7 +459,7 @@ async function openOnline(type: number): Promise<void> {
           }
           // one ground for everything, cut from the tiles — same as single player
           const terrain: TerrainProvider = tiles ? { ...loaded, heightfield: tiles.groundHeightfield() } : loaded;
-          if (tiles) attachClutterFilter(tiles, terrain);
+          if (tiles) attachTiles(tiles, terrain);
           return terrain;
         } finally {
           loaderEl.hidden = true;
@@ -517,7 +545,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
-    if (tiles) attachClutterFilter(tiles, terrain);
+    if (tiles) attachTiles(tiles, terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
   } catch (err) {
@@ -679,7 +707,7 @@ function frame(now: number): void {
       // refined tiles change the building footprints; rebuild at most every 1.5 s
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
-        applyColliders();
+        refreshColliders();
         if (!groundBuilder) {
           groundBuilder = tiles.createGroundBuilder();
         }
