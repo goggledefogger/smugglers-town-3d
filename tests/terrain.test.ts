@@ -82,15 +82,15 @@ describe('TerrainMesh continuous underlay', () => {
       const mesh = tm.build(terrain, 4);
       expect(mesh).toBeDefined();
 
-      // Sand detail texture should be instantiated, repeated, and have anisotropy >= 8
+      // Sand detail texture should be instantiated, repeated, and have anisotropy <= 4
       expect(tm.sandTexture).toBeDefined();
       expect(tm.sandTexture?.wrapS).toBe(RepeatWrapping);
       expect(tm.sandTexture?.wrapT).toBe(RepeatWrapping);
-      expect(tm.sandTexture?.anisotropy).toBeGreaterThanOrEqual(8);
+      expect(tm.sandTexture?.anisotropy).toBeLessThanOrEqual(4);
 
-      // Grid texture should also have anisotropy >= 8
+      // Grid texture should also have anisotropy <= 4
       expect(tm.gridTexture).toBeDefined();
-      expect(tm.gridTexture?.anisotropy).toBeGreaterThanOrEqual(8);
+      expect(tm.gridTexture?.anisotropy).toBeLessThanOrEqual(4);
 
       tm.dispose();
       expect(tm.sandTexture).toBeNull();

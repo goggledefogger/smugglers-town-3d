@@ -75,7 +75,7 @@ function createSandDetailTexture(anisotropy: number): CanvasTexture | null {
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.generateMipmaps = true;
-    tex.anisotropy = Math.max(anisotropy, 8);
+    tex.anisotropy = Math.min(anisotropy, 4);
     return tex;
   } catch {
     return null;
@@ -105,7 +105,7 @@ function createGridTexture(anisotropy: number): CanvasTexture | null {
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.generateMipmaps = true;
-    tex.anisotropy = Math.max(anisotropy, 8);
+    tex.anisotropy = Math.min(anisotropy, 4);
     return tex;
   } catch {
     return null;
@@ -215,7 +215,7 @@ export class TerrainMesh {
       tex.minFilter = LinearMipmapLinearFilter;
       tex.magFilter = LinearFilter;
       tex.generateMipmaps = true;
-      tex.anisotropy = Math.max(anisotropy, 8);
+      tex.anisotropy = Math.min(anisotropy, 4);
       tex.needsUpdate = true;
       this._texture = tex;
 

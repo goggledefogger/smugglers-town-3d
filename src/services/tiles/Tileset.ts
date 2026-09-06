@@ -300,13 +300,11 @@ async function loadTileGlb(
   root.matrixAutoUpdate = false;
   root.matrix.copy(placement);
   root.matrixWorldNeedsUpdate = true;
-  // Enforce trilinear mipmapping + anisotropy so grazing ground and facades stay razor sharp
+  // Enforce trilinear mipmapping + balanced anisotropy (4x) so grazing ground and facades stay sharp without GPU texture sampler stalls
   forEachMap(root, map => {
-    map.anisotropy = Math.max(anisotropy, 8);
+    map.anisotropy = Math.min(anisotropy, 4);
     map.minFilter = LinearMipmapLinearFilter;
     map.magFilter = LinearFilter;
-    map.generateMipmaps = true;
-    map.needsUpdate = true;
   });
   return root;
 }

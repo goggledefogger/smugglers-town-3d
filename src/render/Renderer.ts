@@ -29,20 +29,23 @@ export class GameRenderer {
   private baseRatio: number;
   private minScale: number;
   private scale = 1;
+  private tierIndex = 0;
+  private readonly tiers = [1.0, 0.86, 0.74];
   private frameAvg = 1 / 60;
   private lastAdjustMs = 0;
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
     // On standard 1x displays (<=1.25): native 1:1 pixel mapping (1.0).
-    // Minimum scale is 0.90 to never drop into blurry sub-native pixelation unless under extreme stress.
+    // Minimum scale is 0.85 to maintain readability under extreme load.
     if (dpr <= 1.25) {
-      return { baseRatio: 1.0, minScale: 0.90 };
+      return { baseRatio: 1.0, minScale: 0.85 };
     }
-    // On high-DPI displays (Retina, mobile, 4K): target up to 1.75x.
-    // 1.75x provides 95%+ of 2x crispness while saving ~25% fragment shading fill-rate on mobile/integrated GPUs.
-    const baseRatio = Math.min(dpr, 1.75);
-    return { baseRatio, minScale: 0.75 };
+    // On high-DPI displays (Retina, mobile, 4K): target 1.25x.
+    // 1.25x provides subpixel antialiased edges on Retina (>220 PPI) while saving
+    // ~49% fragment fill-rate over 1.75x and ~61% over 2.0x to guarantee smooth 60 FPS.
+    const baseRatio = Math.min(dpr, 1.25);
+    return { baseRatio, minScale: 0.72 };
   }
 
   constructor(deps: RendererDeps) {
@@ -98,42 +101,50 @@ export class GameRenderer {
   /**
    * Adaptive resolution: call once per frame with the raw frame delta.
    * On 1x displays, locks native 1:1 pixel mapping (1.0). On high-DPI displays,
-   * scales between 0.75 and 1.0 (effective DPR 1.31–1.75) to preserve 60 FPS
-   * without visual degradation.
+   * scales across discrete tiers (1.25 -> 1.08 -> 0.90) to preserve smooth 60 FPS
+   * without WebGL backbuffer reallocation stutter.
    */
   adapt(dt: number, nowMs: number): void {
     // Ignore invalid or paused frames (background tab, modal pause, tab switch)
     if (dt > 0.15 || dt <= 0) return;
 
     // Smooth moving average over ~30 frames
-    this.frameAvg += (dt - this.frameAvg) * 0.035;
+    this.frameAvg += (dt - this.frameAvg) * 0.04;
 
     // Grace period for initial page load / shader compilation (2.5s)
     if (this.lastAdjustMs === 0) {
       this.lastAdjustMs = nowMs + 2500;
       return;
     }
-    if (nowMs - this.lastAdjustMs < 1200) return;
+    // Require at least 2.5s between tier shifts to prevent backbuffer reallocation stutter
+    if (nowMs - this.lastAdjustMs < 2500) return;
 
-    let next = this.scale;
-    // Downscale only if sustained frame rate drops below 35 FPS (28.5ms)
-    if (this.frameAvg > 1 / 35 && this.scale > this.minScale) {
-      next = Math.max(this.minScale, this.scale - 0.08);
+    // Target 60 FPS (16.6ms). If frame time averages > 18.5ms (< 54 FPS), drop a tier
+    if (this.frameAvg > 1 / 54 && this.tierIndex < this.tiers.length - 1) {
+      this.tierIndex++;
+      this.scale = Math.max(this.minScale, this.tiers[this.tierIndex]!);
+      this.lastAdjustMs = nowMs;
+      this.renderer.setPixelRatio(this.baseRatio * this.scale);
+      log.debug('render scale down', {
+        tier: this.tierIndex,
+        scale: Number(this.scale.toFixed(3)),
+        pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
+        fps: Math.round(1 / this.frameAvg)
+      });
     }
-    // Upscale smoothly when frame rate is healthy and comfortably above 48 FPS (20.8ms)
-    else if (this.frameAvg < 1 / 48 && this.scale < 1) {
-      next = Math.min(1, this.scale + 0.1);
+    // Only recover upward if sustained framerate is solidly 59+ FPS (< 16.9ms)
+    else if (this.frameAvg < 1 / 59 && this.tierIndex > 0) {
+      this.tierIndex--;
+      this.scale = Math.max(this.minScale, this.tiers[this.tierIndex]!);
+      this.lastAdjustMs = nowMs;
+      this.renderer.setPixelRatio(this.baseRatio * this.scale);
+      log.debug('render scale up', {
+        tier: this.tierIndex,
+        scale: Number(this.scale.toFixed(3)),
+        pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
+        fps: Math.round(1 / this.frameAvg)
+      });
     }
-
-    if (Math.abs(next - this.scale) < 0.005) return;
-    this.scale = next;
-    this.lastAdjustMs = nowMs;
-    this.renderer.setPixelRatio(this.baseRatio * this.scale);
-    log.debug('render scale', {
-      scale: Number(this.scale.toFixed(3)),
-      pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
-      fps: Math.round(1 / this.frameAvg)
-    });
   }
 
   get pixelRatio(): number {
@@ -145,7 +156,7 @@ export class GameRenderer {
   }
 
   get maxAnisotropy(): number {
-    return this.renderer.capabilities.getMaxAnisotropy();
+    return Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4);
   }
 
   /**

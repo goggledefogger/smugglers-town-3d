@@ -73,10 +73,10 @@ describe('GameRenderer adaptive resolution', () => {
     gr.dispose();
   });
 
-  it('caps at 1.75 on high-DPI Retina screens to preserve GPU fill-rate', () => {
+  it('caps at 1.25 on high-DPI Retina screens to preserve GPU fill-rate', () => {
     (globalThis as any).window.devicePixelRatio = 2.0;
     const gr = new GameRenderer({ canvas: mockCanvas });
-    expect(gr.pixelRatio).toBeCloseTo(1.75, 2);
+    expect(gr.pixelRatio).toBeCloseTo(1.25, 2);
     gr.dispose();
   });
 
@@ -131,7 +131,7 @@ describe('GameRenderer adaptive resolution', () => {
     const reducedRatio = gr.pixelRatio;
 
     // Now simulate sustained fast recovery (0.016s = 62 FPS)
-    for (let i = 0; i < 90; i++) {
+    for (let i = 0; i < 180; i++) {
       time += 16;
       gr.adapt(0.016, time);
     }
