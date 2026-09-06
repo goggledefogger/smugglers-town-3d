@@ -4,8 +4,9 @@ import { HudComponent } from './HudComponent.ts';
 export class ObjectiveBar extends HudComponent {
   static override styles = css`
     :host { display: block; }
-    .panel { padding:8px 14px; background:rgba(36,28,22,.82); border:1px solid var(--line);
-      border-radius:10px; font-size:12px; letter-spacing:.08em; }
+    .panel { padding:8px 14px; background:rgba(15,22,34,.86); border:1px solid var(--line);
+      border-radius:10px; backdrop-filter:blur(8px); box-shadow:0 4px 14px rgba(0,0,0,.4);
+      font-size:12px; letter-spacing:.08em; }
     .obj { font-weight:600; }
     .obj.find { color:var(--good); }
     .obj.deliver { color:var(--accent); }

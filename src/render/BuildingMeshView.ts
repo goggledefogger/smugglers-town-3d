@@ -12,6 +12,7 @@ import {
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import type { Grid } from '../services/tiles/tileColliders.ts';
 import { NO_DATA } from '../services/tiles/tileColliders.ts';
+import { BUILDING_COLORS } from '../core/theme.ts';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -35,7 +36,7 @@ export class BuildingMeshView {
   });
 
   private readonly deckMat = new MeshStandardMaterial({
-    color: 0x242830,
+    color: BUILDING_COLORS.deck,
     roughness: 0.8,
     metalness: 0.05
   });
@@ -97,13 +98,13 @@ export class BuildingMeshView {
         // Height-based stylized arcade palette:
         // Taller skyscrapers get cooler steel/blue tones; lower buildings get warm stone/slate
         if (sy > 40) {
-          _color.setHex(0x28384a); // tall high-rise
+          _color.setHex(BUILDING_COLORS.tall); // tall high-rise
         } else if (sy > 18) {
-          _color.setHex(0x354252); // mid-rise
+          _color.setHex(BUILDING_COLORS.mid); // mid-rise
         } else if (b.kind === 'prop') {
-          _color.setHex(0x6a5844); // rock/prop
+          _color.setHex(BUILDING_COLORS.propRock); // rock/prop
         } else {
-          _color.setHex(0x3b404a); // low commercial/residential
+          _color.setHex(BUILDING_COLORS.low); // low commercial/residential
         }
         mesh.setColorAt(i, _color);
       }

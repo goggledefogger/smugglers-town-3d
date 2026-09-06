@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="color-scheme" content="dark" />
-  <meta name="theme-color" content="#1a1410" />
+  <meta name="theme-color" content="#0b0f17" />
   <title>Smugglers Town 3D — World Tour</title>
   <link rel="icon" href="data:," />
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -12,22 +12,22 @@
   <link href="https://fonts.googleapis.com/css2?family=Russo+One&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" />
   <style>
     :root {
-      --bg: #1a1410;
-      --panel: #241c16;
-      --panel2: #2e251c;
-      --sand: #c89b5a;
-      --accent: #ff5a1f;
-      --hot: #ff2d55;
-      --cool: #4fc3f7;
-      --good: #7dd87d;
-      --ink: #f4ead8;
-      --muted: #a8957c;
-      --line: #3a2f24;
+      --bg: #0b0f17;
+      --panel: #111a26;
+      --panel2: #172334;
+      --sand: #fbbf24;
+      --accent: #ff5500;
+      --hot: #ff2a5f;
+      --cool: #38bdf8;
+      --good: #10b981;
+      --ink: #f1f5f9;
+      --muted: #94a3b8;
+      --line: #223247;
 
       /* surfaces, mixed from the palette rather than picked by hand */
-      --scrim: rgb(26 20 16 / .97);
-      --field-bg: rgb(0 0 0 / .4);
-      --inset-bg: rgb(0 0 0 / .25);
+      --scrim: rgb(11 15 23 / .95);
+      --field-bg: rgb(7 11 18 / .65);
+      --inset-bg: rgb(0 0 0 / .35);
 
       /* spacing scale: every gap, pad and margin comes from here */
       --space-2xs: 4px;
@@ -101,7 +101,7 @@
       align-items: center;
       gap: 6px;
       padding: 5px 10px;
-      background: rgba(36, 28, 22, 0.88);
+      background: rgba(17, 26, 38, 0.88);
       border: 1.5px solid var(--line);
       border-radius: var(--radius-md);
       color: var(--ink);
@@ -112,23 +112,24 @@
       cursor: pointer;
       backdrop-filter: blur(8px);
       transition: all 0.15s ease;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
       user-select: none;
       width: fit-content;
     }
     .hud-btn:hover {
       border-color: var(--accent);
       color: #fff;
+      box-shadow: 0 0 12px rgba(255, 85, 0, 0.25);
       transform: translateY(-1px);
     }
     .hud-btn:active {
       transform: translateY(1px);
     }
     .hud-btn.active {
-      background: rgba(24, 38, 54, 0.92);
+      background: rgba(20, 36, 56, 0.92);
       border-color: var(--cool);
       color: var(--cool);
-      box-shadow: 0 0 12px rgba(79, 195, 247, 0.25);
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.35);
     }
   </style>
 </head>

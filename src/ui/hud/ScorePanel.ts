@@ -6,7 +6,8 @@ export class ScorePanel extends HudComponent {
   static override styles = css`
     :host { display: block; }
     .panel { display:flex; gap:14px; align-items:center; padding:8px 14px;
-      background:rgba(36,28,22,.82); border:1px solid var(--line); border-radius:10px; }
+      background:rgba(15,22,34,.86); border:1px solid var(--line); border-radius:10px;
+      backdrop-filter:blur(8px); box-shadow:0 4px 14px rgba(0,0,0,.4); }
     .team { display:flex; flex-direction:column; align-items:center; min-width:64px; }
     .team .name { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--muted); }
     .team .val { font-family:'Russo One',sans-serif; font-size:26px; line-height:1; }

@@ -78,7 +78,7 @@ export class RelocateBar extends LitElement {
     button:hover { border-color:var(--accent); color:var(--accent); }
     #scenario {
       padding: var(--space-sm) var(--space-sm);
-      background: rgba(20, 16, 12, 0.9);
+      background: rgba(14, 21, 32, 0.92);
       border: var(--border) solid var(--line);
       border-radius: var(--radius-sm);
       color: var(--ink);
@@ -92,8 +92,8 @@ export class RelocateBar extends LitElement {
     }
     #scenario:focus, #scenario:hover { border-color: var(--accent); color: var(--accent); }
     #scenario option, #scenario optgroup {
-      background: #1a1410;
-      color: #f4ead8;
+      background: #0e1522;
+      color: #f1f5f9;
     }
     .status { position:absolute; top:calc(100% + 6px); left:0; right:0; font-size:11px;
       color:var(--hot); text-align:center; pointer-events:none; }

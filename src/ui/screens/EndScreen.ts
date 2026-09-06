@@ -5,18 +5,18 @@ import { html, css, LitElement } from 'lit';
  */
 export class EndScreen extends LitElement {
   static override styles = css`
-    :host { position:fixed; inset:0; background:rgba(26,20,16,.9); display:flex;
+    :host { position:fixed; inset:0; background:rgba(11,15,23,.92); backdrop-filter:blur(8px); display:flex;
       flex-direction:column; align-items:center; justify-content:center; z-index:35; }
     :host([hidden]) { display:none; }
     h2 { font-family:'Russo One',sans-serif; font-size:clamp(36px,7vw,72px); margin:0; }
-    h2.win { color:var(--accent); }
-    h2.lose { color:var(--cool); }
+    h2.win { color:var(--accent); text-shadow:0 0 30px rgba(255,85,0,.4); }
+    h2.lose { color:var(--cool); text-shadow:0 0 30px rgba(56,189,248,.4); }
     p { color:var(--muted); margin:8px 0 24px; font-size:15px; }
-    .rematch { padding:12px 40px; background:var(--accent); color:#1a1410;
+    .rematch { padding:12px 40px; background:var(--accent); color:#0b0f17;
       font-family:'Russo One',sans-serif; font-size:18px; border:none; border-radius:10px; cursor:pointer;
-      box-shadow:0 6px 0 #b0390f; }
-    .rematch:hover { transform:translateY(-2px); }
-    .rematch[data-focused] { box-shadow:0 6px 0 #b0390f, 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
+      box-shadow:0 6px 0 #c23800, 0 10px 24px rgba(255,85,0,.35); transition:transform .08s, box-shadow .2s; }
+    .rematch:hover { transform:translateY(-2px); box-shadow:0 8px 0 #c23800, 0 14px 28px rgba(255,85,0,.45); }
+    .rematch[data-focused] { box-shadow:0 6px 0 #c23800, 0 0 0 3px color-mix(in srgb, var(--accent) 40%, transparent); }
   `;
 
   static override properties = {

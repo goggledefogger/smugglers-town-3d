@@ -408,9 +408,12 @@ patterns:
 ## UI notes
 
 Components style themselves from the token scale in `index.html`'s `:root`
-(`--space-*`, `--radius-*`, `--text-*`, the palette, and derived surfaces).
-Where one value should drive several, they derive: the nav chevron sets
-`--chev-face` and mixes its shaded back and edge from it with `color-mix()`, so
+(`--space-*`, `--radius-*`, `--text-*`, the palette, and derived surfaces),
+backed by the modular color theme registry in `core/theme.ts`. Themes define
+consistent palettes across CSS variables, HUD radar relief, atmospheric sky,
+and 3D terrain biomes, with support for swappable presets (`CYBER_OBSIDIAN_THEME`,
+`NEON_NIGHT_THEME`). Where one value should drive several, they derive: the nav
+chevron sets `--chev-face` and mixes its shaded back and edge from it with `color-mix()`, so
 a state change is one custom property rather than three rules.
 
 Navigation is deliberately two things, as it was in Smuggler's Run. The
