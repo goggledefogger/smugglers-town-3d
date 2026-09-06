@@ -149,7 +149,9 @@ renderer.scene.add(buildingMeshView.group);
 let viewMode: 'photoreal' | 'game3d' = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
-let clutterMode: ClutterMode = 'off';
+// hidden by default: photogrammetry streets are melted cars and lumps, and the
+// satellite ground under them is sharper than the tile surface it replaces
+let clutterMode: ClutterMode = 'hidden';
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
 const clutterText = document.getElementById('clutter-text') as HTMLSpanElement | null;
 const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN' };

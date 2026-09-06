@@ -10,6 +10,9 @@ import type { Heightfield } from '../../core/heightfield.ts';
 
 const log = logger('ground-streamer');
 
+/** Concurrent patch fetches. Each costs a Static Maps request and a ~10 ms decode plus upload on arrival. */
+const MAX_IN_FLIGHT = 3;
+
 export interface GroundStreamerOptions {
   readonly apiKey: string;
   readonly center: { lat: number; lon: number };
@@ -57,7 +60,7 @@ export class GroundStreamer {
 
   private readonly patches = new Map<string, LoadedPatch>();
   private readonly inFlightKeys = new Set<string>();
-  private inFlight = false;
+  private inFlight = 0;
   private lastPickMs = 0;
   private disposed = false;
 
@@ -138,7 +141,9 @@ export class GroundStreamer {
       }
     }
 
-    if (this.inFlight || nowMs - this.lastPickMs < 300) return;
+    // a few patches at once: one at a time took ~8 s to sharpen the ground the
+    // player is standing on, which is the first thing they see when tiles are hidden
+    if (this.inFlight >= MAX_IN_FLIGHT || nowMs - this.lastPickMs < 150) return;
     this.lastPickMs = nowMs;
 
     const half = this.heightfield.size / 2;
@@ -177,7 +182,7 @@ export class GroundStreamer {
 
     if (!bestKey || this.patches.size >= this.maxPatches) return;
 
-    this.inFlight = true;
+    this.inFlight++;
     const tileKey = bestKey;
     const col = bestCol;
     const row = bestRow;
@@ -190,7 +195,7 @@ export class GroundStreamer {
         log.warn('ground patch failed', { key: tileKey, err });
       })
       .finally(() => {
-        this.inFlight = false;
+        this.inFlight--;
         this.inFlightKeys.delete(tileKey);
       });
   }
