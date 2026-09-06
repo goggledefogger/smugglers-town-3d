@@ -103,28 +103,28 @@ export const CYBER_OBSIDIAN_THEME: ColorTheme = {
     horizon: 0xc4d8ee,
     midLight: 0x98bfe6,
     haze: 0x9ab7d6,
-    nadir: '#182436'
+    nadir: '#3d2e1e'
   },
   lighting: {
     sun: 0xfff2dd,
     ambient: 0x8899bb,
-    groundBounce: 0x233042
+    groundBounce: 0x4d3b28
   },
   terrain: {
     gridBg: '#0f1724',
     gridLine: '#22344c',
     biome: {
-      bedrock: [0.28, 0.34, 0.42],
-      steppe: [0.36, 0.46, 0.38],
-      cliff: [0.52, 0.56, 0.62],
-      snow: [0.88, 0.92, 0.96]
+      bedrock: [0.80, 0.65, 0.45],
+      steppe: [0.88, 0.73, 0.48],
+      cliff: [0.68, 0.52, 0.36],
+      snow: [0.90, 0.86, 0.78]
     }
   },
   buildings: {
     tall: 0x28384a,
     mid: 0x354252,
     low: 0x3b404a,
-    propRock: 0x3a4454,
+    propRock: 0x7a5a3e,
     deck: 0x1e2736
   }
 };
