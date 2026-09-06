@@ -347,49 +347,63 @@ too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
 640 m) and swaps it for its children, one swap at a time, up to a tile cap.
 There is no coarsening — evict far tiles first if memory ever bites.
 
-### `services/tiles/tileColliders.ts` — one ground
-A tile is one merged photogrammetry mesh, so per-mesh bounds say nothing
-about buildings. Each tile is rasterized once (`rasterizeTile`) into a 10 m
-grid with two values per cell: the highest surface (`top`: roofs, canopy,
-wall tops) and the lowest (`low`: the street under a tree or a bridge deck).
-Ground level is estimated from `top` alone by a morphological opening — a
-min filter then a max filter at a 60 m radius, wider than a block — which
-returns a slope unchanged and erases anything narrower than the window. A
-cell is a building when `top` stands ≥ 8 real m above that base. Building
-cells merge into AABBs whose floors are cut from the base.
+### `services/tiles/tileColliders.ts` — one ground & 2.5D deckGrid
+A Google 3D tile is one merged photogrammetry mesh (ground + buildings + trees
++ bridges), so per-mesh bounds say nothing about what is drivable. Each tile
+is rasterized once (`rasterizeTile`) into a 10 m grid with three values per cell:
+the highest surface (`top`: roofs, canopy, bridge decks), the lowest surface
+(`low`: the street under a tree or deck), and a 32-bit vertical occupancy mask
+(`mask`: 1.5 m height bins for underpass clearance detection).
 
-`groundField` then produces **the one ground everything plays on**: the
-tile surface where tiles exist (`low` on streets, the base under buildings,
-plus `TILE_GROUND_GAP` so the satellite drape covers the photogrammetry
-street), the elevation-grid terrain where they do not, box-filtered once.
-`TileStreamer.groundHeightfield()` turns it into the `Heightfield` that
-physics, spawning, props, shadows, the camera and the drape all sample;
-`main.ts` swaps it in before the match starts and refreshes it in place
-(`Heightfield.copyFrom`, `TerrainMesh.refresh`) every few seconds while
-streaming sharpens the tiles. Before play, `refineCore` brings every tile
-within 600 m of the start to the streaming LOD, because a ground and a set
-of colliders taken from the coarse first load put cars where buildings turn
-out to be.
+Ground level is estimated from `top` by a morphological opening (min filter then
+max filter at a 60 m radius, wider than a block) implemented row-by-row in
+`AmortizedGroundBuilder` with a 1.5 ms per-frame budget to avoid streaming frame
+freezes.
 
-Why one ground: the elevation grid is 64×64 samples over 5.5 km — one every
-87 m — smoothed with a bicubic. Over flat Portland its error stays inside
-the drape gap. In San Francisco a hill is four samples wide and the grid is
-off by whole storeys either way, so cars sat inside the tile mesh (the
-camera in geometry) and passed under building boxes whose floors were cut
-from the other ground. No spawn heuristic can fix standing on the wrong
-ground.
+From this raster, two physical surfaces are extracted:
+1. **The Shared Ground** (`groundField`): The tile street surface where tiles
+   exist, the opened base under buildings, and the elevation-grid terrain where
+   tiles do not, box-filtered once. `TileStreamer.groundHeightfield()` turns it
+   into the `Heightfield` that vehicle physics, bot pathfinding, spawning, props,
+   and terrain meshes sample.
+2. **The 2.5D Deck Grid** (`deckGrid`): Elevated spans meeting narrow-ribbon
+   geometry (`isNarrowSpan`, `isRoadwayRibbon`) with confirmed open vertical
+   clearance underneath (`hasGroundClearance`) are classified as drivable decks.
+   Terminal boundaries trace descending slopes down to ground level to connect
+   solid approach ramps (e.g. Brooklyn Bridge earthen approaches).
+   `Tileset.surfaceElevation()` evaluates this bilinearly in $O(1)$ time with zero
+   allocations and zero raycasts.
+3. **Building Colliders**: Cells standing $\ge 3.5\text{ m}$ above the base that
+   are neither decks nor gradual driveable terrain (flood-filled by
+   `isDriveableGround` to preserve slopes and knolls) merge into solid AABBs.
+   Neighbor-aware horizontal insetting insets exterior street faces by 1.0 m to
+   prevent 10 m raster quantization from protruding into street lanes, while
+   keeping internal touching faces 100% flush.
 
-The two datums still meet here: tiles are placed by height above the WGS84
-ellipsoid, the elevation grid is above mean sea level, and the geoid runs
-~20 m below the ellipsoid around Portland. `tileGroundOffset` measures the
-tile base against the terrain over the field core (30th percentile) and
-shifts the whole group so the fallback seams stay small. The elevation grid
-remains the ground for the terrain mesh before tiles load and for
-relocations where tiles fail.
+### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
+To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
+"Game 3D" mode renders the exact extracted physical geometry:
+- Instanced, extruded building boxes with height-based arcade palette (skyscrapers,
+  mid-rise, residential).
+- Instanced bridge deck slabs from `deckGrid`.
+- Crisp 10 m grid terrain mesh.
+This mode serves as both an arcade visual option and the primary QA diagnostic view:
+what you see is physically what you hit by construction, with zero invisible walls.
 
-Known limit: a single heightfield has no second layer, so a bridge deck is
-not drivable — the ground under it is. Colliders are rebuilt every 1.5 s
-while streaming changes tiles; scattered props contribute their own AABBs.
+## 3D Tiles, Collision & Alternative Architectures
+
+Extracting gameplay physics from Google Photorealistic 3D Tiles is a fundamental
+geospatial challenge because the tiles are visual aerial scans without semantic
+metadata. The table below outlines how our architecture relates to industry
+patterns:
+
+| Architecture / Pattern | Mechanism | Pros | Cons / Trade-offs | Status in Repo |
+| :--- | :--- | :--- | :--- | :--- |
+| **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
+| **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
+| **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
+| **D. Slope-Adaptive Morphology** *(GIS / PMF Standard)* | Scale morphological building thresholds with terrain gradient ($\text{rise} = \text{base} + s \cdot \tan\theta$). | Unifies flat cities (New Orleans, Portland) and steep knolls (SF hills) without arbitrary rule branching. | Requires local slope calculation during opening pass. | **Planned enhancement** for collider pipeline. |
+| **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Candidate for v2 relocation**. |
 
 ## UI notes
 
