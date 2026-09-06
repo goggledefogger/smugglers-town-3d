@@ -19,6 +19,15 @@ export function setVehicleEnvMap(t: Texture | null): void {
   envMap = t;
 }
 
+/**
+ * The studio envmap shared by vehicle paint. Non-vehicle props that want the
+ * same reflections (the gold contraband toilet) read it here instead of being
+ * handed their own copy — one source, set once at boot.
+ */
+export function vehicleEnvMap(): Texture | null {
+  return envMap;
+}
+
 export interface VehicleMesh {
   readonly root: Group;
   /** Spin groups (rotate about local Y = the axle) with their radii. */
