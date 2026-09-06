@@ -5,7 +5,12 @@ import {
   drawDriftTagGraffiti,
   drawMilitaryStencilGraffiti,
   drawChromeWildstyleGraffiti,
-  drawPunkDripTagGraffiti
+  drawPunkDripTagGraffiti,
+  drawBlockbusterGraffiti,
+  drawMopDripGraffiti,
+  drawAcidPsychedelicGraffiti,
+  drawCyberpunkNeonTag,
+  drawStickerSlapGraffiti
 } from './graffiti.ts';
 
 const cache = new Map<string, CanvasTexture>();
@@ -34,7 +39,7 @@ function texture(key: string, w: number, h: number, draw: (ctx: CanvasRenderingC
 
 const hex = (c: number): string => '#' + c.toString(16).padStart(6, '0');
 
-/** Tiny deterministic PRNG so scuffs and splatters are the same every run. */
+/** Tiny deterministic PRNG so scuffs and splatters are identical across runs. */
 function rng(seed: number): () => number {
   let s = seed >>> 0 || 1;
   return () => {
@@ -50,18 +55,20 @@ export function raceNumber(stats: VehicleStats): number {
 }
 
 /**
- * Side panel, 4:1. `mirror` flips the shapes for the left side (box UVs put
- * the front at opposite ends of the two sides) while the number stays legible.
+ * Side panel (512x128). Renders prominent archetype-specific "TOWN" graffiti
+ * on the doors and quarter panels alongside the race number.
+ * `mirror` places elements on the left side while keeping text legible.
  */
 export function liverySide(stats: VehicleStats, teamColor: number, mirror: boolean): CanvasTexture {
   const n = raceNumber(stats);
   return texture(`side:${stats.name}:${n}:${teamColor}:${mirror}`, 512, 128, ctx => {
     const W = 512, H = 128;
     const X = (x: number): number => (mirror ? W - x : x);
+
     ctx.fillStyle = hex(teamColor);
     ctx.fillRect(0, 0, W, H);
 
-    // panel shading: lighter shoulder, darker sill
+    // Panel shading: lighter shoulder, darker sill
     const shade = ctx.createLinearGradient(0, 0, 0, H);
     shade.addColorStop(0, 'rgba(255,255,255,0.18)');
     shade.addColorStop(0.55, 'rgba(255,255,255,0)');
@@ -69,11 +76,11 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
     ctx.fillStyle = shade;
     ctx.fillRect(0, 0, W, H);
 
-    // rocker band
+    // Lower rocker band
     ctx.fillStyle = '#1c1c20';
     ctx.fillRect(0, 104, W, 24);
 
-    // swept accent stripe
+    // Swept accent stripe
     ctx.fillStyle = hex(stats.color);
     ctx.beginPath();
     ctx.moveTo(X(0), 44);
@@ -86,7 +93,7 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
     ctx.fillStyle = 'rgba(255,255,255,0.85)';
     ctx.fillRect(mirror ? W - 400 : 0, 70, 400, 4);
 
-    // door seams + handle
+    // Door seams & door handles
     ctx.strokeStyle = 'rgba(0,0,0,0.45)';
     ctx.lineWidth = 2;
     for (const x of [170, 330]) {
@@ -98,31 +105,59 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     ctx.fillRect(X(215) - 12, 84, 24, 5);
 
-    // number roundel
+    // Race number roundel at X(320)
     ctx.fillStyle = '#f4ead8';
     ctx.beginPath();
-    ctx.arc(X(300), 52, 34, 0, Math.PI * 2);
+    ctx.arc(X(320), 52, 30, 0, Math.PI * 2);
     ctx.fill();
     ctx.fillStyle = '#1a1410';
-    ctx.font = '900 44px Inter, Arial, sans-serif';
+    ctx.font = '900 40px Inter, Arial, sans-serif';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(String(n), X(300), 54);
+    ctx.fillText(String(n), X(320), 54);
 
-    // Dune Buggy bonus: punk tag flourish on the side panel
+    // ==========================================
+    // SIDE GRAFFITI BY ARCHETYPE
+    // ==========================================
+    ctx.save();
+    const sideGraffitiX = mirror ? W - 180 : 20;
+
     if (stats.name === 'Dune Buggy') {
-      ctx.save();
-      ctx.translate(X(110), 54);
-      if (mirror) ctx.scale(-1, 1);
-      ctx.font = 'italic 900 24px "Impact", sans-serif';
-      ctx.fillStyle = '#c6ff00';
-      ctx.shadowColor = '#000000';
-      ctx.shadowBlur = 6;
-      ctx.fillText('TOWN', 0, 0);
+      // Buggy Side: Wet Krink Mop Squeezer Tag "TOWN" with dripping paint runs
+      ctx.translate(sideGraffitiX, 14);
+      drawMopDripGraffiti(ctx, 160, 94, stats.color);
+    } else if (stats.name === 'Rally Car') {
+      // Rally Side 1: Cyberpunk Neon Drift Tag across door
+      ctx.translate(sideGraffitiX, 22);
+      drawCyberpunkNeonTag(ctx, 160, 68, stats.color);
+      // Rally Side 2: Priority "HELLO" sticker slap on rear quarter panel
       ctx.restore();
+      ctx.save();
+      const stickerX = mirror ? 20 : W - 110;
+      ctx.translate(stickerX, 32);
+      drawStickerSlapGraffiti(ctx, 90, 60);
+    } else if (stats.name === 'SUV') {
+      // SUV Side 1: Bold Urban Blockbuster "TOWN" spanning doors
+      ctx.translate(sideGraffitiX, 16);
+      drawBlockbusterGraffiti(ctx, 170, 80, stats.color);
+      // SUV Side 2: Street sticker slap near rear pillar
+      ctx.restore();
+      ctx.save();
+      const stickerX = mirror ? 24 : W - 105;
+      ctx.translate(stickerX, 28);
+      drawStickerSlapGraffiti(ctx, 84, 58);
+    } else if (stats.name === 'Trophy Truck') {
+      // Trophy Truck Side: Stenciled Wasteland "T O W N" along bed
+      ctx.translate(sideGraffitiX, 18);
+      drawMilitaryStencilGraffiti(ctx, 165, 80, stats.color);
+    } else if (stats.name === 'Monster Truck') {
+      // Monster Truck Side: Melting Acid Psychedelic "TOWN" flame letters
+      ctx.translate(sideGraffitiX, 12);
+      drawAcidPsychedelicGraffiti(ctx, 175, 88, stats.color);
     }
+    ctx.restore();
 
-    // grime and scuffs low on the panel
+    // Grime and scuffs low on the panel
     const dirt = ctx.createLinearGradient(0, 80, 0, H);
     dirt.addColorStop(0, 'rgba(70,50,30,0)');
     dirt.addColorStop(1, 'rgba(70,50,30,0.55)');
@@ -139,7 +174,15 @@ export function liverySide(stats: VehicleStats, teamColor: number, mirror: boole
   });
 }
 
-/** Roof/hood panel, 1:2 with the front at the top. */
+/**
+ * Roof/hood panel (256x512 with front at top).
+ * Features giant rooftop / hood graffiti:
+ * - Monster Truck: Heavy-Metal Chrome Wildstyle "TOWN"
+ * - Rally Car: Racing Urban Blockbuster "T O W N"
+ * - SUV: Architectural Blockbuster "T O W N"
+ * - Trophy Truck: Stencil "T O W N"
+ * - Dune Buggy: Punk Drip Tag "TOWN"
+ */
 export function liveryTop(stats: VehicleStats, teamColor: number): CanvasTexture {
   const n = raceNumber(stats);
   return texture(`top:${stats.name}:${n}:${teamColor}`, 256, 512, ctx => {
@@ -153,7 +196,7 @@ export function liveryTop(stats: VehicleStats, teamColor: number): CanvasTexture
     ctx.fillStyle = shade;
     ctx.fillRect(0, 0, W, H);
 
-    // twin racing stripes down the length
+    // Twin racing stripes
     ctx.fillStyle = hex(stats.color);
     ctx.fillRect(96, 0, 22, H);
     ctx.fillRect(138, 0, 22, H);
@@ -161,26 +204,38 @@ export function liveryTop(stats: VehicleStats, teamColor: number): CanvasTexture
     ctx.fillRect(120, 0, 4, H);
     ctx.fillRect(132, 0, 4, H);
 
-    // hood vents near the front
+    // Hood vents near the front
     ctx.fillStyle = 'rgba(0,0,0,0.5)';
     for (let i = 0; i < 4; i++) ctx.fillRect(40, 40 + i * 14, 176, 5);
 
-    // Monster Truck specific: Chrome Wildstyle graffiti across the roof!
+    // ==========================================
+    // TOP / ROOF GRAFFITI BY ARCHETYPE
+    // ==========================================
+    ctx.save();
     if (stats.name === 'Monster Truck') {
-      ctx.save();
-      // Draw Chrome Wildstyle TOWN in the roof zone
-      drawChromeWildstyleGraffiti(ctx, W, 180, stats.color);
-      ctx.restore();
+      // Monster Truck: Chrome Wildstyle graffiti across the cab roof
+      ctx.translate(0, 160);
+      drawChromeWildstyleGraffiti(ctx, W, 170, stats.color);
+    } else if (stats.name === 'Rally Car') {
+      // Rally Car: High-contrast racing Urban Blockbuster "T O W N"
+      ctx.translate(0, 240);
+      drawBlockbusterGraffiti(ctx, W, 120, stats.color);
+    } else if (stats.name === 'SUV') {
+      // SUV: Rooftop Blockbuster "T O W N"
+      ctx.translate(0, 220);
+      drawBlockbusterGraffiti(ctx, W, 140, stats.color);
+    } else if (stats.name === 'Trophy Truck') {
+      // Trophy Truck: Hood Stencil "T O W N"
+      ctx.translate(0, 80);
+      drawMilitaryStencilGraffiti(ctx, W, 90, stats.color);
     } else {
-      // roof number
-      ctx.fillStyle = 'rgba(244,234,216,0.9)';
-      ctx.font = '900 96px Inter, Arial, sans-serif';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(String(n), W / 2, H * 0.62);
+      // Dune Buggy: Punk Drip Tag
+      ctx.translate(0, 220);
+      drawPunkDripTagGraffiti(ctx, W, 110, stats.color);
     }
+    ctx.restore();
 
-    // panel seams
+    // Panel seams
     ctx.strokeStyle = 'rgba(0,0,0,0.4)';
     ctx.lineWidth = 2;
     for (const y of [150, 330]) {
@@ -193,9 +248,10 @@ export function liveryTop(stats: VehicleStats, teamColor: number): CanvasTexture
 }
 
 /**
- * Rear panel (+Z face) of the vehicle body box.
- * 2:1 aspect ratio (512x256).
- * Renders back-of-car graffiti for SUV (Bubble Throw-up) and Rally Car (Drift Tag).
+ * Rear panel (+Z face) of the vehicle body box (512x256).
+ * Features back-of-car graffiti:
+ * - SUV: NYC Subway Bubble Throw-Up "TOWN" + sticker slap
+ * - Rally Car: Speed Drift Chisel Tag "TOWN" + arrow flourish
  */
 export function liveryRear(stats: VehicleStats, teamColor: number): CanvasTexture {
   return texture(`rear:${stats.name}:${teamColor}`, 512, 256, ctx => {
@@ -218,11 +274,16 @@ export function liveryRear(stats: VehicleStats, teamColor: number): CanvasTextur
     if (stats.name === 'SUV') {
       // Rear Tailgate: NYC Subway Bubble-Letter Throw-Up "TOWN"
       drawSubwayBubbleGraffiti(ctx, W, H - 40, stats.color);
+      // Extra street sticker slap in the corner
+      ctx.save();
+      ctx.translate(W - 95, 20);
+      drawStickerSlapGraffiti(ctx, 80, 54);
+      ctx.restore();
     } else if (stats.name === 'Rally Car') {
       // Rear Trunk / Hatch: Speed Drift Chisel Tag "TOWN"
       drawDriftTagGraffiti(ctx, W, H - 36, stats.color);
     } else {
-      // General archetype rear styling with graffiti
+      // General archetype rear styling with drift tag
       drawDriftTagGraffiti(ctx, W, H - 40, stats.color);
     }
 
@@ -236,9 +297,8 @@ export function liveryRear(stats: VehicleStats, teamColor: number): CanvasTextur
 }
 
 /**
- * Tailgate panel for trucks (Trophy Truck and Monster Truck).
- * 4:1 aspect ratio (512x128).
- * Renders Desert Wasteland Military Stencil graffiti for Trophy Truck.
+ * Tailgate panel for trucks (Trophy Truck and Monster Truck) (512x128).
+ * Features Desert Stencil (Trophy Truck) or Industrial Heavy Block (Monster Truck).
  */
 export function liveryTailgate(stats: VehicleStats, teamColor: number): CanvasTexture {
   return texture(`tailgate:${stats.name}:${teamColor}`, 512, 128, ctx => {
@@ -257,11 +317,11 @@ export function liveryTailgate(stats: VehicleStats, teamColor: number): CanvasTe
     ctx.fillStyle = shade;
     ctx.fillRect(0, 0, W, H);
 
-    if (stats.name === 'Trophy Truck') {
-      // Stencil "T O W N"
-      drawMilitaryStencilGraffiti(ctx, W, H, stats.color);
+    if (stats.name === 'Monster Truck') {
+      // Heavy Industrial Block "TOWN"
+      drawBlockbusterGraffiti(ctx, W, H - 10, stats.color);
     } else {
-      // Fallback / default tailgate stencil
+      // Desert Wasteland Military Stencil "T O W N"
       drawMilitaryStencilGraffiti(ctx, W, H, stats.color);
     }
 
@@ -272,9 +332,8 @@ export function liveryTailgate(stats: VehicleStats, teamColor: number): CanvasTe
 }
 
 /**
- * Front sloped hood/nose panel for Dune Buggy.
- * 2:1 aspect ratio (256x128).
- * Renders Skate-Punk Fat-Cap Drip Tag "TOWN".
+ * Front sloped hood/nose panel for Dune Buggy (256x128).
+ * Features Skate-Punk Fat-Cap Drip Tag "TOWN".
  */
 export function liveryHood(stats: VehicleStats, teamColor: number): CanvasTexture {
   return texture(`hood:${stats.name}:${teamColor}`, 256, 128, ctx => {

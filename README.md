@@ -1,4 +1,4 @@
-# Smugglers Town 3D: Turf Wars
+# Smugglers Town 3D: World Tour
 
 Eight cars, four crates, two bases. Grab a crate and get it back to your crew's
 base. Ram a carrier and it's theirs no longer. Four races run at once and each

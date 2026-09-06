@@ -8,6 +8,11 @@ import {
   drawMilitaryStencilGraffiti,
   drawChromeWildstyleGraffiti,
   drawPunkDripTagGraffiti,
+  drawBlockbusterGraffiti,
+  drawMopDripGraffiti,
+  drawAcidPsychedelicGraffiti,
+  drawCyberpunkNeonTag,
+  drawStickerSlapGraffiti,
   liverySide,
   liveryTop,
   liveryRear,
@@ -50,15 +55,24 @@ describe('Modular Vehicles Architecture', () => {
 
     expect(liverySide(buggy, 0xffcc33, false)).toBeDefined();
     expect(liverySide(buggy, 0xffcc33, true)).toBeDefined();
+    expect(liverySide(rally, 0xff4444, false)).toBeDefined();
+    expect(liverySide(suv, 0x3399ff, false)).toBeDefined();
+    expect(liverySide(trophy, 0x33cc66, false)).toBeDefined();
+    expect(liverySide(monster, 0xaa55ff, false)).toBeDefined();
+
     expect(liveryTop(monster, 0xaa55ff)).toBeDefined();
+    expect(liveryTop(rally, 0xff4444)).toBeDefined();
+    expect(liveryTop(suv, 0x3399ff)).toBeDefined();
+
     expect(liveryRear(suv, 0x3399ff)).toBeDefined();
     expect(liveryRear(rally, 0xff4444)).toBeDefined();
     expect(liveryTailgate(trophy, 0x33cc66)).toBeDefined();
+    expect(liveryTailgate(monster, 0xaa55ff)).toBeDefined();
     expect(liveryHood(buggy, 0xffcc33)).toBeDefined();
   });
 });
 
-describe('TOWN Procedural Graffiti Renderers', () => {
+describe('TOWN Procedural Graffiti Renderers Suite (10 Styles)', () => {
   function createMockCtx() {
     const calls: string[] = [];
     return {
@@ -67,11 +81,13 @@ describe('TOWN Procedural Graffiti Renderers', () => {
       restore: () => calls.push('restore'),
       translate: () => calls.push('translate'),
       transform: () => calls.push('transform'),
+      rotate: () => calls.push('rotate'),
       scale: () => calls.push('scale'),
       beginPath: () => calls.push('beginPath'),
       closePath: () => calls.push('closePath'),
       moveTo: () => calls.push('moveTo'),
       lineTo: () => calls.push('lineTo'),
+      quadraticCurveTo: () => calls.push('quadraticCurveTo'),
       arc: () => calls.push('arc'),
       ellipse: () => calls.push('ellipse'),
       fill: () => calls.push('fill'),
@@ -95,7 +111,7 @@ describe('TOWN Procedural Graffiti Renderers', () => {
     } as unknown as CanvasRenderingContext2D & { calls: string[] };
   }
 
-  it('drawSubwayBubbleGraffiti draws NYC throwie letters and drips for SUV', () => {
+  it('1. drawSubwayBubbleGraffiti: NYC throwie letters and drips for SUV tailgate', () => {
     const ctx = createMockCtx();
     drawSubwayBubbleGraffiti(ctx, 512, 256, 0x3399ff);
     expect(ctx.calls).toContain('fillText:TOWN');
@@ -103,7 +119,7 @@ describe('TOWN Procedural Graffiti Renderers', () => {
     expect(ctx.calls).toContain('ellipse');
   });
 
-  it('drawDriftTagGraffiti applies aerodynamic skew and speed flourish for Rally Car', () => {
+  it('2. drawDriftTagGraffiti: Aerodynamic skew and speed flourish for Rally Car rear', () => {
     const ctx = createMockCtx();
     drawDriftTagGraffiti(ctx, 512, 256, 0xff4444);
     expect(ctx.calls).toContain('transform');
@@ -111,24 +127,60 @@ describe('TOWN Procedural Graffiti Renderers', () => {
     expect(ctx.calls).toContain('fillRect');
   });
 
-  it('drawMilitaryStencilGraffiti renders corner brackets and bridge cuts for Trophy Truck', () => {
+  it('3. drawMilitaryStencilGraffiti: Stencil bridges & corner brackets for Trophy Truck', () => {
     const ctx = createMockCtx();
     drawMilitaryStencilGraffiti(ctx, 512, 128, 0x33cc66);
     expect(ctx.calls).toContain('fillText:T O W N');
     expect(ctx.calls).toContain('fillRect');
   });
 
-  it('drawChromeWildstyleGraffiti draws flame glow and star glints for Monster Truck', () => {
+  it('4. drawChromeWildstyleGraffiti: Chrome horizon reflection & star flares for Monster Truck', () => {
     const ctx = createMockCtx();
     drawChromeWildstyleGraffiti(ctx, 256, 512, 0xaa55ff);
     expect(ctx.calls).toContain('fillText:TOWN');
     expect(ctx.calls).toContain('strokeText:TOWN');
   });
 
-  it('drawPunkDripTagGraffiti draws halo and drip trails for Dune Buggy', () => {
+  it('5. drawPunkDripTagGraffiti: Punk halo and drip runs for Dune Buggy hood', () => {
     const ctx = createMockCtx();
     drawPunkDripTagGraffiti(ctx, 256, 128, 0xffcc33);
     expect(ctx.calls).toContain('fillText:TOWN');
     expect(ctx.calls).toContain('ellipse');
+  });
+
+  it('6. drawBlockbusterGraffiti: Massive architectural block 3D letters', () => {
+    const ctx = createMockCtx();
+    drawBlockbusterGraffiti(ctx, 256, 128, 0xffffff);
+    expect(ctx.calls).toContain('fillText:T O W N');
+    expect(ctx.calls).toContain('strokeText:T O W N');
+  });
+
+  it('7. drawMopDripGraffiti: Wet dripping squeezer mop tag for Buggy side', () => {
+    const ctx = createMockCtx();
+    drawMopDripGraffiti(ctx, 160, 94, 0x00ffff);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('arc');
+  });
+
+  it('8. drawAcidPsychedelicGraffiti: Melting liquid flame contours for Monster Truck side', () => {
+    const ctx = createMockCtx();
+    drawAcidPsychedelicGraffiti(ctx, 180, 90, 0xff00ff);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('strokeText:TOWN');
+  });
+
+  it('9. drawCyberpunkNeonTag: Chromatic split and circuit tick lines for Rally Car side', () => {
+    const ctx = createMockCtx();
+    drawCyberpunkNeonTag(ctx, 160, 68, 0x00f0ff);
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('stroke');
+  });
+
+  it('10. drawStickerSlapGraffiti: Priority "HELLO" sticker slap decal', () => {
+    const ctx = createMockCtx();
+    drawStickerSlapGraffiti(ctx, 90, 60);
+    expect(ctx.calls).toContain('fillText:HELLO');
+    expect(ctx.calls).toContain('fillText:TOWN');
+    expect(ctx.calls).toContain('fillRect');
   });
 });
