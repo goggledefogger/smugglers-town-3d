@@ -400,7 +400,7 @@ export class Game {
     for (const actor of this.vehicles) {
       let input: VehicleInput;
       if (actor.brain) {
-        actor.brain.think(dt, actor.body, this.match.state, this.route);
+        actor.brain.think(dt, actor.body, this.match.state, this.route, this.bodies);
         input = actor.brain.input();
       } else if (actor.control === 'local') {
         input = playerInput ?? NEUTRAL_INPUT;
