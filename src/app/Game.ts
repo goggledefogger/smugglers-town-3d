@@ -132,18 +132,15 @@ export class Game {
     // the nav grid is the world's occupancy: the AI routes on it and the
     // spawner measures open ground with it
     this.spawn = new SpawnPlanner(
-<<<<<<< HEAD
-      { ...DEFAULT_SPAWN, mapHalf: config.world.mapHalf, arenaRadius: config.world.arenaRadius }, this.nav, this.rng
-=======
       {
         ...DEFAULT_SPAWN,
         mapHalf: config.world.mapHalf,
+        arenaRadius: config.world.arenaRadius,
         dropHeight: config.spawn.dropHeight,
         initialDropHeight: config.spawn.initialDropHeight
       },
       this.nav,
       this.rng
->>>>>>> main
     );
     this.match = new MatchRules(config.scoring, this.bodies, this.teams, terrain.heightfield, this.spawn);
   }
