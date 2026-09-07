@@ -1,6 +1,7 @@
 import { html, css, LitElement } from 'lit';
 import { VEHICLE_TYPES, type VehicleStats } from '../../core/physics/vehicleStats.ts';
 import { getGamepadDisplayName } from '../../input/gamepadNormalization.ts';
+import type { InputManager } from '../../input/InputManager.ts';
 
 /**
  * The garage: title, the roster to pick from, stats for the pick, and the
@@ -171,14 +172,17 @@ export class IntroScreen extends LitElement {
     this.onSelect?.(this.selected);
   }
 
+  inputManager?: InputManager;
+
   override render() {
     const v = VEHICLE_TYPES[this.selected]!;
     const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
 
-    let connectedGamepadName: string | null = null;
-    if (typeof navigator !== 'undefined' && navigator.getGamepads) {
+    const activePad = this.inputManager?.gamepad?.getActivePad();
+    let connectedGamepadName: string | null = activePad?.name ?? null;
+    if (!connectedGamepadName && typeof navigator !== 'undefined' && navigator.getGamepads) {
       for (const p of navigator.getGamepads()) {
-        if (p && p.connected) {
+        if (p && p.connected && !/vjoy|virtual/i.test(p.id)) {
           connectedGamepadName = getGamepadDisplayName(p.id);
           break;
         }

@@ -259,4 +259,34 @@ describe('Windows Multi-Gamepad Trap Resolution', () => {
     expect(g.vehicleInput().steer).toBeCloseTo(0.8, 2);
     expect(g.getActivePad()?.name).toBe('Google Stadia Controller');
   });
+
+  it('prefers physical controller over virtual joystick when neither is touched', () => {
+    const idleVirtualPad = {
+      id: 'vJoy Virtual Joystick',
+      index: 0,
+      connected: true,
+      mapping: 'standard',
+      axes: [0, 0, 0, 0],
+      buttons: Array.from({ length: 16 }, () => ({ value: 0, pressed: false })),
+      timestamp: 0
+    } as unknown as Gamepad;
+
+    const idleXboxPad = {
+      id: 'Xbox Controller',
+      index: 1,
+      connected: true,
+      mapping: 'standard',
+      axes: [0, 0, 0, 0],
+      buttons: Array.from({ length: 16 }, () => ({ value: 0, pressed: false })),
+      timestamp: 0
+    } as unknown as Gamepad;
+
+    Object.defineProperty(navigator, 'getGamepads', {
+      value: vi.fn(() => [idleVirtualPad, idleXboxPad]),
+      configurable: true
+    });
+
+    const activeInfo = g.getActivePad();
+    expect(activeInfo?.name).toBe('Xbox Controller');
+  });
 });

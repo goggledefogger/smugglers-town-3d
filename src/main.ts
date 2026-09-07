@@ -393,8 +393,12 @@ pickups.setVisible(false);
 // Driving input is polled each frame; UI actions and hotkeys are edge-triggered
 // and drained into whatever screen is active (or the gameplay hotkeys).
 const input = new InputManager();
+introEl.inputManager = input;
 if (input.gamepad) {
-  input.gamepad.onActivity = () => audio.resume();
+  input.gamepad.onActivity = () => {
+    audio.resume();
+    if (introEl.isConnected) introEl.requestUpdate();
+  };
 }
 
 /** The active UI screen's handler, or null while in gameplay. Set by screens. */

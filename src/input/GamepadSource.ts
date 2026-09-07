@@ -21,7 +21,7 @@
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { InputSource, UiAction, Hotkey, LogicalAction } from './types.ts';
 import type { Bindings, BindingTable, Binding } from './bindings.ts';
-import { normalizePadSnapshot, isStadiaController, type PadSnapshot } from './gamepadNormalization.ts';
+import { normalizePadSnapshot, type PadSnapshot } from './gamepadNormalization.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('input');
@@ -116,31 +116,44 @@ export class GamepadSource implements InputSource {
     }
 
     // Check if any pad is actively being touched/deflected right now
-    let touchedPad: Gamepad | null = null;
+    let bestPad: Gamepad | null = null;
+    let bestScore = 0;
+
     for (const g of connected) {
-      const hasButton = g.buttons.some(b => b && (b.pressed || b.value > 0.15));
-      const hasStick = g.axes.some((a, idx) => {
-        // Ignore axes 4+ (raw triggers might sit at -1 or 0)
-        if (idx >= 4) return false;
-        return Math.abs(a) > STICK_DEADZONE;
-      });
-      if (hasButton || hasStick) {
-        touchedPad = g;
-        this.activePadIndex = g.index;
-        this.onActivity?.();
-        break;
+      let score = 0;
+      for (const b of g.buttons) {
+        if (b) {
+          if (b.pressed) score = Math.max(score, 1.0);
+          else if (b.value > 0.15) score = Math.max(score, b.value);
+        }
+      }
+      for (let idx = 0; idx < Math.min(4, g.axes.length); idx++) {
+        const mag = Math.abs(g.axes[idx] ?? 0);
+        if (mag > STICK_DEADZONE) {
+          score = Math.max(score, (mag - STICK_DEADZONE) / (1 - STICK_DEADZONE));
+        }
+      }
+      // If currently active pad has active input, prioritize it over competing drift
+      const effectiveScore = g.index === this.activePadIndex ? score * 1.5 : score;
+      if (score > 0.05 && effectiveScore > bestScore) {
+        bestScore = effectiveScore;
+        bestPad = g;
       }
     }
 
-    // Resolve active pad: touched pad, or last active if still connected, or prefer Stadia, or first connected
-    let targetPad = touchedPad;
+    if (bestPad) {
+      this.activePadIndex = bestPad.index;
+      this.onActivity?.();
+    }
+
+    // Resolve active pad: active touched pad, or last active if still connected, or first non-virtual pad
+    let targetPad = bestPad;
     if (!targetPad && this.activePadIndex !== null) {
       targetPad = connected.find(g => g.index === this.activePadIndex) ?? null;
     }
     if (!targetPad) {
-      // Prefer a connected Stadia controller if present
-      const stadia = connected.find(g => isStadiaController(g.id));
-      targetPad = stadia ?? connected[0]!;
+      const nonVirtual = connected.find(g => !/vjoy|virtual/i.test(g.id));
+      targetPad = nonVirtual ?? connected[0]!;
       this.activePadIndex = targetPad.index;
     }
 

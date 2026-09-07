@@ -389,5 +389,40 @@ describe('Procedural Game Audio System', () => {
 
       audio.dispose();
     });
+
+    it('sets up pointerdown, keydown, and touchstart unlock listeners without removing them until running', async () => {
+      const addedListeners: Record<string, Function> = {};
+      const removedListeners: Record<string, Function> = {};
+
+      (globalThis as any).window.addEventListener = vi.fn((event: string, handler: Function) => {
+        addedListeners[event] = handler;
+      });
+      (globalThis as any).window.removeEventListener = vi.fn((event: string, handler: Function) => {
+        removedListeners[event] = handler;
+      });
+
+      class SuspendedAudioContext extends MockAudioContext {
+        override state: AudioContextState = 'suspended';
+      }
+      (globalThis as any).window.AudioContext = SuspendedAudioContext;
+
+      const events = new EventBus<GameEventMap>();
+      const audio = new AudioManager(events);
+
+      expect(addedListeners['pointerdown']).toBeDefined();
+      expect(addedListeners['keydown']).toBeDefined();
+      expect(addedListeners['touchstart']).toBeDefined();
+      expect(addedListeners['gamepadconnected']).toBeUndefined();
+
+      // Trigger pointerdown
+      addedListeners['pointerdown']!();
+      await Promise.resolve();
+
+      expect(removedListeners['pointerdown']).toBeDefined();
+      expect(removedListeners['keydown']).toBeDefined();
+      expect(removedListeners['touchstart']).toBeDefined();
+
+      audio.dispose();
+    });
   });
 });
