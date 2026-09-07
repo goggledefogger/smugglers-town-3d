@@ -46,6 +46,12 @@ export interface SpawnConfig {
    * whatever the terrain really is before anyone gets the wheel.
    */
   readonly dropHeight: number;
+  /**
+   * Height above ground for the initial match start drop during countdown.
+   * High enough that cars fall for a couple seconds and land just as the
+   * countdown ends ("GO!").
+   */
+  readonly initialDropHeight?: number;
 }
 
 export const DEFAULT_SPAWN: SpawnConfig = {
@@ -57,7 +63,8 @@ export const DEFAULT_SPAWN: SpawnConfig = {
   baseOffset: 0.80,
   itemClearance: 5,
   itemMinDist: 100,
-  dropHeight: 14
+  dropHeight: 14,
+  initialDropHeight: 65
 };
 
 /** Heading that points from `at` toward `target`; engine forward is -Z. */
@@ -74,9 +81,14 @@ export class SpawnPlanner {
     private readonly rng: Rng = Math.random
   ) {}
 
-  /** How far above the ground a car is released. */
+  /** How far above the ground a car is released when respawning mid-match. */
   get dropHeight(): number {
     return this.cfg.dropHeight;
+  }
+
+  /** How far above the ground cars are released at match start during countdown. */
+  get initialDropHeight(): number {
+    return this.cfg.initialDropHeight ?? this.cfg.dropHeight;
   }
 
   /** Best-effort open point: the exact spot if it fits, else the nearest that does. */

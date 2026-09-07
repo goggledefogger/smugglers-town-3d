@@ -41,6 +41,41 @@ export class CameraRig {
     this.camera.updateProjectionMatrix();
   }
 
+  /** Snap immediately to the desired pose without lerping from an old spot. */
+  snap(player: Pose | null): void {
+    if (!player) return;
+    const z = this.zoom;
+    if (this.mode === 0) {
+      this._back.set(0, 0, 14 * z).applyQuaternion(player.quat);
+      this._desired.copy(player.pos).add(new Vector3(0, 6 * z, 0)).add(this._back);
+      this._desired.y = Math.max(
+        this._desired.y, this.ground().sample(this._desired.x, this._desired.z) + 4
+      );
+    } else if (this.mode === 1) {
+      this._back.set(0, 0, 24 * z).applyQuaternion(player.quat);
+      this._desired.copy(player.pos).add(new Vector3(0, 10 * z, 0)).add(this._back);
+    } else {
+      const fwd = this._back.set(0, 0, -1).applyQuaternion(player.quat);
+      this.camera.position.copy(player.pos).addScaledVector(fwd, 1.2);
+      this.camera.position.y += 1.9;
+      this._look.copy(player.pos).addScaledVector(fwd, 30);
+      this._look.y += 1.5;
+      this.camera.lookAt(this._look);
+      this.lookY = null;
+      return;
+    }
+    this._look.copy(player.pos).add(new Vector3(0, 2, 0));
+    const clear = this.lineOfSight(this._look, this._desired);
+    if (clear < 1) {
+      const frac = Math.max(clear, MIN_CHASE_FRAC);
+      this._desired.sub(this._look).multiplyScalar(frac).add(this._look);
+      if (clear < MIN_CHASE_FRAC) this._desired.y = this._look.y + CLIMB_ABOVE;
+    }
+    this.camera.position.copy(this._desired);
+    this.lookY = this._look.y;
+    this.camera.lookAt(this._look);
+  }
+
   /** Follows the player's rendered (interpolated) pose, not the raw body. */
   update(dt: number, player: Pose | null): void {
     if (!player) return;

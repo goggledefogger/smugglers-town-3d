@@ -132,7 +132,18 @@ export class Game {
     // the nav grid is the world's occupancy: the AI routes on it and the
     // spawner measures open ground with it
     this.spawn = new SpawnPlanner(
+<<<<<<< HEAD
       { ...DEFAULT_SPAWN, mapHalf: config.world.mapHalf, arenaRadius: config.world.arenaRadius }, this.nav, this.rng
+=======
+      {
+        ...DEFAULT_SPAWN,
+        mapHalf: config.world.mapHalf,
+        dropHeight: config.spawn.dropHeight,
+        initialDropHeight: config.spawn.initialDropHeight
+      },
+      this.nav,
+      this.rng
+>>>>>>> main
     );
     this.match = new MatchRules(config.scoring, this.bodies, this.teams, terrain.heightfield, this.spawn);
   }
@@ -206,15 +217,17 @@ export class Game {
     const hf = this.terrain.heightfield;
     // one planner call for every driver, human and AI alike
     const points = this.spawn.matchSpawns(seats.length, i => seats[i]!.team);
+    const dropH = this.initialDropHeight();
+    const graceS = Math.max(SPAWN_GRACE_S, this.round.countdownS + 1.5);
     seats.forEach((seat, i) => {
       const isPlayer = seat.control === 'local';
       const typeIdx = seat.vehicle ?? this.pickVehicleType();
       const body = new VehicleBody(VEHICLE_TYPES[typeIdx]!, PHYSICS, this.rng);
       const at = points[i]!;
-      // released above the ground: the drop settles during the countdown
-      body.pos.set(at.x, hf.sample(at.x, at.z) + this.spawn.dropHeight, at.z);
+      // released high above the ground: drops during countdown and lands just as the match starts
+      body.pos.set(at.x, hf.sample(at.x, at.z) + dropH, at.z);
       body.quat.setFromAxisAngle(UP, at.yaw);
-      body.graceS = SPAWN_GRACE_S;
+      body.graceS = graceS;
       body.snapPrev();
       this.teams.set(body.id, seat.team);
       this.bodies.push(body);
@@ -229,6 +242,22 @@ export class Game {
           : null
       });
     });
+  }
+
+  /**
+   * Initial spawn height above terrain.
+   * If there is a countdown (e.g. countdownS = 3s), drop from high up (~65m)
+   * so vehicles plunge through the air for ~2.5s and land cleanly just before
+   * the countdown ends ("GO!").
+   * For short countdowns or instant play, scale drop height to prevent floating.
+   */
+  private initialDropHeight(): number {
+    if (this.round.countdownS <= 0) return 3;
+    if (this.round.countdownS < 2) {
+      const tFall = Math.max(0.2, this.round.countdownS - 0.35);
+      return Math.min(this.spawn.initialDropHeight, Math.max(3, Math.round(0.5 * 20 * tFall * tFall)));
+    }
+    return this.spawn.initialDropHeight;
   }
 
   /** A remote driver's latest input; the host applies it every step until the next arrives. */
@@ -400,7 +429,7 @@ export class Game {
     for (const actor of this.vehicles) {
       let input: VehicleInput;
       if (actor.brain) {
-        actor.brain.think(dt, actor.body, this.match.state, this.route);
+        actor.brain.think(dt, actor.body, this.match.state, this.route, this.bodies);
         input = actor.brain.input();
       } else if (actor.control === 'local') {
         input = playerInput ?? NEUTRAL_INPUT;
