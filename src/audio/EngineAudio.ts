@@ -7,6 +7,8 @@
 export class EngineAudio {
   private readonly osc1: OscillatorNode;
   private readonly osc2: OscillatorNode;
+  private readonly osc1Gain: GainNode;
+  private readonly osc2Gain: GainNode;
   private readonly filter: BiquadFilterNode;
   private readonly gain: GainNode;
   private isStarted = false;
@@ -14,29 +16,38 @@ export class EngineAudio {
   private currentRpm = 0.2; // 0.0 (idle) to 1.0 (redline)
 
   constructor(private readonly ctx: AudioContext, destination: AudioNode) {
-    // Primary sawtooth for combustion cylinder pulse harmonics
+    // Primary sawtooth for mechanical combustion pulse harmonics (kept subtle)
     this.osc1 = ctx.createOscillator();
     this.osc1.type = 'sawtooth';
-    this.osc1.frequency.setValueAtTime(46, ctx.currentTime);
+    this.osc1.frequency.setValueAtTime(45, ctx.currentTime);
 
-    // Sub-harmonic triangle for deep engine block rumble
+    this.osc1Gain = ctx.createGain();
+    this.osc1Gain.gain.setValueAtTime(0.35, ctx.currentTime);
+
+    // Sub-harmonic triangle for deep, warm engine block rumble
     this.osc2 = ctx.createOscillator();
     this.osc2.type = 'triangle';
-    this.osc2.frequency.setValueAtTime(23, ctx.currentTime);
+    this.osc2.frequency.setValueAtTime(22.5, ctx.currentTime);
 
-    // Resonant lowpass filter simulating exhaust manifold & intake acoustics
+    this.osc2Gain = ctx.createGain();
+    this.osc2Gain.gain.setValueAtTime(0.75, ctx.currentTime);
+
+    // Resonant lowpass filter simulating exhaust manifold & cabin acoustics
+    // Q=0.75 provides smooth natural rolloff without piercing resonance peaks
     this.filter = ctx.createBiquadFilter();
     this.filter.type = 'lowpass';
-    this.filter.frequency.setValueAtTime(220, ctx.currentTime);
-    this.filter.Q.setValueAtTime(2.0, ctx.currentTime);
+    this.filter.frequency.setValueAtTime(180, ctx.currentTime);
+    this.filter.Q.setValueAtTime(0.75, ctx.currentTime);
 
     // Output gain node
     this.gain = ctx.createGain();
     this.gain.gain.setValueAtTime(0, ctx.currentTime);
 
-    // Wire up graph: (osc1 + osc2) -> filter -> gain -> destination
-    this.osc1.connect(this.filter);
-    this.osc2.connect(this.filter);
+    // Wire up graph: (osc1->osc1Gain + osc2->osc2Gain) -> filter -> gain -> destination
+    this.osc1.connect(this.osc1Gain);
+    this.osc1Gain.connect(this.filter);
+    this.osc2.connect(this.osc2Gain);
+    this.osc2Gain.connect(this.filter);
     this.filter.connect(this.gain);
     this.gain.connect(destination);
   }
@@ -112,19 +123,19 @@ export class EngineAudio {
     const rpmSpeed = targetRpm > this.currentRpm ? 6.0 : 3.5;
     this.currentRpm += (targetRpm - this.currentRpm) * Math.min(1.0, dt * rpmSpeed);
 
-    // Map RPM to fundamental pitch (45 Hz at idle, up to ~320 Hz at redline)
-    const baseFreq = 45 + this.currentRpm * 275;
+    // Map RPM to warm fundamental pitch (45 Hz at idle, up to ~180 Hz at redline)
+    const baseFreq = 45 + this.currentRpm * 135;
     this.osc1.frequency.setTargetAtTime(baseFreq, now, 0.05);
     this.osc2.frequency.setTargetAtTime(baseFreq * 0.5, now, 0.05);
 
-    // Resonant filter opens with RPM and aggressive throttle
-    const baseCutoff = 180 + this.currentRpm * 1400;
-    const throttleCutoffBoost = throttle * 900;
-    const cutoff = Math.min(3600, baseCutoff + throttleCutoffBoost);
+    // Natural lowpass filter opens with RPM and throttle, cutting off harsh high frequencies
+    const baseCutoff = 150 + this.currentRpm * 420;
+    const throttleCutoffBoost = throttle * 240;
+    const cutoff = Math.min(950, baseCutoff + throttleCutoffBoost);
     this.filter.frequency.setTargetAtTime(cutoff, now, 0.05);
 
-    // Engine volume: base volume + throttle surge
-    const targetGain = 0.18 + this.currentRpm * 0.14 + (throttle > 0 ? 0.08 : 0);
+    // Engine volume: unobtrusive in mix (~10 dB quieter than raw sfx)
+    const targetGain = 0.05 + this.currentRpm * 0.04 + (throttle > 0 ? 0.025 : 0);
     this.gain.gain.setTargetAtTime(targetGain, now, 0.05);
   }
 

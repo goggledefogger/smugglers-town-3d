@@ -132,6 +132,7 @@ export class AudioManager {
     this.saveSettings();
     this.updateMasterGain();
     if (!muted) this.resume();
+    this.events?.emit('audio:change', { muted: this.isMuted, volume: this.volume });
   }
 
   get muted(): boolean {
@@ -142,10 +143,20 @@ export class AudioManager {
     this.volume = Math.max(0, Math.min(1, vol));
     this.saveSettings();
     this.updateMasterGain();
+    this.events?.emit('audio:change', { muted: this.isMuted, volume: this.volume });
   }
 
   get masterVolume(): number {
     return this.volume;
+  }
+
+  /** Triggers a brief horn blast for sound level testing and feedback. */
+  testHorn(): void {
+    this.resume();
+    this.horn?.start();
+    setTimeout(() => {
+      this.horn?.stop();
+    }, 220);
   }
 
   private bindEvents(): void {

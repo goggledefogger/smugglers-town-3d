@@ -120,6 +120,9 @@ describe('Procedural Game Audio System', () => {
       const idleCutoff = (engine as any).filter.frequency.value;
       expect(idleFreq).toBeGreaterThanOrEqual(45);
       expect(idleCutoff).toBeLessThanOrEqual(500);
+      expect((engine as any).filter.Q.value).toBeCloseTo(0.75);
+      expect((engine as any).osc1Gain.gain.value).toBeCloseTo(0.35);
+      expect((engine as any).osc2Gain.gain.value).toBeCloseTo(0.75);
 
       // At top speed under full throttle:
       for (let i = 0; i < 60; i++) {
@@ -127,9 +130,12 @@ describe('Procedural Game Audio System', () => {
       }
       const highFreq = (engine as any).osc1.frequency.value;
       const highCutoff = (engine as any).filter.frequency.value;
+      const highGain = (engine as any).gain.gain.value;
 
       expect(highFreq).toBeGreaterThan(idleFreq * 2);
       expect(highCutoff).toBeGreaterThan(idleCutoff * 2);
+      expect(highCutoff).toBeLessThanOrEqual(1000); // capped under 1000Hz to eliminate irritating buzz
+      expect(highGain).toBeLessThan(0.15); // quiet and unobtrusive in mix
 
       engine.stop();
     });
@@ -248,6 +254,8 @@ describe('Procedural Game Audio System', () => {
     it('manages mute and volume state with localStorage persistence', () => {
       const events = new EventBus<GameEventMap>();
       const audio = new AudioManager(events);
+      const audioEvents: { muted: boolean; volume: number }[] = [];
+      events.on('audio:change', e => audioEvents.push(e));
 
       expect(audio.muted).toBe(false);
       expect(audio.masterVolume).toBeCloseTo(0.8);
@@ -256,16 +264,27 @@ describe('Procedural Game Audio System', () => {
       audio.toggleMute();
       expect(audio.muted).toBe(true);
       expect(mockStorage['smugglers_audio_muted']).toBe('true');
+      expect(audioEvents.length).toBe(1);
+      expect(audioEvents[0]).toEqual({ muted: true, volume: 0.8 });
 
       // Change volume
       audio.setVolume(0.5);
       expect(audio.masterVolume).toBe(0.5);
       expect(mockStorage['smugglers_audio_volume']).toBe('0.5');
+      expect(audioEvents.length).toBe(2);
+      expect(audioEvents[1]).toEqual({ muted: true, volume: 0.5 });
 
       // Unmute
       audio.setMuted(false);
       expect(audio.muted).toBe(false);
       expect(mockStorage['smugglers_audio_muted']).toBe('false');
+      expect(audioEvents.length).toBe(3);
+      expect(audioEvents[2]).toEqual({ muted: false, volume: 0.5 });
+
+      // testHorn
+      const hornStartSpy = vi.spyOn((audio as any).horn, 'start');
+      audio.testHorn();
+      expect(hornStartSpy).toHaveBeenCalledTimes(1);
 
       audio.dispose();
     });

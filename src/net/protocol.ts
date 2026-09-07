@@ -33,7 +33,7 @@ export interface SnapshotMsg {
   bodies: BodySnap[];
 }
 
-type NetEventName = Exclude<keyof GameEventMap, 'location:changed'>;
+type NetEventName = Exclude<keyof GameEventMap, 'location:changed' | 'audio:change'>;
 
 /** Host → all, reliable, once per gameplay event. A typed union over GameEventMap minus 'location:changed'. */
 export type EventMsg = { [K in NetEventName]: { t: 'e'; name: K; payload: GameEventMap[K] } }[NetEventName];
