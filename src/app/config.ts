@@ -42,6 +42,12 @@ export const config = {
     /** Warning banner when this much time is left (s). */
     finalMinuteS: 60
   },
+  spawn: {
+    /** Mid-game respawn height (m) after a wreck: quick drop (~1s). */
+    dropHeight: 14,
+    /** Match start drop height (m): falls for ~2.5s and lands right as countdown finishes. */
+    initialDropHeight: 65
+  },
   camera: {
     fovBase: 62,
     fovPerZoom: 2.4,
