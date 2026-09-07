@@ -9,7 +9,7 @@ import {
 } from 'three';
 import { init, NavMeshQuery, type NavMesh } from 'recast-navigation';
 import { threeToSoloNavMesh, NavMeshHelper } from '@recast-navigation/three';
-import { floodFillPruneNavMesh, getNavMeshPositionsAndIndices } from '@recast-navigation/core';
+import { getNavMeshPositionsAndIndices } from '@recast-navigation/core';
 
 export class ConnectedNavMeshHelper extends NavMeshHelper {
   override update(): void {
@@ -235,9 +235,16 @@ export async function runNavmeshSpike(
     }
   }
 
-  // Enumerate all connected islands in the navmesh
+  // Enumerate all connected islands in the navmesh and compute their average elevation relative to ground
+  interface IslandInfo {
+    startRef: number;
+    size: number;
+    refs: number[];
+    avgElevationDelta: number;
+  }
+
   const allVisited = new Set<number>();
-  const islandMap = new Map<number, number>(); // startRef -> island size
+  const islands: IslandInfo[] = [];
 
   for (let tileIndex = 0; tileIndex < navMesh.getMaxTiles(); tileIndex++) {
     const tile = navMesh.getTile(tileIndex);
@@ -247,13 +254,28 @@ export async function runNavmeshSpike(
     for (let i = 0; i < header.polyCount(); i++) {
       const ref = base | i;
       if (allVisited.has(ref)) continue;
-      let size = 0;
+      const refs: number[] = [];
+      let totalElevDiff = 0;
       const q = [ref];
       allVisited.add(ref);
       while (q.length > 0) {
         const curr = q.pop()!;
-        size++;
+        refs.push(curr);
         const { poly: pObj, tile: tObj } = navMesh.getTileAndPolyByRefUnsafe(curr);
+        const vertCount = pObj.vertCount();
+        let cx = 0, cy = 0, cz = 0;
+        for (let v = 0; v < vertCount; v++) {
+          const vi = pObj.verts(v);
+          cx += tObj.verts(vi * 3);
+          cy += tObj.verts(vi * 3 + 1);
+          cz += tObj.verts(vi * 3 + 2);
+        }
+        cx /= vertCount;
+        cy /= vertCount;
+        cz /= vertCount;
+        const gY = groundAt(cx, cz);
+        totalElevDiff += (cy - gY);
+
         for (let l = pObj.firstLink(); l !== -1 && l !== 4294967295; l = tObj.links(l).next()) {
           const nei = tObj.links(l).ref();
           if (!nei || allVisited.has(nei)) continue;
@@ -261,12 +283,17 @@ export async function runNavmeshSpike(
           q.push(nei);
         }
       }
-      islandMap.set(ref, size);
+      islands.push({
+        startRef: ref,
+        size: refs.length,
+        refs,
+        avgElevationDelta: totalElevDiff / refs.length
+      });
     }
   }
 
-  const sortedIslands = Array.from(islandMap.entries()).sort((a, b) => b[1] - a[1]);
-  console.log(`[navmesh] Total islands: ${sortedIslands.length}. Top 10 sizes:`, sortedIslands.slice(0, 10).map(x => x[1]));
+  islands.sort((a, b) => b.size - a.size);
+  console.log(`[navmesh] Total islands: ${islands.length}. Top 10 sizes:`, islands.slice(0, 10).map(x => x.size));
 
   // Sort candidates by islandSize descending, then distance to center ascending
   candidates.sort((a, b) => {
@@ -285,25 +312,11 @@ export async function runNavmeshSpike(
   }
 
   // Fallback: If candidate island is tiny but there is an enormous street island, find the closest poly on the main island
-  if (sortedIslands.length > 0 && sortedIslands[0]![1] > 50 && (!candidates[0] || candidates[0].islandSize < 50)) {
-    const mainIslandRef = sortedIslands[0]![0];
-    const mainIslandRefs = new Set<number>();
-    const q = [mainIslandRef];
-    mainIslandRefs.add(mainIslandRef);
-    while (q.length > 0) {
-      const curr = q.pop()!;
-      const { poly: pObj, tile: tObj } = navMesh.getTileAndPolyByRefUnsafe(curr);
-      for (let l = pObj.firstLink(); l !== -1 && l !== 4294967295; l = tObj.links(l).next()) {
-        const nei = tObj.links(l).ref();
-        if (!nei || mainIslandRefs.has(nei)) continue;
-        mainIslandRefs.add(nei);
-        q.push(nei);
-      }
-    }
+  if (islands.length > 0 && islands[0]!.size > 50 && (!candidates[0] || candidates[0].islandSize < 50)) {
     let closestRef = 0;
     let minDist = Infinity;
     const closestPt = new Vector3();
-    for (const ref of mainIslandRefs) {
+    for (const ref of islands[0]!.refs) {
       const { poly: pObj, tile: tObj } = navMesh.getTileAndPolyByRefUnsafe(ref);
       const vertCount = pObj.vertCount();
       let cx = 0, cy = 0, cz = 0;
@@ -344,28 +357,34 @@ export async function runNavmeshSpike(
     };
   }
 
-  // 4. Prune all disconnected rooftop islands via flood-fill from spawn
+  // 4. Smart Rooftop Pruning:
+  // Instead of throwing away all cross streets and adjacent avenues, we:
+  // - KEEP the island containing spawn (always)
+  // - KEEP any street island close to ground level (avgElevationDelta <= 4.0m) with size >= 6
+  // - KEEP any large street network (size >= 25) with avgElevationDelta <= 7.0m
+  // - PRUNE isolated high-elevation building rooftops (avgElevationDelta > 4.5m) and tiny debris (< 6 polys)
   let totalPolys = 0;
-  for (let tileIndex = 0; tileIndex < navMesh.getMaxTiles(); tileIndex++) {
-    const tile = navMesh.getTile(tileIndex);
-    const header = tile?.header();
-    if (!tile || !header) continue;
-    totalPolys += header.polyCount();
-  }
-
-  floodFillPruneNavMesh(navMesh, [startPolyRef]);
-
   let keptPolys = 0;
-  for (let tileIndex = 0; tileIndex < navMesh.getMaxTiles(); tileIndex++) {
-    const tile = navMesh.getTile(tileIndex);
-    const header = tile?.header();
-    if (!tile || !header) continue;
-    for (let i = 0; i < header.polyCount(); i++) {
-      if (tile.polys(i).flags() !== 0) keptPolys++;
+
+  for (const isl of islands) {
+    totalPolys += isl.size;
+    const isSpawnIsland = isl.refs.includes(startPolyRef);
+    const isNearGround = isl.avgElevationDelta <= 4.0;
+    const isLarge = isl.size >= 25 && isl.avgElevationDelta <= 7.0;
+    const isSubstantialGroundStreet = isNearGround && isl.size >= 6;
+
+    const shouldKeep = isSpawnIsland || isSubstantialGroundStreet || isLarge;
+
+    const flag = shouldKeep ? 1 : 0;
+    for (const r of isl.refs) {
+      navMesh.setPolyFlags(r, flag);
+    }
+    if (shouldKeep) {
+      keptPolys += isl.size;
     }
   }
 
-  console.log(`[navmesh] Polygons: total=${totalPolys}, connectedToSpawn=${keptPolys}, prunedRooftops=${totalPolys - keptPolys}, bestIsland=${candidates[0]?.islandSize}`);
+  console.log(`[navmesh] Polygons: total=${totalPolys}, keptStreets=${keptPolys}, prunedRooftops=${totalPolys - keptPolys}, mainIsland=${islands[0]?.size}`);
 
   // 5. Measure reachability across the pruned street network
   let sampled = 0, onSurface = 0, reachable = 0;

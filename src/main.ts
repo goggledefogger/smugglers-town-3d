@@ -200,7 +200,7 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: GAME 3D (1:1)';
   } else if (viewMode === 'navmesh') {
     viewModeBtn.classList.add('active');
-    viewModeText.textContent = 'VIEW: NAVMESH 3D';
+    viewModeText.textContent = 'VIEW: NAVMESH 3D [B: Rebuild]';
   } else {
     viewModeBtn.classList.remove('active');
     viewModeText.textContent = 'VIEW: REAL 3D';
@@ -208,22 +208,37 @@ function updateViewModeUi(): void {
 }
 
 let navmeshBuilding = false;
-async function triggerNavmeshBuild(): Promise<void> {
+let lastNavmeshBuildPos = { x: Infinity, z: Infinity };
+
+async function triggerNavmeshBuild(force = false): Promise<void> {
   if (navmeshBuilding || !tiles) return;
+  const b = world.player?.body;
+  const centre = { x: b?.pos.x ?? 0, y: b?.pos.y ?? 0, z: b?.pos.z ?? 0 };
+  const dist = Math.hypot(centre.x - lastNavmeshBuildPos.x, centre.z - lastNavmeshBuildPos.z);
+  if (!force && dist < 120) return;
+
   navmeshBuilding = true;
+  bannerEl.show('BUILDING NAVMESH 3D (650m)...', 1200);
   try {
     const { runNavmeshSpike } = await import('./spike/navmeshSpike.ts');
-    const b = world.player?.body;
-    const centre = { x: b?.pos.x ?? 0, y: b?.pos.y ?? 0, z: b?.pos.z ?? 0 };
     const hf = world.terrainProvider.heightfield;
     log.info('Building Recast navmesh connected ribbon...', { centre });
     const res = await runNavmeshSpike(
       tiles.group,
-      { cs: 1.5, ch: 0.3, walkableSlopeAngle: 30, radiusM: 350, centre },
+      {
+        cs: 1.5,
+        ch: 0.3,
+        walkableSlopeAngle: 45,
+        walkableClimbM: 1.0,
+        carRadiusM: 0.0,
+        radiusM: 650,
+        centre
+      },
       (x, z) => hf.sample(x, z)
     );
     if (res.ok && res.helper) {
-      if (res.startPoint && world.player?.body) {
+      lastNavmeshBuildPos = { x: centre.x, z: centre.z };
+      if (res.startPoint && world.player?.body && force) {
         world.player.body.pos.set(res.startPoint.x, res.startPoint.y + 0.8, res.startPoint.z);
         world.player.body.vel.set(0, 0, 0);
         world.player.body.angVel.set(0, 0, 0);
@@ -233,13 +248,18 @@ async function triggerNavmeshBuild(): Promise<void> {
         renderer.scene.add(res.helper);
       }
       res.helper.visible = viewMode === 'navmesh';
+      bannerEl.show(`NAVMESH READY: ${res.connectedPolys ?? 0} STREET POLYS`, 1800);
       log.info('Recast navmesh connected ribbon ready', {
         meshes: res.meshesUsed,
         tris: res.trisUsed,
+        totalPolys: res.totalPolys,
+        keptStreets: res.connectedPolys,
+        prunedRooftops: res.prunedPolys,
         buildMs: Math.round(res.buildMs),
         reachablePct: res.reachablePctOfSurface.toFixed(1)
       });
     } else {
+      bannerEl.show(`NAVMESH: ${res.error ?? 'FAILED'}`, 2000);
       log.warn('Recast navmesh build did not succeed', { error: res.error });
     }
   } catch (err) {
@@ -261,13 +281,19 @@ function setViewMode(mode: ViewMode): void {
 
   import('./spike/navmeshSpike.ts').then(m => {
     const helper = m.getActiveNavMeshHelper();
-    if (helper) {
-      helper.visible = isNavmesh;
-      if (isNavmesh && !helper.parent) {
-        renderer.scene.add(helper);
+    if (isNavmesh) {
+      const b = world.player?.body;
+      const dist = Math.hypot((b?.pos.x ?? 0) - lastNavmeshBuildPos.x, (b?.pos.z ?? 0) - lastNavmeshBuildPos.z);
+      if (!helper || dist > 150) {
+        void triggerNavmeshBuild(true);
+      } else {
+        helper.visible = true;
+        if (!helper.parent) {
+          renderer.scene.add(helper);
+        }
       }
-    } else if (isNavmesh) {
-      triggerNavmeshBuild();
+    } else if (helper) {
+      helper.visible = false;
     }
   }).catch(() => {});
 }
@@ -339,6 +365,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 
 function clearTiles(): void {
   footprintPaintAt = -Infinity;
+  lastNavmeshBuildPos = { x: Infinity, z: Infinity };
   game.setSurfaceProvider(undefined);
   groundBuilder = null;
   if (groundStreamer) {
@@ -649,6 +676,13 @@ window.addEventListener('keydown', (e) => {
     showDiagnostic = !showDiagnostic;
     diagEl.style.display = showDiagnostic ? 'flex' : 'none';
   }
+  if (e.code === 'KeyB' && tiles) {
+    if (viewMode !== 'navmesh') {
+      setViewMode('navmesh');
+    } else {
+      void triggerNavmeshBuild(true);
+    }
+  }
 });
 
 // ---- URL test scenarios / deep linking (?scenario=<id> | ?lat=<lat>&lon=<lon> | ?key=<apiKey>) ----
@@ -829,6 +863,12 @@ function frame(now: number): void {
     const player = world.player?.body ?? null;
     if (tiles && player) {
       tiles.update(player.pos, now);
+      if (viewMode === 'navmesh' && !navmeshBuilding) {
+        const dist = Math.hypot(player.pos.x - lastNavmeshBuildPos.x, player.pos.z - lastNavmeshBuildPos.z);
+        if (dist > 280) {
+          void triggerNavmeshBuild(false);
+        }
+      }
       // refined tiles change the building footprints; rebuild at most every 1.5 s
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
