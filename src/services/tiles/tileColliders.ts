@@ -26,6 +26,7 @@ import { Vector3, Box3, type Object3D, type Mesh } from 'three';
 import { WORLD_M_PER_M } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
+import type { RoadGrid } from '../../services/osm/roads.ts';
 
 export interface ColliderThresholds {
   /** 10 units = 10 m cells. */
@@ -673,6 +674,16 @@ export function tileGroundOffset(
   return diffs[Math.floor(diffs.length * thresholds.datumPercentile)]!;
 }
 
+/**
+ * The road mask is OSM centrelines on the same grid (see services/osm/roads.ts).
+ * A road cell is never a building, whatever the surface model says: the
+ * morphological ground estimate is wrong by up to ~17 m at hill crests, and
+ * that error — not the threshold — is what severed hilly-city streets.
+ */
+function roadExempt(roadMask: RoadGrid | null | undefined, c: number): boolean {
+  return roadMask != null && roadMask.mask[c] === 1;
+}
+
 export function collidersFromRasters(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
@@ -681,7 +692,9 @@ export function collidersFromRasters(
   outDeckGrid?: Float32Array,
   thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
   /** n*n, receives 1 where the cell is a building, deck or ramp (what a render filter must leave alone). */
-  outStructureGrid?: Uint8Array
+  outStructureGrid?: Uint8Array,
+  /** OSM road-centreline mask on the same grid; road cells are exempt from building classification. */
+  roadMask?: RoadGrid | null
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1087,6 +1100,9 @@ export function collidersFromRasters(
     if (isDeck[c] || isRamp[c]) return false;
     // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
     if (isDriveableGround[c]) return false;
+    // OSM says a road runs through here: the crest error of the opening-based
+    // ground estimate is exactly the false wall this corridor was severed by
+    if (roadExempt(roadMask, c)) return false;
     return true;
   };
 
@@ -1199,7 +1215,8 @@ export function buildingCollidersFrom(
   tiles: Object3D,
   ground: Heightfield,
   reliefBoost = 1,
-  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+  roadMask?: RoadGrid | null
 ): BuildingCollider[] {
   const grid = gridFor(ground);
   tiles.updateMatrixWorld(true);
@@ -1209,6 +1226,8 @@ export function buildingCollidersFrom(
     sampleTerrain(grid, ground),
     reliefBoost,
     undefined,
-    thresholds
+    thresholds,
+    undefined,
+    roadMask
   );
 }

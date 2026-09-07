@@ -5,12 +5,15 @@
  * structured clone of the rasters and nothing else.
  */
 import { collidersFromRasters, type Grid, type TileRaster } from './tileColliders.ts';
+import type { RoadGrid } from '../osm/roads.ts';
 
 export interface ColliderJob {
   readonly rasters: readonly (TileRaster | null)[];
   readonly grid: Grid;
   readonly terrainTop: Float32Array;
   readonly reliefBoost: number;
+  /** OSM road mask, n*n; null when the fetch failed or has not landed yet. */
+  readonly roadMask: Uint8Array | null;
 }
 
 /** Vector3s do not survive the clone as Vector3s, so the boxes come back plain. */
@@ -26,10 +29,11 @@ const ctx = self as unknown as {
 };
 
 ctx.onmessage = e => {
-  const { rasters, grid, terrainTop, reliefBoost } = e.data;
+  const { rasters, grid, terrainTop, reliefBoost, roadMask } = e.data;
   const deckGrid = new Float32Array(grid.n * grid.n);
   const structureGrid = new Uint8Array(grid.n * grid.n);
-  const boxes = collidersFromRasters(rasters, grid, terrainTop, reliefBoost, deckGrid, undefined, structureGrid)
+  const roads: RoadGrid | null = roadMask ? { cell: grid.cell, half: grid.half, n: grid.n, mask: roadMask } : null;
+  const boxes = collidersFromRasters(rasters, grid, terrainTop, reliefBoost, deckGrid, undefined, structureGrid, roads)
     .map(b => ({ min: { x: b.min.x, y: b.min.y, z: b.min.z }, max: { x: b.max.x, y: b.max.y, z: b.max.z } }));
   ctx.postMessage({ boxes, deckGrid, structureGrid }, [deckGrid.buffer, structureGrid.buffer]);
 };
