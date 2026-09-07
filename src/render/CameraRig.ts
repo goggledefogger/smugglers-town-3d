@@ -107,6 +107,12 @@ export class CameraRig {
     return this.introLeft > 0;
   }
 
+  /** Immediately cancel the intro sweep and snap camera behind player. */
+  skipIntro(player?: Pose | null): void {
+    this.introLeft = 0;
+    if (player) this.snap(player);
+  }
+
   /** Snap immediately to the desired pose without lerping from an old spot. */
   snap(player: Pose | null): void {
     if (!player) return;

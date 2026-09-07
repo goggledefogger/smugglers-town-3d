@@ -81,6 +81,7 @@ app.innerHTML = `
     <div class="hud-corner hud-br"><sr-speed></sr-speed><sr-minimap></sr-minimap></div>
     <sr-dirarrow id="dirarrow"></sr-dirarrow>
     <sr-banner id="banner"></sr-banner>
+    <button id="skip-btn" type="button">SKIP <kbd>Space</kbd></button>
   </div>
   <sr-relocate id="relocate"></sr-relocate>
   <sr-lobby id="lobby" hidden></sr-lobby>
@@ -101,6 +102,7 @@ const relocateBarEl = document.querySelector('sr-relocate') as RelocateBar;
 const dirArrowEl = document.querySelector('sr-dirarrow') as DirArrow;
 const viewModeBtn = document.getElementById('view-mode-btn') as HTMLButtonElement | null;
 const viewModeText = document.getElementById('view-mode-text') as HTMLSpanElement | null;
+const skipBtn = document.getElementById('skip-btn') as HTMLButtonElement | null;
 
 // ---- stores, events, game ----
 const events = new EventBus<GameEventMap>();
@@ -260,6 +262,10 @@ window.addEventListener('keydown', (e) => {
   }
   if (e.code === 'KeyH' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
     audio.horn?.start();
+  }
+  if (game.matchPhase === 'countdown' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape')) {
+    skipCinematic();
+    e.preventDefault();
   }
 });
 
@@ -433,16 +439,26 @@ events.on('contraband:dropped', ({ vehicleId }) => {
 events.on('contraband:delivered', ({ team }) => {
   bannerEl.show(`DELIVERED! ${team === 0 ? 'YOUR CREW' : 'RIVALS'}`, 1500);
 });
+function skipCinematic(): void {
+  if (game.matchPhase !== 'countdown') return;
+  game.skipCountdown();
+  cameraRig.skipIntro(vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
+  hudEl.classList.remove('cinematic');
+}
+skipBtn?.addEventListener('click', skipCinematic);
+
 events.on('match:countdown', ({ n }) => {
   if (n <= 3) {
     bannerEl.show(n > 0 ? String(n) : 'GO!', n > 0 ? 900 : 800);
     if (n <= 2) {
       hudEl.classList.remove('cinematic');
     }
-  } else {
-    const raw = world.terrainProvider.label || 'GET READY';
+  } else if (n === 6) {
+    const raw = world.terrainProvider.label || 'SMUGGLERS TOWN';
     const label = raw.length > 42 ? raw.slice(0, 40) + '…' : raw;
     bannerEl.show(label.toUpperCase(), 1800);
+  } else if (n === 4) {
+    bannerEl.show('GET READY', 900);
   }
 });
 events.on('match:finalMinute', () => bannerEl.show('FINAL MINUTE', 1500));
@@ -778,6 +794,10 @@ function frame(now: number): void {
   for (const action of input.drainUiActions()) {
     if (uiHandler) {
       if (uiHandler(action)) continue;
+    }
+    if (game.matchPhase === 'countdown' && (action === 'confirm' || action === 'pause')) {
+      skipCinematic();
+      continue;
     }
     // unhandled UI action while no screen is open: treat pause/back specially
     if (action === 'pause' && !introEl.isConnected && endEl.hidden) {

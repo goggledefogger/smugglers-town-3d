@@ -63,6 +63,18 @@ describe('CameraRig', () => {
     expect(camera.position.z).toBeCloseTo(14, 1);
   });
 
+  it('skipIntro immediately ends the intro and snaps behind player', () => {
+    const { rig, camera } = makeRig();
+    const player: Pose = { pos: new Vector3(100, 65, 200), quat: new Quaternion() };
+    rig.intro(6, player);
+    expect(rig.introActive).toBe(true);
+    rig.skipIntro(player);
+    expect(rig.introActive).toBe(false);
+    expect(camera.position.x).toBeCloseTo(100, 1);
+    expect(camera.position.y).toBeCloseTo(71, 1);
+    expect(camera.position.z).toBeCloseTo(214, 1);
+  });
+
   it('cycles camera modes and updates zoom', () => {
     const { rig, camera } = makeRig();
     expect(rig.mode).toBe(0);
