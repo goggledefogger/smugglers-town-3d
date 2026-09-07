@@ -71,13 +71,27 @@ measured 25-60 ms. Left:
   Swept is the default; it keeps kerbside facades (and street trees) over
   streamed satellite ground, while Hidden discards non-building geometry completely.
   Note this is **render-side only** — the colliders still contain the clutter it hides.
+- Cinematic camera sweep **(Done)**: A 6-second dynamic establishing shot swoops across
+  the landscape with terrain and building obstacle avoidance, staged banners (`LOCATION`,
+  `GET READY`, countdown 3-2-1, `GO!`), and instant skip via `Space`, `Enter`, click, or gamepad.
 
 ## 5. Input and platforms
 
-Done: gamepad is a first-class `InputSource` (analog steer/throttle/triggers)
-alongside the keyboard, merged through one `InputManager`; both work through
-the menus and the match, and every binding is rebindable from the Controls
-screen. Defaults are mapped from the original PS2 layout onto a Stadia pad.
+Done:
+- Gamepad is a first-class `InputSource` (analog steer/throttle/triggers)
+  alongside the keyboard, merged through one `InputManager`; both work through
+  the menus and the match, and every binding is rebindable from the Controls
+  screen. Defaults are mapped from the original PS2 layout onto a Stadia pad.
+- Windows, cross-browser, and Bluetooth Stadia controller normalization:
+  handles raw DirectInput HID drivers in Firefox where buttons and triggers
+  sit on axes 4/5, D-pad on hat switches, and buttons are permuted.
+- Multi-gamepad resolution: bypasses idle virtual joystick drivers (vJoy,
+  Steam Input) sitting at index 0 and automatically locks onto whichever
+  controller has active player input without stick-drift lockouts.
+- Gamepad audio auto-unlock on first interaction, and friendly button labels
+  (`A`, `B`, `LT`, `RT`, `D-Pad`, etc.) across Settings and the garage footer.
+- Canvas `webglcontextlost` and `webglcontextrestored` recovery, and `touch-action: none`
+  preventing touchscreen pinch-zoom.
 
 Left:
 

@@ -44,7 +44,8 @@ the camera, **Start** pauses. Left stick or D-pad steers, right stick pitches
 in the air.
 
 In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` (or gamepad
-**A**) starts. Typing in the search box never leaks into the game.
+**A**) starts. At match start, a cinematic camera sweep introduces the landscape;
+press `Space`, `Enter`, click **SKIP**, or press gamepad **A** to immediately jump to the race. Typing in the search box never leaks into the game.
 
 ## The roster
 
@@ -99,9 +100,10 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (262 tests, plain node) |
+| `npm test` | Test suite (445 tests, plain node) |
 | `npm run test:watch` | The same, re-running as you edit |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
+| `npm run smoke:gamepad` | Headless gamepad E2E test with simulated Bluetooth Stadia controller |
 | `npm run e2e:online` | Two headless browsers play an online match against the dev server |
 | `npm run typecheck` | Strict TypeScript, no emit |
 | `npm run build` | Typecheck and build to `dist/` |

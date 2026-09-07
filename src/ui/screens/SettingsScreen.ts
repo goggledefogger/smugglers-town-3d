@@ -4,6 +4,7 @@ import type { LogicalAction } from '../../input/types.ts';
 import type { InputManager } from '../../input/InputManager.ts';
 import type { AudioManager } from '../../audio/AudioManager.ts';
 import type { GameEvents } from '../../app/events.ts';
+import { GAMEPAD_BUTTON_NAMES, GAMEPAD_AXIS_NAMES } from '../../input/gamepadNormalization.ts';
 
 /**
  * Rebind screen: lists every logical action and its current binding on each
@@ -45,8 +46,18 @@ const ACTION_GROUP: Record<string, LogicalAction[]> = {
 
 function describeBinding(b: Binding): string {
   if (b.kind === 'key') return prettyKey(b.code);
-  if (b.kind === 'button') return `Button ${b.index}`;
-  return `Axis ${b.index} ${b.sign > 0 ? '+' : '−'}`;
+  if (b.kind === 'button') return GAMEPAD_BUTTON_NAMES[b.index] ?? `Button ${b.index}`;
+  const key = `${b.index}:${b.sign}`;
+  return GAMEPAD_AXIS_NAMES[key] ?? `Axis ${b.index} ${b.sign > 0 ? '+' : '−'}`;
+}
+
+function describeGamepadBinding(b: Binding): string {
+  if (b.kind === 'button') return GAMEPAD_BUTTON_NAMES[b.index] ?? `Button ${b.index}`;
+  if (b.kind === 'axis') {
+    const key = `${b.index}:${b.sign}`;
+    return GAMEPAD_AXIS_NAMES[key] ?? `Axis ${b.index} ${b.sign > 0 ? '+' : '−'}`;
+  }
+  return '—';
 }
 
 function prettyKey(code: string): string {
@@ -210,6 +221,30 @@ export class SettingsScreen extends LitElement {
     .audio-btn.active {
       border-color: var(--accent);
     }
+    .gamepad-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 12px;
+      background: rgba(30, 41, 59, 0.75);
+      border: 1px solid var(--line);
+      border-left: 3px solid var(--accent);
+      border-radius: var(--radius-sm);
+      margin-bottom: var(--space-md);
+      font-size: var(--text-sm);
+      color: var(--ink);
+    }
+    .gamepad-status .pad-icon { font-size: 16px; }
+    .gamepad-status .pad-name { font-weight: 600; color: #fff; }
+    .gamepad-status .pad-mode {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: var(--text-2xs);
+      color: var(--muted);
+      background: var(--panel2);
+      padding: 2px 6px;
+      border-radius: 4px;
+      text-transform: uppercase;
+    }
   `;
 
   static override properties = {
@@ -349,11 +384,20 @@ export class SettingsScreen extends LitElement {
     const b = this.manager?.bindings;
     const volPercent = Math.round((this.audio?.masterVolume ?? 0.6) * 100);
     const isMuted = this.audio?.muted ?? false;
+    const activePad = this.manager?.gamepad?.getActivePad();
 
     return html`
       <div class="panel">
         <h1>SETTINGS & CONTROLS</h1>
         <p class="sub">Adjust game audio volume and rebind controls. Changes take effect immediately and save to your browser.</p>
+
+        ${activePad ? html`
+          <div class="gamepad-status">
+            <span class="pad-icon">🎮</span>
+            <span class="pad-name">${activePad.name}</span>
+            <span class="pad-mode">${activePad.mapping}</span>
+          </div>
+        ` : ''}
 
         <div class="group audio-group">
           <h2>Audio Settings</h2>
@@ -419,7 +463,7 @@ export class SettingsScreen extends LitElement {
       <div class="row ${isListening ? 'listening' : ''}" @click=${() => this.startListening(action)}>
         <span class="action">${ACTION_LABEL[action]}</span>
         <span class="binding ${kb?.length ? '' : 'empty'}">${kb?.length ? describeBinding(kb[0]!) : '—'}</span>
-        <span class="binding ${gp?.length ? '' : 'empty'}">${gp?.length ? describeBinding(gp[0]!) : '—'}</span>
+        <span class="binding ${gp?.length ? '' : 'empty'}">${gp?.length ? describeGamepadBinding(gp[0]!) : '—'}</span>
       </div>
     `;
   }

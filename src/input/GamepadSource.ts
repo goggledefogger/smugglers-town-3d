@@ -21,6 +21,7 @@
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { InputSource, UiAction, Hotkey, LogicalAction } from './types.ts';
 import type { Bindings, BindingTable, Binding } from './bindings.ts';
+import { normalizePadSnapshot, type PadSnapshot } from './gamepadNormalization.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('input');
@@ -32,16 +33,11 @@ const TRIGGER_DEADZONE = 0.05;
 /** Stick direction (for UI nav) must exceed this to count as an edge. */
 const UI_STICK_DEADZONE = 0.5;
 
-interface PadSnapshot {
-  readonly axes: readonly number[];
-  readonly buttons: readonly { readonly value: number; readonly pressed: boolean }[];
-}
-
 const UI_OF: Partial<Record<LogicalAction, UiAction>> = {
   uiUp: 'up', uiDown: 'down', uiLeft: 'left', uiRight: 'right',
   uiConfirm: 'confirm', uiBack: 'back', uiTab: 'tab', uiPause: 'pause'
 };
-const HOTKEY_OF: Partial<Record<LogicalAction, Hotkey>> = { camera: 'camera', reset: 'reset', viewMode: 'viewMode' };
+const HOTKEY_OF: Partial<Record<LogicalAction, Hotkey>> = { camera: 'camera', reset: 'reset', viewMode: 'viewMode', clutterMode: 'clutterMode' };
 
 export class GamepadSource implements InputSource {
   private readonly table: BindingTable;
@@ -49,25 +45,131 @@ export class GamepadSource implements InputSource {
   private readonly pendingHot: Hotkey[] = [];
   /** Per-binding edge tracking: which axis/button directions are currently "held". */
   private readonly axisHeld = new Map<string, boolean>();
-  private lastPadId: string | null = null;
+  private lastPadLogId: string | null = null;
+  private activePadIndex: number | null = null;
+  private readonly disposers: (() => void)[] = [];
+
+  /** Optional callback invoked whenever any gamepad button or stick generates user activity. */
+  onActivity?: () => void;
 
   constructor(bindings: Bindings) {
     this.table = bindings.table('gamepad');
+
+    if (typeof window !== 'undefined') {
+      const onPadConnected = (e: Event) => {
+        const gp = (e as GamepadEvent).gamepad;
+        if (gp) {
+          log.info('gamepad connected event', { id: gp.id, index: gp.index, mapping: gp.mapping });
+          this.onActivity?.();
+        }
+      };
+      const onPadDisconnected = (e: Event) => {
+        const gp = (e as GamepadEvent).gamepad;
+        if (gp && gp.index === this.activePadIndex) {
+          this.activePadIndex = null;
+        }
+        this.axisHeld.clear();
+      };
+      const onBlurOrHide = () => {
+        this.axisHeld.clear();
+      };
+
+      window.addEventListener('gamepadconnected', onPadConnected);
+      window.addEventListener('gamepaddisconnected', onPadDisconnected);
+      window.addEventListener('blur', onBlurOrHide);
+      document.addEventListener('visibilitychange', onBlurOrHide);
+
+      this.disposers.push(
+        () => window.removeEventListener('gamepadconnected', onPadConnected),
+        () => window.removeEventListener('gamepaddisconnected', onPadDisconnected),
+        () => window.removeEventListener('blur', onBlurOrHide),
+        () => document.removeEventListener('visibilitychange', onBlurOrHide)
+      );
+    }
   }
 
+  /** Current active gamepad snapshot (normalized), or null if no controller connected. */
+  getActivePad(): PadSnapshot | null {
+    return this.snapshot();
+  }
+
+  /**
+   * Scans all connected gamepads and returns the normalized snapshot of the active device.
+   *
+   * Windows Multi-Gamepad Handling:
+   * Virtual gamepad drivers (Steam Input, vJoy, ViGEm, Xbox Wireless Dongle) often occupy index 0
+   * with all zeros. We dynamically switch active controller to whichever connected device
+   * generates active button presses or stick displacement beyond the deadzone.
+   */
   private snapshot(): PadSnapshot | null {
     if (typeof navigator === 'undefined' || !navigator.getGamepads) return null;
-    for (const g of navigator.getGamepads()) {
-      if (g && g.connected) {
-        const id = `${g.mapping ?? ''}:${g.axes.length}/${g.buttons.length}`;
-        if (id !== this.lastPadId) {
-          this.lastPadId = id;
-          log.info('gamepad connected', { mapping: g.mapping, axes: g.axes.length, buttons: g.buttons.length });
+
+    const rawPads = navigator.getGamepads();
+    const connected: Gamepad[] = [];
+    for (let i = 0; i < rawPads.length; i++) {
+      const g = rawPads[i];
+      if (g && g.connected) connected.push(g);
+    }
+    if (connected.length === 0) {
+      this.activePadIndex = null;
+      return null;
+    }
+
+    // Check if any pad is actively being touched/deflected right now
+    let bestPad: Gamepad | null = null;
+    let bestScore = 0;
+
+    for (const g of connected) {
+      let score = 0;
+      for (const b of g.buttons) {
+        if (b) {
+          if (b.pressed) score = Math.max(score, 1.0);
+          else if (b.value > 0.15) score = Math.max(score, b.value);
         }
-        return { axes: g.axes, buttons: g.buttons };
+      }
+      for (let idx = 0; idx < Math.min(4, g.axes.length); idx++) {
+        const mag = Math.abs(g.axes[idx] ?? 0);
+        if (mag > STICK_DEADZONE) {
+          score = Math.max(score, (mag - STICK_DEADZONE) / (1 - STICK_DEADZONE));
+        }
+      }
+      // If currently active pad has active input, prioritize it over competing drift
+      const effectiveScore = g.index === this.activePadIndex ? score * 1.5 : score;
+      if (score > 0.05 && effectiveScore > bestScore) {
+        bestScore = effectiveScore;
+        bestPad = g;
       }
     }
-    return null;
+
+    if (bestPad) {
+      this.activePadIndex = bestPad.index;
+      this.onActivity?.();
+    }
+
+    // Resolve active pad: active touched pad, or last active if still connected, or first non-virtual pad
+    let targetPad = bestPad;
+    if (!targetPad && this.activePadIndex !== null) {
+      targetPad = connected.find(g => g.index === this.activePadIndex) ?? null;
+    }
+    if (!targetPad) {
+      const nonVirtual = connected.find(g => !/vjoy|virtual/i.test(g.id));
+      targetPad = nonVirtual ?? connected[0]!;
+      this.activePadIndex = targetPad.index;
+    }
+
+    const normalized = normalizePadSnapshot(targetPad);
+    const logId = `${targetPad.index}:${targetPad.id}:${targetPad.mapping}`;
+    if (logId !== this.lastPadLogId) {
+      this.lastPadLogId = logId;
+      log.info('gamepad active', {
+        index: targetPad.index,
+        id: targetPad.id,
+        mapping: targetPad.mapping,
+        isStadia: normalized.isStadia
+      });
+    }
+
+    return normalized;
   }
 
   /**
@@ -89,7 +191,7 @@ export class GamepadSource implements InputSource {
         // sign-adjusts axes, so a stick pushed the opposite way reads negative
         // and must NOT count as on (else one push fires both left and right)
         const on = v.kind === 'analog' ? v.value > UI_STICK_DEADZONE : v.pressed;
-        const key = edgeKey(b);
+        const key = `${action}:${edgeKey(b)}`;
         if (on && !this.axisHeld.get(key)) { this.axisHeld.set(key, true); edges.push(action); }
         else if (!on && this.axisHeld.get(key)) { this.axisHeld.set(key, false); }
       }
@@ -146,6 +248,8 @@ export class GamepadSource implements InputSource {
   drainHotkeys(): Hotkey[] { return this.pendingHot.splice(0); }
 
   dispose(): void {
+    for (const d of this.disposers) d();
+    this.disposers.length = 0;
     this.pendingUi.length = 0;
     this.pendingHot.length = 0;
     this.axisHeld.clear();

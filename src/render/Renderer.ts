@@ -87,6 +87,14 @@ export class GameRenderer {
 
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', () => this.handleResize());
+      deps.canvas.addEventListener('webglcontextlost', (e) => {
+        e.preventDefault();
+        log.warn('WebGL context lost — reload recommended');
+      });
+      deps.canvas.addEventListener('webglcontextrestored', () => {
+        log.info('WebGL context restored — reloading');
+        window.location.reload();
+      });
     }
   }
 
