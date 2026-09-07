@@ -161,20 +161,12 @@ the wrong one.**
   one-to-one. The best variant reached 9.9% while nearly doubling missed
   buildings. Do not spend more here without a new idea.
 
-- **Navmesh extraction (Recast) — live candidate, spike inconclusive.**
-  `recast-navigation-js` (MIT, WASM) voxelizes triangle soup and extracts
-  traversable surface, and is explicitly built for overlapping, imperfect
-  geometry. Its cell size is a parameter, which addresses the suspected root
-  cause: at 10 m a street between buildings on a grade is one or two cells wide
-  and any occupied cell severs it. Its handful of physically meaningful
-  parameters would replace clusters of our ~30 constants, and it is natively
-  multi-level, so the entire `deckGrid` bridge apparatus becomes unnecessary.
-  Detour could replace `NavGrid`. Build time looks viable (426 ms at 2 m cells
-  over an 800 m box, 132k triangles) and belongs in a worker. Two unknowns
-  before committing: the reachability measurement is not yet trustworthy, and
-  Recast will treat melted parked cars as obstacles and erode corridors exactly
-  as the raster did, so clutter may need filtering out of the navmesh input.
-  Spike lives on `spike/recast-navmesh`.
+- **Navmesh extraction (Recast) — Spike Evaluated & Branch Preserved.**
+  `recast-navigation-js` (MIT, WASM) voxelizes 3D tile triangle soup and extracts
+  a traversable surface directly. Validated on `spike/recast-navmesh`:
+  - **Transform & Snapping Fixed:** Evaluates Three.js world matrices before vertex harvesting; snaps spawn cleanly to pavement.
+  - **Street Preservation vs Rooftops:** Ground-elevation filtering prunes elevated rooftops while preserving ground-level road ribbons (11k+ polygons across 1.3 km).
+  - **Production Conclusion:** Raw photogrammetry triangle soup inherently contains gaps caused by tree canopies, shadows, power lines, and steep curbs, while driveways and plazas can get falsely marked drivable. The vector road corridor hybrid (OSM) on `main` remains substantially more reliable for gameplay navigation because it provides human-curated road topology. Recast work is safely preserved on `spike/recast-navmesh` for future reference.
 
 - **Vector Road Hybrid (OSM / Overpass API) — Done.**
   Merged on `main` in `services/osm/roads.ts`. Queries OpenStreetMap for drivable

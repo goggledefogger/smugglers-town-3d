@@ -205,8 +205,10 @@ Implemented in `services/osm/roads.ts` and integrated with `tileColliders.ts` an
 - **Known Limitations:** Network latency (mitigated by a 1.5 s startup timeout with async background rebuild) and public Overpass rate-limit constraints.
 
 ### B. Recast Navigation Spike (`spike/recast-navmesh`)
-- **Status:** Fast build confirmed (426 ms at 2 m resolution over an 800 m box, 132k triangles).
-- **Next Steps:** Resolve spawn elevation snapping and discard disconnected rooftop navmesh islands via flood-fill from spawn. Remains the preferred long-term replacement to eliminate the 10 m 2.5D raster heuristic pipeline.
+- **Status:** Spike evaluated, findings documented, and branch preserved.
+  - **Transform & Snapping:** World coordinate matrices refreshed before vertex extraction; spawn point reliably snapped to pavement across steep grades and datum shifts.
+  - **Rooftop Pruning vs Street Preservation:** Multi-island elevation filtering prunes elevated rooftops while preserving ground-level street ribbons (11k+ polygons across 1.3 km).
+  - **Verdict & Production Decision:** Raw photogrammetry triangle soup inherently contains gaps caused by tree canopies, shadows, power lines, and steep curbs, while driveways and plazas can get falsely marked drivable. The vector road corridor hybrid (OSM) on `main` remains substantially more reliable for gameplay navigation because it provides human-curated road topology. Recast work is safely preserved on `spike/recast-navmesh` for future reference (e.g. multi-deck bot pathfinding).
 
 ### C. Other Options
 - **GPU rasterization of the surface model:** Rendering tiles top-down orthographic into a depth texture for 1 m surface data.
