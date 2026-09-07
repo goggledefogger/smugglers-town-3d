@@ -461,6 +461,14 @@ export class Game {
     }
   }
 
+  /** Immediately cancel the countdown and begin active play. */
+  skipCountdown(): void {
+    if (this.phase !== 'countdown') return;
+    this.countdownLeft = 0;
+    this.phase = 'playing';
+    this.deps.events.emit('match:countdown', { n: 0 });
+  }
+
   private tickClock(dt: number): void {
     this.timeLeftS = Math.max(0, this.timeLeftS - dt);
     if (!this.finalMinuteShown && this.timeLeftS <= this.round.finalMinuteS) {

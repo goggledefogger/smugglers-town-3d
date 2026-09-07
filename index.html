@@ -67,6 +67,43 @@
        so the whole HUD stacked in normal flow underneath the canvas */
     #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
     #hud[hidden] { display: none; }
+    .hud-corner, #dirarrow { transition: opacity .6s ease-out; }
+    #hud.cinematic .hud-corner, #hud.cinematic #dirarrow { opacity: 0; pointer-events: none; }
+    #skip-btn {
+      position: absolute;
+      bottom: clamp(16px, 4vh, 32px);
+      left: 50%;
+      transform: translateX(-50%);
+      pointer-events: auto;
+      z-index: 30;
+      display: none;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 16px;
+      border-radius: 20px;
+      background: rgba(15, 23, 42, 0.85);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      color: #fff;
+      font-size: 11px;
+      font-family: 'JetBrains Mono', monospace;
+      cursor: pointer;
+      backdrop-filter: blur(8px);
+      transition: all .15s ease;
+      user-select: none;
+    }
+    #hud.cinematic #skip-btn { display: inline-flex; }
+    #skip-btn kbd {
+      background: rgba(255, 255, 255, 0.15);
+      padding: 1px 5px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+    }
+    #skip-btn:hover {
+      border-color: var(--accent);
+      color: #fff;
+      box-shadow: 0 0 12px rgba(255, 85, 0, 0.35);
+    }
     .hud-corner {
       position: absolute;
       display: flex;

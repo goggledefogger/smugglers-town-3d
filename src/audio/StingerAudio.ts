@@ -105,6 +105,7 @@ export class StingerAudio {
    */
   playCountdown(n: number): void {
     if (this.ctx.state !== 'running') return;
+    if (n > 3) return; // Keep the landscape establishing sweep free of repetitive beeping
     const now = this.ctx.currentTime;
 
     if (n > 0) {

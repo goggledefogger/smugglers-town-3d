@@ -40,7 +40,8 @@ for (const vp of VIEWPORTS) {
   await page.goto(URL, { waitUntil: 'load' });
   await page.waitForSelector('sr-intro .play', { timeout: 30000 });
   await page.locator('sr-intro .play').click();
-  await page.waitForTimeout(1500);
+  // Wait through the 6s cinematic intro countdown so the car is in active play
+  await page.waitForTimeout(6500);
 
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(2500);

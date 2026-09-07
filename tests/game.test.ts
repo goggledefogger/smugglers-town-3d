@@ -35,6 +35,16 @@ describe('Game round structure', () => {
     expect(ticks).toEqual([1, 0]);
   });
 
+  it('skipCountdown immediately ends countdown and transitions to playing', () => {
+    const { game, events } = makeGame({ roundS: 300, countdownS: 6, finalMinuteS: 60 });
+    const ticks: number[] = [];
+    events.on('match:countdown', ({ n }) => ticks.push(n));
+    expect(game.matchPhase).toBe('countdown');
+    game.skipCountdown();
+    expect(game.matchPhase).toBe('playing');
+    expect(ticks).toContain(0);
+  });
+
   it('gives a tied buzzer to sudden death and the next delivery', () => {
     const { game, events } = makeGame({ roundS: 0.5, countdownS: 0, finalMinuteS: 0.25 });
     const seen: string[] = [];

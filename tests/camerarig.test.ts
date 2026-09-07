@@ -29,19 +29,26 @@ describe('CameraRig', () => {
     expect(camera.position.z).toBeCloseTo(214, 1);
   });
 
-  it('intro holds an overhead map view, then arrives at the chase pose as the countdown ends', () => {
+  it('intro begins at a high oblique angle, sweeps through a horizontal 3D view, and settles into chase pose', () => {
     const { rig, camera } = makeRig();
     const player: Pose = { pos: new Vector3(100, 65, 200), quat: new Quaternion() };
-    rig.intro(3, player);
+    rig.intro(6, player);
     expect(rig.introActive).toBe(true);
-    rig.update(0.1, player);
-    // straight above the spawn's ground (0 here), not above the falling car
-    expect(camera.position.y).toBeCloseTo(150, 0);
-    expect(camera.position.x).toBeCloseTo(100, 0);
-    // still holding at 0.5 s
-    rig.update(0.4, player);
-    expect(camera.position.y).toBeCloseTo(150, 0);
-    for (let i = 0; i < 30; i++) rig.update(0.1, player);
+
+    // Initial frame (t ~ 0): high oblique shot (~80m height, ~85m radius, not 90-degree zenith)
+    rig.update(0.01, player);
+    expect(camera.position.y).toBeGreaterThan(60);
+    // pulled back horizontally from player (x:100, z:200)
+    const initDist = Math.hypot(camera.position.x - 100, camera.position.z - 200);
+    expect(initDist).toBeGreaterThan(70);
+
+    // After ~2 seconds (t ~ 0.35): rapidly reaches near-horizontal sweep altitude (~22m)
+    for (let i = 0; i < 20; i++) rig.update(0.1, player);
+    expect(camera.position.y).toBeLessThan(35);
+    expect(camera.position.y).toBeGreaterThan(15);
+
+    // Complete the rest of the intro (up to 6s)
+    for (let i = 0; i < 40; i++) rig.update(0.1, player);
     expect(rig.introActive).toBe(false);
     expect(camera.position.x).toBeCloseTo(100, 0);
     expect(camera.position.y).toBeCloseTo(71, 0);
@@ -54,6 +61,18 @@ describe('CameraRig', () => {
     rig.intro(0, player);
     expect(rig.introActive).toBe(false);
     expect(camera.position.z).toBeCloseTo(14, 1);
+  });
+
+  it('skipIntro immediately ends the intro and snaps behind player', () => {
+    const { rig, camera } = makeRig();
+    const player: Pose = { pos: new Vector3(100, 65, 200), quat: new Quaternion() };
+    rig.intro(6, player);
+    expect(rig.introActive).toBe(true);
+    rig.skipIntro(player);
+    expect(rig.introActive).toBe(false);
+    expect(camera.position.x).toBeCloseTo(100, 1);
+    expect(camera.position.y).toBeCloseTo(71, 1);
+    expect(camera.position.z).toBeCloseTo(214, 1);
   });
 
   it('cycles camera modes and updates zoom', () => {
