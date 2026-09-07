@@ -135,7 +135,7 @@ export class EngineAudio {
     this.filter.frequency.setTargetAtTime(cutoff, now, 0.05);
 
     // Engine volume: unobtrusive in mix (~10 dB quieter than raw sfx)
-    const targetGain = 0.05 + this.currentRpm * 0.04 + (throttle > 0 ? 0.025 : 0);
+    const targetGain = 0.025 + this.currentRpm * 0.02 + (throttle > 0 ? 0.012 : 0);
     this.gain.gain.setTargetAtTime(targetGain, now, 0.05);
   }
 

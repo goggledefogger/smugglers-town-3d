@@ -85,7 +85,7 @@ export class TireAudio {
       const centerFreq = 950 + intensity * 450 + Math.min(300, speed * 8);
       this.filter.frequency.setTargetAtTime(centerFreq, now, 0.05);
 
-      const targetGain = intensity * 0.26;
+      const targetGain = intensity * 0.13;
       this.gain.gain.setTargetAtTime(targetGain, now, 0.04);
     } else {
       this.gain.gain.setTargetAtTime(0, now, 0.06);

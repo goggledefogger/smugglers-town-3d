@@ -170,11 +170,11 @@ describe('Procedural Game Audio System', () => {
 
       // Drifting sideways at 12 m/s:
       tire.update(25, 12.0, false, true);
-      expect((tire as any).gain.gain.value).toBeGreaterThan(0.15);
+      expect((tire as any).gain.gain.value).toBeGreaterThan(0.07);
 
       // Handbrake turn at speed:
       tire.update(20, 1.0, true, true);
-      expect((tire as any).gain.gain.value).toBeGreaterThan(0.1);
+      expect((tire as any).gain.gain.value).toBeGreaterThan(0.04);
 
       // Airborne: silence
       tire.update(25, 15.0, true, false);
