@@ -135,6 +135,7 @@ export class Game {
       {
         ...DEFAULT_SPAWN,
         mapHalf: config.world.mapHalf,
+        arenaRadius: config.world.arenaRadius,
         dropHeight: config.spawn.dropHeight,
         initialDropHeight: config.spawn.initialDropHeight
       },

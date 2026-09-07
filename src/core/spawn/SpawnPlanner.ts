@@ -26,13 +26,15 @@ export interface SpawnPoint extends Vec2 {
 
 export interface SpawnConfig {
   readonly mapHalf: number;
+  /** Radius of the active gameplay arena where bases and contraband spawn. */
+  readonly arenaRadius?: number;
   /** Open radius a car needs around it. */
   readonly carClearance: number;
   /** Preferred radius of the starting ring. */
   readonly ringRadius: number;
   /** Open radius a base needs. */
   readonly baseClearance: number;
-  /** Distance of each base from the field centre, as a fraction of mapHalf. */
+  /** Distance of each base from the field centre, as a fraction of arenaRadius. */
   readonly baseOffset: number;
   /** Open radius the contraband needs. */
   readonly itemClearance: number;
@@ -54,12 +56,13 @@ export interface SpawnConfig {
 
 export const DEFAULT_SPAWN: SpawnConfig = {
   mapHalf: 2800,
+  arenaRadius: 550,
   carClearance: 4,
   ringRadius: 78,
   baseClearance: 25,
-  baseOffset: 0.45,
+  baseOffset: 0.80,
   itemClearance: 5,
-  itemMinDist: 150,
+  itemMinDist: 100,
   dropHeight: 14,
   initialDropHeight: 65
 };
@@ -134,9 +137,9 @@ export class SpawnPlanner {
 
   /** The two team bases, on opposite sides of the field with room around them. */
   bases(): readonly [Vec2, Vec2] {
-    const { mapHalf, baseOffset, baseClearance } = this.cfg;
+    const { mapHalf, arenaRadius = mapHalf, baseOffset, baseClearance } = this.cfg;
     const ang = this.rng() * Math.PI * 2;
-    const r = mapHalf * baseOffset;
+    const r = arenaRadius * baseOffset;
     return [0, 1].map(team => {
       const a = ang + team * Math.PI;
       return this.open({ x: Math.cos(a) * r, z: Math.sin(a) * r }, baseClearance);
@@ -145,14 +148,15 @@ export class SpawnPlanner {
 
   /** A contraband drop clear of ground, cars and both bases. */
   item(avoid: readonly Vec2[]): Vec2 {
-    const { mapHalf, itemClearance, itemMinDist } = this.cfg;
+    const { mapHalf, arenaRadius = mapHalf, itemClearance, itemMinDist } = this.cfg;
     const far = (p: Vec2): boolean =>
       avoid.every(v => Math.hypot(p.x - v.x, p.z - v.z) > itemMinDist);
+    const span = arenaRadius * 1.5;
     let fallback: Vec2 | null = null;
     for (let tries = 0; tries < 40; tries++) {
       const guess = {
-        x: (this.rng() - 0.5) * mapHalf * 1.6,
-        z: (this.rng() - 0.5) * mapHalf * 1.6
+        x: (this.rng() - 0.5) * span,
+        z: (this.rng() - 0.5) * span
       };
       const at = this.space.findOpen(guess.x, guess.z, itemClearance);
       if (!at) continue;
