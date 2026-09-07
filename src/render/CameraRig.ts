@@ -13,6 +13,14 @@ export type CameraMode = 0 | 1 | 2;
 const MIN_CHASE_FRAC = 0.3;
 /** ...and looks down from this high when even that is inside a building. */
 const CLIMB_ABOVE = 12;
+/** The opening shot hangs this far above the spawn's ground, straight down, so the town reads as a map. */
+const INTRO_HEIGHT = 150;
+/** Fraction of the intro spent holding the overhead before the swoop starts. */
+const INTRO_HOLD = 0.2;
+/** How far around the car the camera swings on the way down (half a turn). */
+const INTRO_SWING = Math.PI;
+
+const smoothstep = (t: number): number => { const c = Math.min(1, Math.max(0, t)); return c * c * (3 - 2 * c); };
 
 export class CameraRig {
   mode: CameraMode = 0;
@@ -22,6 +30,14 @@ export class CameraRig {
   private readonly _desired = new Vector3();
   private readonly _look = new Vector3();
   private lookY: number | null = null;
+
+  private introLeft = 0;
+  private introTotal = 0;
+  /** Where the chase logic thinks the camera is while the intro overrides the real position. */
+  private readonly _chase = new Vector3();
+  private readonly _overhead = new Vector3();
+  private readonly _fwd = new Vector3();
+  private readonly _introLook = new Vector3();
 
   constructor(
     private readonly camera: PerspectiveCamera,
@@ -39,6 +55,23 @@ export class CameraRig {
     // widen FOV slightly when zoomed out so the wider view feels natural
     this.camera.fov = 62 + (z - 1) * 2.4;
     this.camera.updateProjectionMatrix();
+  }
+
+  /**
+   * Match start: hold an overhead map view of the spawn, then swing down
+   * behind the car over `seconds` (the countdown), arriving as the banner
+   * says GO. The car drops from the sky meanwhile, so it falls away from the
+   * fixed overhead before the camera follows it down.
+   */
+  intro(seconds: number, player: Pose | null): void {
+    this.snap(player);
+    if (!player || seconds <= 0) return;
+    this._chase.copy(this.camera.position);
+    this.introLeft = this.introTotal = seconds;
+  }
+
+  get introActive(): boolean {
+    return this.introLeft > 0;
   }
 
   /** Snap immediately to the desired pose without lerping from an old spot. */
@@ -79,6 +112,34 @@ export class CameraRig {
   /** Follows the player's rendered (interpolated) pose, not the raw body. */
   update(dt: number, player: Pose | null): void {
     if (!player) return;
+    if (this.introLeft <= 0) {
+      this.follow(dt, player);
+      return;
+    }
+    // the chase lerp runs on its own position; the intro blends from the overhead towards it
+    this.camera.position.copy(this._chase);
+    this.follow(dt, player);
+    this._chase.copy(this.camera.position);
+    this.introLeft -= dt;
+    const t = 1 - Math.max(0, this.introLeft) / this.introTotal;
+    const e = smoothstep((t - INTRO_HOLD) / (1 - INTRO_HOLD));
+    this._fwd.set(0, 0, -1).applyQuaternion(player.quat);
+    // a hair behind the car so lookAt has an up vector: the car points up the screen
+    this._overhead.set(player.pos.x, this.ground().sample(player.pos.x, player.pos.z) + INTRO_HEIGHT, player.pos.z)
+      .addScaledVector(this._fwd, -2);
+    // swing the chase offset around the car as it settles, so the descent orbits instead of dropping straight
+    const swing = (1 - e) * INTRO_SWING;
+    this.camera.position.sub(player.pos);
+    const cs = Math.cos(swing), sn = Math.sin(swing);
+    const rx = this.camera.position.x * cs - this.camera.position.z * sn;
+    const rz = this.camera.position.x * sn + this.camera.position.z * cs;
+    this.camera.position.set(rx, this.camera.position.y, rz).add(player.pos);
+    this.camera.position.lerp(this._overhead, 1 - e);
+    this._introLook.copy(player.pos).lerp(this._look, e);
+    this.camera.lookAt(this._introLook);
+  }
+
+  private follow(dt: number, player: Pose): void {
     const z = this.zoom;
     if (this.mode === 0) {
       this._back.set(0, 0, 14 * z).applyQuaternion(player.quat);

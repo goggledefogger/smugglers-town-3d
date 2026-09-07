@@ -361,7 +361,7 @@ function startMatch(terrain: TerrainProvider): void {
   game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
   game.reset(terrain);
   rebuildViews();
-  cameraRig.snap(vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
+  cameraRig.intro(config.match.countdownS, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
 }
 
 // one boot line per session: a bug report with no breadcrumbs is a guess, and
