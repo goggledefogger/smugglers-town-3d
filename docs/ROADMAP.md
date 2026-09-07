@@ -68,9 +68,9 @@ measured 25-60 ms. Left:
 - Street clutter filter **(Done)**: `TileClutterFilter` patches every tile
   material so street-level photogrammetry noise is flattened onto the ground
   or discarded entirely, leaving buildings over streamed satellite ground.
-  Hidden is the default; Swept keeps kerbside facades (and street trees) at
-  the cost of a busier skyline. Note this is **render-side only** — the colliders
-  still contain the clutter it hides.
+  Swept is the default; it keeps kerbside facades (and street trees) over
+  streamed satellite ground, while Hidden discards non-building geometry completely.
+  Note this is **render-side only** — the colliders still contain the clutter it hides.
 
 ## 5. Input and platforms
 
