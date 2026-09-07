@@ -146,7 +146,8 @@ let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
-let viewMode: 'photoreal' | 'game3d' = 'photoreal';
+export type ViewMode = 'photoreal' | 'game3d' | 'navmesh';
+let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // hidden by default: photogrammetry streets are melted cars and lumps, and the
@@ -197,24 +198,84 @@ function updateViewModeUi(): void {
   if (viewMode === 'game3d') {
     viewModeBtn.classList.add('active');
     viewModeText.textContent = 'VIEW: GAME 3D (1:1)';
+  } else if (viewMode === 'navmesh') {
+    viewModeBtn.classList.add('active');
+    viewModeText.textContent = 'VIEW: NAVMESH 3D';
   } else {
     viewModeBtn.classList.remove('active');
     viewModeText.textContent = 'VIEW: REAL 3D';
   }
 }
 
-function setViewMode(mode: 'photoreal' | 'game3d'): void {
+let navmeshBuilding = false;
+async function triggerNavmeshBuild(): Promise<void> {
+  if (navmeshBuilding || !tiles) return;
+  navmeshBuilding = true;
+  try {
+    const { runNavmeshSpike } = await import('./spike/navmeshSpike.ts');
+    const b = world.player?.body;
+    const centre = { x: b?.pos.x ?? 0, y: b?.pos.y ?? 0, z: b?.pos.z ?? 0 };
+    const hf = world.terrainProvider.heightfield;
+    log.info('Building Recast navmesh connected ribbon...', { centre });
+    const res = await runNavmeshSpike(
+      tiles.group,
+      { cs: 1.5, ch: 0.3, walkableSlopeAngle: 30, radiusM: 350, centre },
+      (x, z) => hf.sample(x, z)
+    );
+    if (res.ok && res.helper) {
+      if (res.startPoint && world.player?.body) {
+        world.player.body.pos.set(res.startPoint.x, res.startPoint.y + 0.8, res.startPoint.z);
+        world.player.body.vel.set(0, 0, 0);
+        world.player.body.angVel.set(0, 0, 0);
+        world.player.body.snapPrev();
+      }
+      if (!res.helper.parent) {
+        renderer.scene.add(res.helper);
+      }
+      res.helper.visible = viewMode === 'navmesh';
+      log.info('Recast navmesh connected ribbon ready', {
+        meshes: res.meshesUsed,
+        tris: res.trisUsed,
+        buildMs: Math.round(res.buildMs),
+        reachablePct: res.reachablePctOfSurface.toFixed(1)
+      });
+    } else {
+      log.warn('Recast navmesh build did not succeed', { error: res.error });
+    }
+  } catch (err) {
+    log.error('Recast navmesh build error', { error: String(err) });
+  } finally {
+    navmeshBuilding = false;
+  }
+}
+
+function setViewMode(mode: ViewMode): void {
   viewMode = mode;
   const isGame3d = mode === 'game3d';
+  const isNavmesh = mode === 'navmesh';
   if (tiles) tiles.group.visible = !isGame3d;
   if (groundStreamer) groundStreamer.group.visible = !isGame3d;
-  terrainMesh.setMode(mode);
+  terrainMesh.setMode(isGame3d ? 'game3d' : 'photoreal');
   buildingMeshView.visible = isGame3d;
   updateViewModeUi();
+
+  import('./spike/navmeshSpike.ts').then(m => {
+    const helper = m.getActiveNavMeshHelper();
+    if (helper) {
+      helper.visible = isNavmesh;
+      if (isNavmesh && !helper.parent) {
+        renderer.scene.add(helper);
+      }
+    } else if (isNavmesh) {
+      triggerNavmeshBuild();
+    }
+  }).catch(() => {});
 }
 
 function toggleViewMode(): void {
-  setViewMode(viewMode === 'photoreal' ? 'game3d' : 'photoreal');
+  if (viewMode === 'photoreal') setViewMode('game3d');
+  else if (viewMode === 'game3d') setViewMode('navmesh');
+  else setViewMode('photoreal');
 }
 
 viewModeBtn?.addEventListener('click', () => {
@@ -296,13 +357,14 @@ function clearTiles(): void {
     updateClutterUi();
   }
   buildingMeshView.clear();
+  import('./spike/navmeshSpike.ts').then(m => m.disposeActiveNavMesh()).catch(() => {});
 }
 
 function swapTerrainMesh(terrain: TerrainProvider): void {
   const old = terrainMesh.mesh;
   if (old) renderer.scene.remove(old);
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
-  terrainMesh.setMode(viewMode);
+  terrainMesh.setMode(viewMode === 'game3d' ? 'game3d' : 'photoreal');
   renderer.scene.add(mesh);
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }
@@ -641,17 +703,51 @@ let last = performance.now();
 let simTime = 0;
 
 // SPIKE hook (temporary): lets the harness build a navmesh from the live tiles
+let spikeFrozen = false;
 (window as unknown as Record<string, unknown>).__spike = {
-  async run(params: unknown) {
+  async run(params?: unknown) {
     const { runNavmeshSpike } = await import('./spike/navmeshSpike.ts');
     if (!tiles) return { error: 'no tiles' };
     const b = world.player?.body;
     const centre = { x: b?.pos.x ?? 0, y: b?.pos.y ?? 0, z: b?.pos.z ?? 0 };
     const hf = world.terrainProvider.heightfield;
-    return runNavmeshSpike(tiles.group, { ...(params as Record<string, unknown>), centre } as never,
-      (x, z) => hf.sample(x, z));
+    const p = {
+      cs: 1.5,
+      ch: 0.3,
+      walkableSlopeAngle: 30,
+      radiusM: 350,
+      centre,
+      ...((params as Record<string, unknown>) || {})
+    };
+    const res = await runNavmeshSpike(tiles.group, p as never, (x, z) => hf.sample(x, z));
+    if (res.ok && res.startPoint && world.player?.body) {
+      world.player.body.pos.set(res.startPoint.x, res.startPoint.y + 0.8, res.startPoint.z);
+      world.player.body.vel.set(0, 0, 0);
+      world.player.body.angVel.set(0, 0, 0);
+      world.player.body.snapPrev();
+    }
+    if (res.ok && res.helper && !res.helper.parent) {
+      renderer.scene.add(res.helper);
+      res.helper.visible = true;
+      setViewMode('navmesh');
+    }
+    return res;
   },
-  get ready() { return !!tiles; }
+  get ready() { return !!tiles && tiles.tileCount > 0; },
+  get tileCount() { return tiles?.tileCount ?? 0; },
+  freeze(enable = true) {
+    spikeFrozen = enable;
+    if (world.player?.body) {
+      world.player.body.vel.set(0, 0, 0);
+      world.player.body.angVel.set(0, 0, 0);
+    }
+  },
+  setViewMode(mode: ViewMode) {
+    setViewMode(mode);
+  },
+  toggleViewMode() {
+    toggleViewMode();
+  }
 };
 
 function frame(now: number): void {
@@ -717,7 +813,14 @@ function frame(now: number): void {
   }
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
-    const drive = input.vehicleInput();
+    let drive = input.vehicleInput();
+    if (spikeFrozen) {
+      drive = { steer: 0, throttle: 0, brake: 1.0, jump: false, handbrake: true };
+      if (world.player?.body) {
+        world.player.body.vel.set(0, 0, 0);
+        world.player.body.angVel.set(0, 0, 0);
+      }
+    }
     // the sessions get real elapsed time: Game clamps its own step, and a
     // client's playback clock must not run slow just because frames are
     if (online) online.tick(rawDt, drive);

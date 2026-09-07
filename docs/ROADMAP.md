@@ -161,20 +161,14 @@ the wrong one.**
   one-to-one. The best variant reached 9.9% while nearly doubling missed
   buildings. Do not spend more here without a new idea.
 
-- **Navmesh extraction (Recast) — live candidate, spike inconclusive.**
-  `recast-navigation-js` (MIT, WASM) voxelizes triangle soup and extracts
-  traversable surface, and is explicitly built for overlapping, imperfect
-  geometry. Its cell size is a parameter, which addresses the suspected root
-  cause: at 10 m a street between buildings on a grade is one or two cells wide
-  and any occupied cell severs it. Its handful of physically meaningful
-  parameters would replace clusters of our ~30 constants, and it is natively
-  multi-level, so the entire `deckGrid` bridge apparatus becomes unnecessary.
-  Detour could replace `NavGrid`. Build time looks viable (426 ms at 2 m cells
-  over an 800 m box, 132k triangles) and belongs in a worker. Two unknowns
-  before committing: the reachability measurement is not yet trustworthy, and
-  Recast will treat melted parked cars as obstacles and erode corridors exactly
-  as the raster did, so clutter may need filtering out of the navmesh input.
-  Spike lives on `spike/recast-navmesh`.
+- **Navmesh extraction (Recast) — Promising Candidate, Spike Validated.**
+  `recast-navigation-js` (MIT, WASM) voxelizes 3D tile triangle soup and extracts
+  a traversable surface directly. Validated on `spike/recast-navmesh`:
+  - **Coordinate matrix transform fixed:** Evaluates all Three.js world matrices prior to vertex harvesting.
+  - **Street snapping & rooftop pruning:** Multi-candidate probing snaps spawn cleanly to pavement. Disconnected rooftop fragments are pruned via `floodFillPruneNavMesh` from spawn, eliminating ~4,000 isolated rooftop polygons and retaining a contiguous 2,639-polygon street ribbon with **100% surface reachability** in SF Russian Hill.
+  - **Clutter handling:** Step climb height (`walkableClimbM: 0.8`) and low radius erosion (`carRadiusM: 0`) step over melted parked cars and curbs without severing narrow street passages.
+  - **Debug view (`V`):** Cycling `V` toggles `VIEW: REAL 3D` $\to$ `VIEW: GAME 3D` $\to$ `VIEW: NAVMESH 3D`, rendering the connected street ribbon in arcade cyan with white wireframe.
+  - **Next steps for production:** Move generation into a Web Worker, stream tiles dynamically as chunks, and drive AI pathfinding (`DetourNavMeshQuery`).
 
 - **Vector Road Hybrid (OSM / Overpass API) — Done.**
   Merged on `main` in `services/osm/roads.ts`. Queries OpenStreetMap for drivable

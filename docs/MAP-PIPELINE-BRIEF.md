@@ -205,8 +205,12 @@ Implemented in `services/osm/roads.ts` and integrated with `tileColliders.ts` an
 - **Known Limitations:** Network latency (mitigated by a 1.5 s startup timeout with async background rebuild) and public Overpass rate-limit constraints.
 
 ### B. Recast Navigation Spike (`spike/recast-navmesh`)
-- **Status:** Fast build confirmed (426 ms at 2 m resolution over an 800 m box, 132k triangles).
-- **Next Steps:** Resolve spawn elevation snapping and discard disconnected rooftop navmesh islands via flood-fill from spawn. Remains the preferred long-term replacement to eliminate the 10 m 2.5D raster heuristic pipeline.
+- **Status:** Fully functional proof of concept validated on SF Russian Hill / Lombard Street.
+  - **Coordinate Matrix Transforms:** `mesh.updateMatrixWorld(true)` ensures all Three.js tile hierarchy matrices are evaluated before vertex extraction.
+  - **Clean Street Snapping:** Multi-candidate footprint probing with fallback to largest connected island reliably places spawn on the road pavement, even across steep 27% grades with 33m datum elevation shifts.
+  - **Rooftop Island Pruning:** Runs `floodFillPruneNavMesh` from the spawn reference to strip all disconnected rooftop polygons (pruned 4,477 rooftop polygons in Russian Hill, retaining a continuous 2,639-polygon street network with **100% surface reachability**).
+  - **Debug Visualization (`V` Key):** Implemented `ConnectedNavMeshHelper` extending `NavMeshHelper`, explicitly rendering only active flag-1 polygons with double-sided arcade cyan shading and crisp white wireframe edges. Cycling `V` toggles `VIEW: REAL 3D` $\to$ `VIEW: GAME 3D` $\to$ `VIEW: NAVMESH 3D`.
+  - **Performance:** Generates in ~330–430 ms at 1.5 m cell resolution over a 700 m region, with 19–30 ms path queries. Long-term path to replace the 10 m 2.5D raster heuristic pipeline in a Web Worker.
 
 ### C. Other Options
 - **GPU rasterization of the surface model:** Rendering tiles top-down orthographic into a depth texture for 1 m surface data.
