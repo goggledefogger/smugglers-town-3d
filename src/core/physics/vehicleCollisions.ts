@@ -19,7 +19,7 @@ const _n = new Vector3();
  */
 export function resolveVehicleCollisions(
   vehicles: readonly VehicleBody[],
-  onRam: (a: VehicleBody, b: VehicleBody) => void,
+  onRam: (a: VehicleBody, b: VehicleBody, relSpeed?: number) => void,
   rng: Rng = Math.random
 ): void {
   for (let i = 0; i < vehicles.length; i++) {
@@ -42,6 +42,10 @@ export function resolveVehicleCollisions(
       a.vel.addScaledVector(n, newva - va);
       b.vel.addScaledVector(n, newvb - vb);
       const rel = Math.abs(va - vb);
+      if (rel > 2) {
+        a.lastImpact = { kind: 'vehicle', speed: rel };
+        b.lastImpact = { kind: 'vehicle', speed: rel };
+      }
       if (rel > 8) {
         const light = ma < mb ? a : b;
         const heavy = ma < mb ? b : a;
@@ -52,7 +56,7 @@ export function resolveVehicleCollisions(
           light.damage = Math.min(1, light.damage + rel * 0.01 / light.stats.durability);
         }
       }
-      onRam(a, b);
+      onRam(a, b, rel);
     }
   }
 }
