@@ -157,7 +157,7 @@ let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // hidden by default: photogrammetry streets are melted cars and lumps, and the
 // satellite ground under them is sharper than the tile surface it replaces
-let clutterMode: ClutterMode = 'hidden';
+let clutterMode: ClutterMode = 'swept';
 /** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
 const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept']);
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
