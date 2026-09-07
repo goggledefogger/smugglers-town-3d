@@ -12,7 +12,13 @@
  *   ground floors. The heightfield is the same one the car drives on, so
  *   flattened streets also line up with the physics surface.
  * - hidden: fragments are discarded, leaving the buildings, bridges and
- *   trees over the draped satellite terrain.
+ *   trees over the draped satellite terrain. The 10 m mask decides per
+ *   fragment, so a facade whose footprint fell in a street cell goes too.
+ * - swept: flatten, then discard every triangle whose three vertices all
+ *   flattened. Cars, kerbs and the road surface vanish over the satellite
+ *   ground like hidden, but anything reaching above the rise survives, so
+ *   kerbside facades keep their walls. Street trees come back with them; no
+ *   2D mask tells a tree at the kerb from the wall behind it.
  *
  * Every patched material shares the same uniform objects: switching modes is
  * a value write, and both textures wrap the buffers physics owns, so a ground
@@ -25,11 +31,14 @@ import {
 } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
 
-export type ClutterMode = 'off' | 'flatten' | 'hidden';
-export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden'];
+export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept';
+/** Index order is baked into the shader's mode comparisons: append, never reorder. */
+export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden', 'swept'];
 
 /** Real metres above the ground estimate under which tile geometry is street clutter (a car is ~1.5 m). */
 export const CLUTTER_RISE_M = 2.5;
+/** Swept only: with no structure cell within bilinear reach, tall enough to take buses and RVs too. */
+export const CLUTTER_TALL_M = 6;
 
 const VERTEX_PARS = `
 uniform sampler2D uClutterGround;
@@ -37,7 +46,9 @@ uniform sampler2D uClutterMask;
 uniform float uClutterMode;
 uniform vec2 uClutterField;
 uniform float uClutterRise;
+uniform float uClutterTall;
 varying float vClutterStructure;
+varying float vClutterFlat;
 `;
 
 /**
@@ -48,6 +59,7 @@ varying float vClutterStructure;
 const VERTEX_BODY = `
 float cClutterDy = 0.0;
 vClutterStructure = 1.0;
+vClutterFlat = 0.0;
 if (uClutterMode > 0.5) {
   vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 cuv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
@@ -64,7 +76,10 @@ if (uClutterMode > 0.5) {
     mix(texelFetch(uClutterGround, ci + ivec2(0, 1), 0).r, texelFetch(uClutterGround, ci + ivec2(1, 1), 0).r, ct.x),
     ct.y);
   float crise = cwp.y - cg;
-  if (uClutterMode < 1.5 && cStructure < 0.5 && abs(crise) < uClutterRise) cClutterDy = -crise;
+  bool cStreet = cStructure < 0.5;
+  bool cFlatten = uClutterMode < 1.5 || uClutterMode > 2.5;
+  if (cFlatten && cStreet && abs(crise) < uClutterRise) cClutterDy = -crise;
+  if (cStreet && abs(crise) < uClutterRise * (cStructure > 0.0 ? 1.0 : uClutterTall)) vClutterFlat = 1.0;
 }
 `;
 
@@ -83,11 +98,16 @@ gl_Position = projectionMatrix * mvPosition;
 const FRAGMENT_PARS = `
 uniform float uClutterMode;
 varying float vClutterStructure;
+varying float vClutterFlat;
 `;
 
-/** Interpolated mask, so the cut between kept and hidden runs between cell centres, not per triangle. */
+/**
+ * Hidden: interpolated mask, so the cut runs between cell centres, not per triangle.
+ * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base.
+ */
 const FRAGMENT_CUT = `
-if (uClutterMode > 1.5 && vClutterStructure < 0.5) discard;
+if (uClutterMode > 2.5) { if (vClutterFlat > 0.999) discard; }
+else if (uClutterMode > 1.5 && vClutterStructure < 0.5) discard;
 `;
 
 type Patchable = Material & { _clutterPatched?: boolean };
@@ -116,6 +136,7 @@ export class TileClutterFilter {
   private readonly uMask: { value: DataTexture };
   private readonly uField: { value: Vector2 };
   private readonly uRise: { value: number };
+  private readonly uTall = { value: CLUTTER_TALL_M / CLUTTER_RISE_M };
 
   /**
    * @param ground the physics heightfield; its buffer is wrapped, call groundChanged() after copyFrom
@@ -185,6 +206,7 @@ export class TileClutterFilter {
     shader.uniforms.uClutterMode = this.uMode;
     shader.uniforms.uClutterField = this.uField;
     shader.uniforms.uClutterRise = this.uRise;
+    shader.uniforms.uClutterTall = this.uTall;
     const lit = shader.vertexShader.includes('#include <normal_pars_vertex>');
     shader.vertexShader = VERTEX_PARS + shader.vertexShader
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERTEX_BODY + (lit ? VERTEX_NORMAL : ''))

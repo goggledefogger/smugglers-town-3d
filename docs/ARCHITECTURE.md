@@ -406,7 +406,14 @@ already owns: the ground heightfield, and the collider pass's structure mask
 flattens geometry under 2.5 m onto the ground plane, turning parked cars into
 road decals while facades keep their ground floors, or discards it entirely,
 leaving buildings and trees over streamed satellite ground. Hidden is the
-default. Every patched material shares one set of uniform objects, so switching
+default. Its per-fragment mask cut also removes any facade whose footprint
+fell in a street cell, which the 10 m grid and the OSM road exemption make
+common at the kerb. Swept is the alternative: flatten, then discard only
+triangles whose three vertices all flattened. Kerbside walls survive, and so
+do street trees, since no top-down mask separates a tree at the kerb from the
+wall behind it; in open ground with no structure cell within reach the cut
+rises to 6 m so buses and RVs go too. Both stream satellite ground under
+tiles. Every patched material shares one set of uniform objects, so switching
 modes is a value write and a ground refinement is a re-upload, never a
 recompile.
 

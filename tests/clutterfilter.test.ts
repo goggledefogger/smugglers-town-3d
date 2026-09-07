@@ -47,6 +47,7 @@ describe('TileClutterFilter', () => {
     expect(f.mode).toBe('off');
     expect(f.cycleMode()).toBe('flatten');
     expect(f.cycleMode()).toBe('hidden');
+    expect(f.cycleMode()).toBe('swept');
     expect(f.cycleMode()).toBe('off');
   });
 
@@ -66,6 +67,9 @@ describe('TileClutterFilter', () => {
     expect(shader.vertexShader).toContain('#include <project_vertex>\n');
     expect(shader.vertexShader).toContain('vNormal');
     expect(shader.vertexShader).toContain('vClutterStructure = cStructure');
+    expect(shader.vertexShader).toContain('vClutterFlat = 1.0');
+    expect(shader.uniforms.uClutterTall?.value).toBe(6 / CLUTTER_RISE_M);
+    expect(shader.fragmentShader).toContain('vClutterFlat > 0.999');
     expect(shader.fragmentShader).toContain('#include <clipping_planes_fragment>\n');
     expect(shader.fragmentShader).toContain('discard');
   });

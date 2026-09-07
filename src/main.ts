@@ -69,7 +69,7 @@ app.innerHTML = `
       <button id="view-mode-btn" class="hud-btn" type="button" title="Toggle 3D Visual Mode (Hotkey: V or G)">
         <span>🎮</span> <span id="view-mode-text">VIEW: REAL 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
       </button>
-      <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, or hide everything but buildings (Hotkey: F)">
+      <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, hide everything but buildings, or sweep the street clean while keeping walls and trees (Hotkey: F)">
         <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
       </button>
       <button id="audio-btn" class="hud-btn active" type="button" title="Toggle audio mute (Hotkey: M)">
@@ -158,9 +158,11 @@ let clutterFilter: TileClutterFilter | null = null;
 // hidden by default: photogrammetry streets are melted cars and lumps, and the
 // satellite ground under them is sharper than the tile surface it replaces
 let clutterMode: ClutterMode = 'hidden';
+/** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
+const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept']);
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
 const clutterText = document.getElementById('clutter-text') as HTMLSpanElement | null;
-const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN' };
+const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN', swept: 'CLUTTER: SWEPT' };
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
@@ -172,7 +174,7 @@ function updateClutterUi(): void {
 function cycleClutterMode(): void {
   if (!clutterFilter) return;
   clutterMode = clutterFilter.cycleMode();
-  if (groundStreamer) groundStreamer.underTiles = clutterMode === 'hidden';
+  if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   updateClutterUi();
 }
 
@@ -180,6 +182,7 @@ clutterBtn?.addEventListener('click', cycleClutterMode);
 
 /** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
 function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
+  (window as any).__tiles = streamer; // scripts/clutter-shots.mjs teleports onto a road cell through this
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
@@ -187,7 +190,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   if (groundStreamer) {
     // the tiles shifted the ground datum; patches under them must sit on the same field the car drives on
     groundStreamer.useHeightfield(terrain.heightfield);
-    groundStreamer.underTiles = clutterMode === 'hidden';
+    groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   }
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
