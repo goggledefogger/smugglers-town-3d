@@ -131,7 +131,7 @@ const renderer = new GameRenderer({ canvas });
 const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
-const pickups = new Pickups(renderer.scene, () => renderer.camera);
+const pickups = new Pickups(renderer.scene, () => renderer.camera, () => world.terrainProvider.heightfield);
 const cameraRig = new CameraRig(
   renderer.camera, () => world.terrainProvider.heightfield, (a, b) => world.lineOfSight(a, b)
 );

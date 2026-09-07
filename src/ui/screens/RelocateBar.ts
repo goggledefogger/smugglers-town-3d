@@ -60,7 +60,7 @@ export class RelocateBar extends LitElement {
        this only widens the bar and lowers it. */
     @media (max-width: 92rem) {
       :host {
-        top: calc(max(var(--space-md), env(safe-area-inset-top)) + 3.5rem);
+        top: calc(max(var(--space-md), env(safe-area-inset-top)) + 5.2rem);
         max-width: calc(100vw - var(--space-lg) * 2);
       }
     }
