@@ -78,7 +78,7 @@ export class StingerAudio {
   /**
    * Heavy crash and electrical power down tone when vehicle is wrecked.
    */
-  playWrecked(): void {
+  playWrecked(volumeScale = 1.0): void {
     if (this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
 
@@ -88,7 +88,7 @@ export class StingerAudio {
     osc.frequency.setValueAtTime(180, now);
     osc.frequency.exponentialRampToValueAtTime(30, now + 0.5);
 
-    gain.gain.setValueAtTime(0.42, now);
+    gain.gain.setValueAtTime(0.42 * volumeScale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + 0.5);
 
     osc.connect(gain);

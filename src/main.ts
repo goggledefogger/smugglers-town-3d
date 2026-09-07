@@ -461,6 +461,7 @@ introEl.onStart = (type) => {
   hudEl.hidden = false;
   relocateBarEl.hidden = false;
   relocateBarEl.featured = false;
+  relocateBarEl.open = false;
   pickups.setVisible(true);
 };
 

@@ -36,6 +36,9 @@ export class AudioManager {
   private unsubEvents: (() => void)[] = [];
   private unlockHandler: (() => void) | null = null;
   private prevJumpHeld = false;
+  /** Latest world snapshot, refreshed each frame so event handlers can gate
+   * positional sounds (e.g. a distant wreck) by distance to the player. */
+  private world: WorldView | null = null;
 
   constructor(private readonly events?: GameEvents) {
     this.loadSettings();
@@ -168,7 +171,7 @@ export class AudioManager {
       this.events.on('contraband:stolen', () => this.stingers?.playStolen()),
       this.events.on('contraband:delivered', () => this.stingers?.playDelivered()),
       this.events.on('contraband:dropped', () => this.stingers?.playDropped()),
-      this.events.on('vehicle:wrecked', () => this.stingers?.playWrecked()),
+      this.events.on('vehicle:wrecked', e => this.playWreckedFor(e.vehicleId)),
       this.events.on('match:countdown', e => this.stingers?.playCountdown(e.n)),
       this.events.on('match:finalMinute', () => this.stingers?.playAlert()),
       this.events.on('match:suddenDeath', () => this.stingers?.playAlert()),
@@ -190,6 +193,7 @@ export class AudioManager {
     inPlay: boolean
   ): void {
     if (!this.ctx || this.ctx.state !== 'running') return;
+    this.world = world;
 
     const player = world?.player ?? null;
 
@@ -282,6 +286,33 @@ export class AudioManager {
     const clear = world.lineOfSight(p, a);
     const occlusionScale = 0.15 + 0.85 * clear;
     return distanceScale * occlusionScale;
+  }
+
+  /**
+   * Plays the wrecked stinger for a vehicle, at full volume when it is the
+   * player's own car and distance-attenuated (silenced past close sight) for
+   * every other vehicle, so far-off deaths don't sound off-screen.
+   */
+  private playWreckedFor(vehicleId: number): void {
+    const world = this.world;
+    const player = world?.player;
+    if (!world || !player) {
+      // no world snapshot yet (e.g. pre-match): play it, rare and harmless
+      this.stingers?.playWrecked();
+      return;
+    }
+    const actor = world.vehicles.find(v => v.body.id === vehicleId);
+    if (!actor) {
+      this.stingers?.playWrecked();
+      return;
+    }
+    if (actor === player) {
+      this.stingers?.playWrecked();
+      return;
+    }
+    const scale = this.distanceAttenuation(world, player, actor);
+    if (scale <= 0.01) return;
+    this.stingers?.playWrecked(scale);
   }
 
   private playJumpWhoosh(): void {
