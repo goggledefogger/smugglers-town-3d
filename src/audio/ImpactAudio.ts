@@ -14,7 +14,7 @@ export class ImpactAudio {
   /**
    * Plays a ground landing thump scaled to landing velocity.
    */
-  playLanding(speed: number): void {
+  playLanding(speed: number, volumeScale = 1.0): void {
     if (this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     if (now - this.lastImpactTime < 0.1) return; // rate limit
@@ -31,7 +31,7 @@ export class ImpactAudio {
     osc.frequency.setValueAtTime(130 * (0.8 + 0.4 * intensity), now);
     osc.frequency.exponentialRampToValueAtTime(32, now + duration);
 
-    gain.gain.setValueAtTime(intensity * 0.22, now);
+    gain.gain.setValueAtTime(intensity * 0.22 * volumeScale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
     osc.connect(gain);
@@ -44,7 +44,7 @@ export class ImpactAudio {
   /**
    * Plays a building or obstacle collision crunch.
    */
-  playCrash(speed: number): void {
+  playCrash(speed: number, volumeScale = 1.0): void {
     if (this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     if (now - this.lastImpactTime < 0.08) return;
@@ -59,7 +59,7 @@ export class ImpactAudio {
     osc.type = 'triangle';
     osc.frequency.setValueAtTime(160, now);
     osc.frequency.exponentialRampToValueAtTime(40, now + duration);
-    oscGain.gain.setValueAtTime(intensity * 0.2, now);
+    oscGain.gain.setValueAtTime(intensity * 0.2 * volumeScale, now);
     oscGain.gain.exponentialRampToValueAtTime(0.001, now + duration);
     osc.connect(oscGain);
     oscGain.connect(this.destination);
@@ -67,13 +67,13 @@ export class ImpactAudio {
     osc.stop(now + duration);
 
     // 2. High crunch noise transient
-    this.playNoiseBurst(now, duration * 0.7, 850, intensity * 0.18);
+    this.playNoiseBurst(now, duration * 0.7, 850, intensity * 0.18 * volumeScale);
   }
 
   /**
    * Plays a vehicle-to-vehicle metallic collision.
    */
-  playRam(relSpeed: number): void {
+  playRam(relSpeed: number, volumeScale = 1.0): void {
     if (this.ctx.state !== 'running') return;
     const now = this.ctx.currentTime;
     if (now - this.lastImpactTime < 0.08) return;
@@ -94,7 +94,7 @@ export class ImpactAudio {
     osc1.frequency.exponentialRampToValueAtTime(80, now + duration);
     osc2.frequency.exponentialRampToValueAtTime(120, now + duration);
 
-    gain.gain.setValueAtTime(intensity * 0.19, now);
+    gain.gain.setValueAtTime(intensity * 0.19 * volumeScale, now);
     gain.gain.exponentialRampToValueAtTime(0.001, now + duration);
 
     osc1.connect(gain);
@@ -106,7 +106,7 @@ export class ImpactAudio {
     osc1.stop(now + duration);
     osc2.stop(now + duration);
 
-    this.playNoiseBurst(now, duration * 0.6, 1400, intensity * 0.15);
+    this.playNoiseBurst(now, duration * 0.6, 1400, intensity * 0.15 * volumeScale);
   }
 
   private playNoiseBurst(start: number, duration: number, cutoff: number, vol: number): void {

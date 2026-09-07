@@ -9,6 +9,7 @@ import { HornAudio } from '../src/audio/HornAudio.ts';
 import { EventBus, type GameEventMap } from '../src/app/events.ts';
 import { Vector3 } from 'three';
 import type { VehicleActor } from '../src/app/Game.ts';
+import type { WorldView } from '../src/app/WorldView.ts';
 
 class MockAudioParam {
   value = 0;
@@ -258,14 +259,14 @@ describe('Procedural Game Audio System', () => {
       events.on('audio:change', e => audioEvents.push(e));
 
       expect(audio.muted).toBe(false);
-      expect(audio.masterVolume).toBeCloseTo(0.8);
+      expect(audio.masterVolume).toBeCloseTo(0.6);
 
       // Toggle mute
       audio.toggleMute();
       expect(audio.muted).toBe(true);
       expect(mockStorage['smugglers_audio_muted']).toBe('true');
       expect(audioEvents.length).toBe(1);
-      expect(audioEvents[0]).toEqual({ muted: true, volume: 0.8 });
+      expect(audioEvents[0]).toEqual({ muted: true, volume: 0.6 });
 
       // Change volume
       audio.setVolume(0.5);
@@ -339,6 +340,42 @@ describe('Procedural Game Audio System', () => {
         brain: null
       };
 
+      // A nearby bot whose crash should be audible (attenuated by distance),
+      // and a far one whose crash should be silent past the audible range.
+      const nearBot: VehicleActor = {
+        body: {
+          lastImpact: { kind: 'vehicle', speed: 14 },
+          pos: new Vector3(130, 10, 100)
+        } as any,
+        team: 1,
+        isPlayer: false,
+        label: 'NearBot',
+        control: 'bot',
+        brain: null
+      };
+      const farBot: VehicleActor = {
+        body: {
+          lastImpact: { kind: 'building', speed: 20 },
+          pos: new Vector3(100 + 300, 10, 100)
+        } as any,
+        team: 1,
+        isPlayer: false,
+        label: 'FarBot',
+        control: 'bot',
+        brain: null
+      };
+
+      const dummyWorld: WorldView = {
+        vehicles: [dummyActor, nearBot, farBot],
+        player: dummyActor,
+        state: null as any,
+        alpha: 0,
+        matchPhase: 'playing' as any,
+        terrainProvider: null as any,
+        navMarker: () => null,
+        lineOfSight: () => 1
+      };
+
       const dummyState = {
         scores: { 0: 0, 1: 0 },
         winner: null,
@@ -347,7 +384,7 @@ describe('Procedural Game Audio System', () => {
       };
 
       expect(() => {
-        audio.update(0.016, dummyActor, { throttle: 0.8, brake: 0, steer: 0.2, handbrake: false, jump: false }, dummyState as any, true);
+        audio.update(0.016, dummyWorld, { throttle: 0.8, brake: 0, steer: 0.2, handbrake: false, jump: false }, dummyState as any, true);
       }).not.toThrow();
 
       audio.dispose();

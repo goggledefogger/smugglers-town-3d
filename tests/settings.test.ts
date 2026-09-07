@@ -107,7 +107,7 @@ describe('SettingsScreen Audio Controls', () => {
     screen.bindAudio(audio, events);
 
     // Initial state reflection
-    expect(audio.masterVolume).toBeCloseTo(0.8);
+    expect(audio.masterVolume).toBeCloseTo(0.6);
     expect(audio.muted).toBe(false);
 
     // Simulate volume slider change

@@ -806,7 +806,7 @@ function frame(now: number): void {
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
-    audio.update(dt, world.player ?? null, drive, world.state, true);
+    audio.update(dt, world, drive, world.state, true);
   } else {
     audio.update(dt, null, null, null, false);
     if (introEl.isConnected) {

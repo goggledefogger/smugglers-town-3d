@@ -7,6 +7,7 @@
 
 import type { GameEvents } from '../app/events.ts';
 import type { VehicleActor } from '../app/Game.ts';
+import type { WorldView } from '../app/WorldView.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { MatchState } from '../core/gameplay/MatchRules.ts';
 import { EngineAudio } from './EngineAudio.ts';
@@ -31,7 +32,7 @@ export class AudioManager {
   readonly horn: HornAudio | null = null;
 
   private isMuted = false;
-  private volume = 0.8;
+  private volume = 0.6;
   private unsubEvents: (() => void)[] = [];
   private unlockHandler: (() => void) | null = null;
   private prevJumpHeld = false;
@@ -177,15 +178,20 @@ export class AudioManager {
 
   /**
    * Main per-frame audio loop update.
+   * The player's own impacts play at full volume; every other vehicle's
+   * collisions fade with distance and muffle behind occluders, reaching
+   * silence once the source is outside close sight of the player.
    */
   update(
     dt: number,
-    player: VehicleActor | null,
+    world: WorldView | null,
     drive: VehicleInput | null,
     state: MatchState | null,
     inPlay: boolean
   ): void {
     if (!this.ctx || this.ctx.state !== 'running') return;
+
+    const player = world?.player ?? null;
 
     if (!inPlay || !player) {
       this.engine?.update(dt, 0, 1, 0, true, false);
@@ -208,7 +214,9 @@ export class AudioManager {
     // 2. Tire screech & drift
     this.tire?.update(b.speed, b.lateralSlip, handbrake, b.onGround);
 
-    // 3. Collision impacts
+    // 3. Collision impacts — the player's at full volume, other vehicles
+    //    attenuated by distance + line-of-sight so far-off or occluded
+    //    crashes fade to silence
     if (b.lastImpact) {
       if (b.lastImpact.kind === 'landing') {
         this.impacts?.playLanding(b.lastImpact.speed);
@@ -216,6 +224,22 @@ export class AudioManager {
         this.impacts?.playCrash(b.lastImpact.speed);
       } else if (b.lastImpact.kind === 'vehicle') {
         this.impacts?.playRam(b.lastImpact.speed);
+      }
+    }
+    if (world) {
+      for (const actor of world.vehicles) {
+        if (actor === player) continue;
+        const impact = actor.body.lastImpact;
+        if (!impact) continue;
+        const scale = this.distanceAttenuation(world, player, actor);
+        if (scale <= 0.01) continue;
+        if (impact.kind === 'landing') {
+          this.impacts?.playLanding(impact.speed, scale);
+        } else if (impact.kind === 'building') {
+          this.impacts?.playCrash(impact.speed, scale);
+        } else if (impact.kind === 'vehicle') {
+          this.impacts?.playRam(impact.speed, scale);
+        }
       }
     }
 
@@ -237,6 +261,27 @@ export class AudioManager {
         }
       }
     }
+  }
+
+  /**
+   * Volume scale (0..1) for a non-player vehicle's impact, based on how far
+   * it is from the player and whether buildings occlude the line of sight.
+   * Returns 0 (silence) past the audible range or when fully occluded.
+   */
+  private distanceAttenuation(world: WorldView, player: VehicleActor, actor: VehicleActor): number {
+    const AUDIBLE_MAX = 220; // flat distance at which a crash is just audible
+    const AUDIBLE_MIN = 18;  // within this, full volume (e.g. right next to you)
+    const p = player.body.pos;
+    const a = actor.body.pos;
+    const dist = Math.hypot(p.x - a.x, p.z - a.z);
+    if (dist >= AUDIBLE_MAX) return 0;
+    // Linear fade: 1.0 at/inside AUDIBLE_MIN → 0.0 at AUDIBLE_MAX
+    const distanceScale = Math.min(1, Math.max(0, (AUDIBLE_MAX - dist) / (AUDIBLE_MAX - AUDIBLE_MIN)));
+    // Occlusion: a clear line keeps volume; a blocked line muffles it hard.
+    // lineOfSight returns the clear fraction (1 = nothing in the way, 0 = fully blocked).
+    const clear = world.lineOfSight(p, a);
+    const occlusionScale = 0.15 + 0.85 * clear;
+    return distanceScale * occlusionScale;
   }
 
   private playJumpWhoosh(): void {

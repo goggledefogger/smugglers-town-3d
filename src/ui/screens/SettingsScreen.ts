@@ -347,7 +347,7 @@ export class SettingsScreen extends LitElement {
 
   override render() {
     const b = this.manager?.bindings;
-    const volPercent = Math.round((this.audio?.masterVolume ?? 0.8) * 100);
+    const volPercent = Math.round((this.audio?.masterVolume ?? 0.6) * 100);
     const isMuted = this.audio?.muted ?? false;
 
     return html`
