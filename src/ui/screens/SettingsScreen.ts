@@ -2,15 +2,16 @@ import { html, css, LitElement, type PropertyValues } from 'lit';
 import { ALL_ACTIONS, type Bindings, type Binding } from '../../input/bindings.ts';
 import type { LogicalAction } from '../../input/types.ts';
 import type { InputManager } from '../../input/InputManager.ts';
+import type { AudioManager } from '../../audio/AudioManager.ts';
+import type { GameEvents } from '../../app/events.ts';
 
 /**
  * Rebind screen: lists every logical action and its current binding on each
  * device, and lets the player rebind by entering "listening" mode and
- * pressing a key or button. Changes save to localStorage immediately and
- * reach the live game through Bindings.onChange.
+ * pressing a key or button. Also provides master audio volume and sound controls.
+ * Changes save to localStorage immediately.
  *
- * Opened from the garage's CONTROLS button. A is confirm (rebind the focused
- * row), B cancels listening or closes, Start/Escape closes.
+ * Opened from the garage's CONTROLS button or via Pause hotkey.
  */
 
 const ACTION_LABEL: Record<LogicalAction, string> = {
@@ -59,15 +60,17 @@ export class SettingsScreen extends LitElement {
   static override styles = css`
     :host {
       position: fixed; inset: 0; z-index: 70;
-      display: flex; align-items: center; justify-content: center;
-      background: var(--scrim); overflow: auto;
-      padding: var(--space-xl);
+      display: flex; align-items: flex-start; justify-content: center;
+      background: var(--scrim); overflow-y: auto;
+      padding: var(--space-xl) var(--space-md);
+      box-sizing: border-box;
     }
     :host([hidden]) { display: none; }
     .panel {
-      width: 100%; max-width: 40rem;
+      width: 100%; max-width: 42rem; margin: auto 0;
       background: var(--panel); border: var(--border) solid var(--line);
       border-radius: var(--radius-lg); padding: var(--space-xl);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.65);
     }
     h1 { font-family: 'Russo One', sans-serif; font-size: 1.4rem; margin: 0 0 var(--space-sm); }
     .sub { color: var(--muted); font-size: var(--text-sm); margin: 0 0 var(--space-lg); }
@@ -110,6 +113,103 @@ export class SettingsScreen extends LitElement {
       color: var(--accent); font-size: var(--text-sm); text-align: center;
       margin: var(--space-sm) 0; min-height: 1.2em;
     }
+    .audio-panel {
+      background: var(--field-bg);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-md);
+      padding: var(--space-md);
+      display: flex;
+      flex-direction: column;
+      gap: var(--space-md);
+    }
+    .audio-control-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: var(--space-md);
+      flex-wrap: wrap;
+    }
+    .audio-label {
+      font-size: var(--text-md);
+      font-weight: 600;
+      color: var(--ink);
+    }
+    .slider-wrapper {
+      display: flex;
+      align-items: center;
+      gap: var(--space-sm);
+      flex: 1;
+      min-width: 14rem;
+      justify-content: flex-end;
+    }
+    .volume-slider {
+      flex: 1;
+      max-width: 18rem;
+      height: 8px;
+      appearance: none;
+      -webkit-appearance: none;
+      background: var(--panel2);
+      border-radius: 4px;
+      outline: none;
+      cursor: pointer;
+      border: 1px solid var(--line);
+    }
+    .volume-slider::-webkit-slider-thumb {
+      appearance: none;
+      -webkit-appearance: none;
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+      transition: transform 0.1s ease;
+    }
+    .volume-slider::-webkit-slider-thumb:hover {
+      transform: scale(1.15);
+    }
+    .volume-slider::-moz-range-thumb {
+      width: 18px;
+      height: 18px;
+      border-radius: 50%;
+      background: var(--accent);
+      cursor: pointer;
+      border: 2px solid #fff;
+      box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+    }
+    .volume-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: var(--text-sm);
+      font-weight: 600;
+      color: var(--accent);
+      background: var(--panel2);
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2xs) var(--space-xs);
+      min-width: 3.5rem;
+      text-align: center;
+    }
+    .audio-actions-row {
+      display: flex;
+      gap: var(--space-sm);
+      flex-wrap: wrap;
+    }
+    .audio-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: var(--space-xs);
+      padding: var(--space-xs) var(--space-md);
+      font-size: var(--text-sm);
+      letter-spacing: 0.03em;
+    }
+    .audio-btn.muted {
+      border-color: #ef4444;
+      color: #ef4444;
+    }
+    .audio-btn.active {
+      border-color: var(--accent);
+    }
   `;
 
   static override properties = {
@@ -118,6 +218,8 @@ export class SettingsScreen extends LitElement {
   /** Which action is in listening mode, or null. */
   declare listening: LogicalAction | null;
   private manager: InputManager | null = null;
+  private audio: AudioManager | null = null;
+  private offAudio: (() => void) | null = null;
   private focusIdx = 0;
   private offChange: (() => void) | null = null;
   private cancelCapture: (() => void) | null = null;
@@ -125,6 +227,37 @@ export class SettingsScreen extends LitElement {
   constructor() {
     super();
     this.listening = null;
+  }
+
+  bindAudio(audio: AudioManager, events?: GameEvents): void {
+    this.audio = audio;
+    this.offAudio?.();
+    if (events) {
+      this.offAudio = events.on('audio:change', () => this.requestUpdate());
+    }
+    this.requestUpdate();
+  }
+
+  private handleVolumeInput(e: Event): void {
+    const input = e.target as HTMLInputElement;
+    const val = Number(input.value) / 100;
+    if (this.audio) {
+      this.audio.setVolume(val);
+    }
+    this.requestUpdate();
+  }
+
+  private handleToggleMute(): void {
+    if (this.audio) {
+      this.audio.toggleMute();
+    }
+    this.requestUpdate();
+  }
+
+  private handleTestHorn(): void {
+    if (this.audio) {
+      this.audio.testHorn();
+    }
   }
 
   set inputManager(m: InputManager) {
@@ -208,14 +341,59 @@ export class SettingsScreen extends LitElement {
     this.offChange = null;
     this.cancelCapture?.();
     this.cancelCapture = null;
+    this.offAudio?.();
+    this.offAudio = null;
   }
 
   override render() {
     const b = this.manager?.bindings;
+    const volPercent = Math.round((this.audio?.masterVolume ?? 0.8) * 100);
+    const isMuted = this.audio?.muted ?? false;
+
     return html`
       <div class="panel">
-        <h1>CONTROLS</h1>
-        <p class="sub">Rebind any action. Click a row, then press a key or button. Resets to the Stadia-friendly defaults.</p>
+        <h1>SETTINGS & CONTROLS</h1>
+        <p class="sub">Adjust game audio volume and rebind controls. Changes take effect immediately and save to your browser.</p>
+
+        <div class="group audio-group">
+          <h2>Audio Settings</h2>
+          <div class="audio-panel">
+            <div class="audio-control-row">
+              <span class="audio-label">Master Volume</span>
+              <div class="slider-wrapper">
+                <input
+                  type="range"
+                  min="0"
+                  max="100"
+                  step="1"
+                  .value=${String(volPercent)}
+                  @input=${this.handleVolumeInput}
+                  class="volume-slider"
+                  aria-label="Master Volume"
+                />
+                <span class="volume-badge">${volPercent}%</span>
+              </div>
+            </div>
+            <div class="audio-actions-row">
+              <button
+                type="button"
+                class="audio-btn ${isMuted ? 'muted' : 'active'}"
+                @click=${this.handleToggleMute}
+              >
+                ${isMuted ? '🔇 UNMUTE AUDIO' : '🔊 MUTE AUDIO'}
+              </button>
+              <button
+                type="button"
+                class="audio-btn horn-btn"
+                @click=${this.handleTestHorn}
+                title="Test sound volume"
+              >
+                📯 TEST HORN
+              </button>
+            </div>
+          </div>
+        </div>
+
         <div class="listening-prompt">${this.listening
           ? `Press a key or button for ${ACTION_LABEL[this.listening]}… (B to cancel)`
           : ''}</div>

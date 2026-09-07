@@ -16,6 +16,7 @@ export interface GameEventMap {
   'match:suddenDeath': Record<string, never>;
   'match:win': { team: 0 | 1 };
   'location:changed': { label: string; isReal: boolean };
+  'audio:change': { muted: boolean; volume: number };
 }
 
 type Handler<T> = (payload: T) => void;

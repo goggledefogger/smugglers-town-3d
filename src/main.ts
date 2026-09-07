@@ -244,10 +244,10 @@ function updateAudioUi(): void {
   }
 }
 updateAudioUi();
+events.on('audio:change', () => updateAudioUi());
 
 audioBtn?.addEventListener('click', () => {
   audio.toggleMute();
-  updateAudioUi();
 });
 
 window.addEventListener('keydown', (e) => {
@@ -466,14 +466,24 @@ introEl.onOnline = (type) => {
   void openOnline(type);
 };
 
-// controls/rebind screen: opened from the garage, owns UI actions while open
+// settings/controls screen: opened from the garage or in-game pause, owns UI actions while open
 settingsEl.inputManager = input;
-introEl.onControls = () => {
+settingsEl.bindAudio(audio, events);
+
+function openSettings(): void {
   settingsEl.hidden = false;
   uiHandler = (a) => settingsEl.handleUiAction(a);
+}
+
+introEl.onControls = () => {
+  openSettings();
 };
 settingsEl.addEventListener('settings-close', () => {
-  uiHandler = (a) => introEl.handleUiAction(a);
+  if (introEl.isConnected) {
+    uiHandler = (a) => introEl.handleUiAction(a);
+  } else {
+    uiHandler = null;
+  }
 });
 
 /** The lobby and its network code load on first use, so single player never pays for Firebase. */
@@ -740,6 +750,9 @@ function frame(now: number): void {
       if (uiHandler(action)) continue;
     }
     // unhandled UI action while no screen is open: treat pause/back specially
+    if (action === 'pause' && !introEl.isConnected && endEl.hidden) {
+      openSettings();
+    }
   }
   for (const hot of input.drainHotkeys()) {
     if (hot === 'camera') cameraRig.cycleMode();
