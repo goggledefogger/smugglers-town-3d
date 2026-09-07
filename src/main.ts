@@ -155,8 +155,8 @@ renderer.scene.add(buildingMeshView.group);
 let viewMode: 'photoreal' | 'game3d' = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
-// hidden by default: photogrammetry streets are melted cars and lumps, and the
-// satellite ground under them is sharper than the tile surface it replaces
+// swept by default: flattens road clutter while keeping kerbside building facades
+// and trees over the sharper streamed satellite ground
 let clutterMode: ClutterMode = 'swept';
 /** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
 const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept']);
