@@ -2,7 +2,17 @@
  * Central config for every tunable in the game. Sections mirror the layers
  * they configure. All values ported from the prototype unless noted.
  */
+
+/**
+ * Global speed multiplier — scales driveForce, maxSpeed, brakeForce, and AI
+ * slowTurnSpeed proportionally. 1.0 is the original speed; 0.75 is 25% slower.
+ * Handling feel (turn rate, jump, air control, gravity) is unaffected.
+ */
+const speedMultiplier = 0.75;
+
 export const config = {
+  /** The global speed multiplier applied to velocity-related physics constants. */
+  speedMultiplier,
   world: {
     /** Half-extent of the play field in world units. */
     mapHalf: 2800,
@@ -11,9 +21,9 @@ export const config = {
   },
   physics: {
     gravity: 22,
-    driveForce: 62,
-    maxSpeed: 78,
-    brakeForce: 80,
+    driveForce: 62 * speedMultiplier,
+    maxSpeed: 78 * speedMultiplier,
+    brakeForce: 80 * speedMultiplier,
     turnRate: 2.6,
     jumpBoost: 1.55,
     airControl: 2.1,
@@ -32,7 +42,7 @@ export const config = {
     reevaluateS: 0.2,
     steerGain: 2.4,
     slowTurnAngle: 1.55,
-    slowTurnSpeed: 45,
+    slowTurnSpeed: 45 * speedMultiplier,
     interceptLead: 1.0,
     ramDist: 40
   },
@@ -67,5 +77,4 @@ export const config = {
     /** Clamp on frame delta to avoid physics blowups on tab-switch. */
     maxFrameDt: 0.05
   }
-} as const;
-
+};
