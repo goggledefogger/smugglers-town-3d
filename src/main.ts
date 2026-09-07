@@ -375,6 +375,7 @@ prepareTerrain(desertTerrain);
 minimapEl.setTerrain(desertTerrain.heightfield, config.world.mapHalf);
 hudEl.hidden = true;
 relocateBarEl.hidden = false;
+relocateBarEl.featured = true;
 pickups.setVisible(false);
 
 // ---- input ----
@@ -459,6 +460,7 @@ introEl.onStart = (type) => {
   uiHandler = null;  // gameplay: no screen, driving input takes over
   hudEl.hidden = false;
   relocateBarEl.hidden = false;
+  relocateBarEl.featured = false;
   pickups.setVisible(true);
 };
 
@@ -554,6 +556,7 @@ async function openOnline(type: number): Promise<void> {
         rebuildViews();
         hudEl.hidden = false;
         relocateBarEl.hidden = true;
+        relocateBarEl.featured = false;
         pickups.setVisible(true);
       },
       onLeave: () => { uiHandler = null; }

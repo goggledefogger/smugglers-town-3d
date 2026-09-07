@@ -36,6 +36,53 @@ export class RelocateBar extends LitElement {
 
     :host([hidden]) { display:none; }
 
+    /* Featured on the garage/menu screen only: pulled to the middle of the
+       viewport and scaled up so the call to action reads as the main event.
+       Gameplay keeps the small top-centered toggle instead. */
+    :host([featured]) {
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      max-width: calc(100vw - var(--space-xl) * 2);
+    }
+    :host([featured]) .toggle {
+      min-height: 4.5rem;
+      padding: var(--space-xl) var(--space-2xl);
+      font-family: 'Russo One', sans-serif;
+      font-size: clamp(20px, 2.4vw, 28px);
+      letter-spacing: .06em;
+      background: var(--accent);
+      color: #0b0f17;
+      border: var(--border) solid color-mix(in srgb, var(--accent) 70%, #000 30%);
+      border-radius: var(--radius-lg);
+      box-shadow: 0 8px 0 #c23800, 0 16px 32px rgba(255, 85, 0, .4);
+      transition: transform .08s, box-shadow .2s;
+    }
+    :host([featured]) .toggle:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 10px 0 #c23800, 0 20px 36px rgba(255, 85, 0, .5);
+    }
+    :host([featured]) .toggle:active {
+      transform: translateY(4px);
+      box-shadow: 0 3px 0 #c23800;
+    }
+    :host([featured][open]) .toggle {
+      background: transparent;
+      color: var(--accent);
+      border-color: var(--accent);
+    }
+    :host([featured][open]) .fields { width: min(28rem, calc(100vw - var(--space-xl) * 2)); }
+    /* On a narrow screen the garage roster fills the column, so a dead-center
+       button would sit on top of the car list. Drop it below the roster and
+       the showroom stage instead of overlapping them. */
+    @media (max-width: 760px) {
+      :host([featured]) {
+        top: auto;
+        bottom: max(var(--space-2xl), env(safe-area-inset-bottom));
+        transform: translateX(-50%);
+      }
+    }
+
     /* One button on every screen: the fields open on demand below it. Three
        fields do not belong on the HUD row even where they would fit, and the
        collapsed form is the same on a phone and a desktop. */
@@ -102,18 +149,22 @@ export class RelocateBar extends LitElement {
   static override properties = {
     busy: { type: Boolean },
     status: { type: String },
-    open: { type: Boolean, reflect: true }
+    open: { type: Boolean, reflect: true },
+    featured: { type: Boolean, reflect: true }
   };
   declare busy: boolean;
   declare status: string;
   /** Narrow screens only: whether the collapsed panel is showing. */
   declare open: boolean;
+  /** Garage/menu screen only: enlarge and center the toggle as the main CTA. */
+  declare featured: boolean;
 
   constructor() {
     super();
     this.busy = false;
     this.status = '';
     this.open = false;
+    this.featured = false;
   }
 
   onSearch?: (query: string, key: string) => void;
