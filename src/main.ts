@@ -361,6 +361,7 @@ function startMatch(terrain: TerrainProvider): void {
   game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
   game.reset(terrain);
   rebuildViews();
+  hudEl.classList.add('cinematic');
   cameraRig.intro(config.match.countdownS, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
 }
 
@@ -432,7 +433,18 @@ events.on('contraband:dropped', ({ vehicleId }) => {
 events.on('contraband:delivered', ({ team }) => {
   bannerEl.show(`DELIVERED! ${team === 0 ? 'YOUR CREW' : 'RIVALS'}`, 1500);
 });
-events.on('match:countdown', ({ n }) => bannerEl.show(n > 0 ? String(n) : 'GO!', n > 0 ? 900 : 700));
+events.on('match:countdown', ({ n }) => {
+  if (n <= 3) {
+    bannerEl.show(n > 0 ? String(n) : 'GO!', n > 0 ? 900 : 800);
+    if (n <= 2) {
+      hudEl.classList.remove('cinematic');
+    }
+  } else {
+    const raw = world.terrainProvider.label || 'GET READY';
+    const label = raw.length > 42 ? raw.slice(0, 40) + '…' : raw;
+    bannerEl.show(label.toUpperCase(), 1800);
+  }
+});
 events.on('match:finalMinute', () => bannerEl.show('FINAL MINUTE', 1500));
 events.on('match:suddenDeath', () => bannerEl.show('SUDDEN DEATH: NEXT DELIVERY WINS', 2500));
 events.on('match:win', ({ team }) => {
@@ -619,6 +631,13 @@ relocateBarEl.onSearch = async (q, key) => {
     if (tiles) attachTiles(tiles, terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
+    if (introEl.isConnected) {
+      showroom.dispose();
+      introEl.remove();
+      uiHandler = null;
+      hudEl.hidden = false;
+      pickups.setVisible(true);
+    }
     // the relocate flow is done: hide the bar entirely (refresh to reset).
     // keeps the post-submit screen free of the GO SOMEWHERE REAL button
     relocateBarEl.featured = false;

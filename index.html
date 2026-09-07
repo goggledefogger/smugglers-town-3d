@@ -67,6 +67,8 @@
        so the whole HUD stacked in normal flow underneath the canvas */
     #hud { position: fixed; inset: 0; pointer-events: none; z-index: 10; }
     #hud[hidden] { display: none; }
+    .hud-corner, #dirarrow { transition: opacity .6s ease-out; }
+    #hud.cinematic .hud-corner, #hud.cinematic #dirarrow { opacity: 0; pointer-events: none; }
     .hud-corner {
       position: absolute;
       display: flex;
