@@ -190,26 +190,30 @@ geometry. It may be necessary to filter clutter out of the navmesh input.
   guessing. Test locations should span flat grid cities, steep hills, dense
   high-rise, bridges, and open desert.
 
-## 9. Other options not yet explored
+## 9. Interventions and Current State
 
-- **OpenStreetMap road centrelines** via the Overpass API. Semantic ground truth for
-  where streets are, with zero heuristics. Costs a network round trip per relocation
-  and says nothing about buildings.
-- **GPU rasterization of the surface model.** The current DSM raster is a CPU
-  triangle loop at 10 m. Rendering the tiles top-down orthographic into a depth
-  texture would give the same data at 1 m nearly free. Fixes only resolution, not
-  classification, but it is the cheapest possible experiment.
-- **Cloth Simulation Filter** (Zhang et al. 2016), the modern standard for ground
-  extraction from point clouds. Known weakness is "loss of ground adhesion on rising
-  terrain", which is our exact case, so it may not help.
+### A. OpenStreetMap Road Centrelines (Implemented & Merged on `main`)
+Implemented in `services/osm/roads.ts` and integrated with `tileColliders.ts` and `Tileset.ts`:
+- **Concept:** Query Overpass for drivable `highway` ways, rasterized into a 10 m grid mask to exempt street corridors from building classification.
+- **Measured Results:**
+  - **SF Russian Hill:** Largest connected region jumped from **4.4% to 45.5%** of covered area; disconnected regions collapsed from 1,229 to 380.
+  - **New Orleans:** Largest region increased from **39.6% to 65.1%**.
+  - **Live Drive:** Continuous 3,035 m full-speed driving across Russian Hill where the baseline halted cars in under one block.
+- **Critical Ground Heightfield Fix:**
+  Initial implementation exempted road cells from building boxes but left `AmortizedGroundBuilder` sagging by up to 17 m at hill crests, dropping the vehicle heightfield underground. Fixed by pinning road-cell ground directly to `Math.min(top, low)`.
+- **Highway Sanitization:** Non-drivable footpaths, steps, and pedestrian ways are filtered out to prevent walkways from coring out building lobbies.
+- **Known Limitations:** Network latency (mitigated by a 1.5 s startup timeout with async background rebuild) and public Overpass rate-limit constraints.
 
-## 10. The question to answer
+### B. Recast Navigation Spike (`spike/recast-navmesh`)
+- **Status:** Fast build confirmed (426 ms at 2 m resolution over an 800 m box, 132k triangles).
+- **Next Steps:** Resolve spawn elevation snapping and discard disconnected rooftop navmesh islands via flood-fill from spawn. Remains the preferred long-term replacement to eliminate the 10 m 2.5D raster heuristic pipeline.
 
-Can a drivable surface be extracted from Google 3D Tiles such that, in a steep dense
-city like San Francisco Russian Hill, **the street network comes out connected** —
-one region covering most of the streets rather than a thousand pockets — without
-per-city tuning, without a main-thread stall, and with less code than the 1,200-line
-heuristic pipeline it replaces?
+### C. Other Options
+- **GPU rasterization of the surface model:** Rendering tiles top-down orthographic into a depth texture for 1 m surface data.
+- **Cloth Simulation Filter (CSF):** Standard point-cloud ground filter, though prone to loss of ground adhesion on rising terrain.
 
-Reproduce the failure at `?lat=37.79344&lon=-122.42127&debug`, press V for the
-collider view.
+## 10. Verification Coordinates
+
+- **Russian Hill (SF):** `?lat=37.79344&lon=-122.42127&debug` (Press `V` for Game 3D collider view).
+- **Lombard Street (SF):** `?scenario=lombard_street_sf&debug` (Steep 27% hairpin switchbacks).
+- **French Quarter (NOLA):** `?scenario=french_quarter_nola&debug` (Sea-level dense low-rise grid).

@@ -379,6 +379,12 @@ From this raster, two physical surfaces are extracted:
    Neighbor-aware horizontal insetting insets exterior street faces by 1.0 m to
    prevent 10 m raster quantization from protruding into street lanes, while
    keeping internal touching faces 100% flush.
+4. **OSM Road Corridors (`services/osm/roads.ts`)**: In hilly cities, morphological
+   opening sags by up to 17 m across crests, misclassifying streets as buildings.
+   Drivable OpenStreetMap road centrelines fetched via Overpass are rasterized
+   into a 10 m `roadMask` grid. Road cells are exempt from building classification,
+   and their driving ground height in `AmortizedGroundBuilder` is pinned directly
+   to the true surface (`Math.min(top, low)`) rather than the sagging estimate.
 
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,

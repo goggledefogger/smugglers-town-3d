@@ -176,13 +176,15 @@ the wrong one.**
   as the raster did, so clutter may need filtering out of the navmesh input.
   Spike lives on `spike/recast-navmesh`.
 
-- **Vector Road Hybrid (OSM / Overpass API) — promoted.**
-  Querying OpenStreetMap road centrelines (`highway=*`, `bridge=yes`, `layer=*`)
-  for the match bounds gives semantic ground truth for where streets are, with
-  zero heuristics, which is the one thing photogrammetry cannot supply. This is
-  now the strongest alternative to the navmesh route. Costs a network round
-  trip per relocation and says nothing about buildings, so it likely pairs with
-  rather than replaces surface extraction.
+- **Vector Road Hybrid (OSM / Overpass API) — Done.**
+  Merged on `main` in `services/osm/roads.ts`. Queries OpenStreetMap for drivable
+  `highway` centrelines, rasterized onto the 10 m grid to exempt streets from false
+  building classification on hill crests, with ground heightfield pinned to the
+  road surface. SF Russian Hill largest connected open region jumped from 4.4% to
+  45.5% (disconnected pockets reduced from 1,229 to 380). Bounded to 1.5 s startup
+  with async worker rebuilds.
+  *Long-term*: Recast remains the target to eliminate external network dependencies
+  and 10 m quantization.
 
 - **Automated Scenario Regression Harness — done, but synthetic.**
   `tests/scenarios.harness.test.ts` runs all 17 curated scenarios in under
