@@ -97,4 +97,65 @@ describe('DriverBrain', () => {
     expect(input.steer).toBeGreaterThanOrEqual(-1);
     expect(input.steer).toBeLessThanOrEqual(1);
   });
+
+  it('predicts target location ahead of a moving enemy carrier', () => {
+    // self at (0, 0) facing north (-z)
+    const self = makeBody(0, 0);
+    // enemy at (0, 100) moving rapidly east (+x)
+    const enemy = makeBody(0, 100);
+    enemy.vel.set(40, 0, 0);
+    const brain = new DriverBrain(DEFAULT_DRIVER, v => (v === self ? 0 : 1));
+    const state = makeMatchState(enemy);
+    brain.think(0.1, self, state);
+    const input = brain.input();
+    // target is in front-right quadrant (+x, -z relative to heading) -> negative steer turns right
+    expect(input.throttle).toBeGreaterThan(0);
+  });
+
+  it('targets threatening rival when escorting an allied carrier', () => {
+    const self = makeBody(80, 0); // team 0 escort
+    const ally = makeBody(100, 0); // team 0 carrier
+    const rival = makeBody(120, 20); // team 1 threat
+    const match = makeMatchState(ally);
+    const brain = new DriverBrain(DEFAULT_DRIVER, v => (v === rival ? 1 : 0));
+    brain.think(0.1, self, match, null, [self, ally, rival]);
+    const input = brain.input();
+    expect(input.throttle).toBeGreaterThan(0);
+  });
+
+  it('preserves high throttle through turns at speed without scrubbing down to crawl', () => {
+    const self = makeBody(0, 0);
+    self.speed = 30; // 108 km/h
+    const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
+    const state = makeMatchState(null);
+    // target at 45 degrees
+    state.contraband[0]!.pos.set(40, 3, -40);
+    brain.think(0.1, self, state);
+    const input = brain.input();
+    expect(input.throttle).toBeGreaterThanOrEqual(0.75);
+    expect(input.brake).toBe(0);
+  });
+
+  it('commits to full throttle and zero brake when in ramming strike distance', () => {
+    const self = makeBody(0, 0);
+    const enemy = makeBody(0, 25); // within 40m ram distance
+    const brain = new DriverBrain(DEFAULT_DRIVER, v => (v === self ? 0 : 1));
+    const state = makeMatchState(enemy);
+    brain.think(0.1, self, state);
+    const input = brain.input();
+    expect(input.throttle).toBe(1);
+    expect(input.brake).toBe(0);
+  });
+
+  it('engages handbrake during high-speed sharp turns to initiate drift', () => {
+    const self = makeBody(0, 0);
+    self.speed = 40; // 144 km/h
+    const brain = new DriverBrain(DEFAULT_DRIVER, () => 0);
+    const state = makeMatchState(null);
+    // target directly behind (180 deg turn)
+    state.contraband[0]!.pos.set(0, 3, 50);
+    brain.think(0.1, self, state);
+    const input = brain.input();
+    expect(input.handbrake).toBe(true);
+  });
 });

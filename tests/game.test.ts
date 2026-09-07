@@ -160,16 +160,42 @@ describe('Game', () => {
 });
 
 describe('spawn drop', () => {
-  it('lands every car during the countdown without damage or a tumble', () => {
+  it('starts vehicles high in the sky and keeps them falling for a couple seconds before landing', () => {
     const { game } = makeGame({ roundS: 300, countdownS: 3, finalMinuteS: 60 });
     const hf = game.terrainProvider.heightfield;
-    for (let t = 0; t < 2.5; t += 1 / 60) game.update(1 / 60, NEUTRAL);
+    const player = game.player!.body;
+
+    // Starts high up in the sky
+    const initialHeight = player.pos.y - hf.sample(player.pos.x, player.pos.z);
+    expect(initialHeight).toBeGreaterThanOrEqual(60);
+
+    // After 1.5 seconds, vehicles are still falling through the air
+    for (let t = 0; t < 1.5; t += 1 / 60) game.update(1 / 60, NEUTRAL);
+    const midHeight = player.pos.y - hf.sample(player.pos.x, player.pos.z);
+    expect(midHeight).toBeGreaterThan(15);
+    expect(player.vel.y).toBeLessThan(-20);
+
+    // Lands cleanly before countdown ends without taking damage or tumbling
+    for (let t = 1.5; t < 2.5; t += 1 / 60) game.update(1 / 60, NEUTRAL);
     for (const a of game.vehicles) {
       const b = a.body;
       expect(b.damage).toBe(0);
       expect(b.pos.y - hf.sample(b.pos.x, b.pos.z)).toBeLessThan(3);
       expect(b.angVel.length()).toBeLessThan(0.5);
     }
+  });
+
+  it('uses quick dropHeight for mid-game respawn rather than high initial drop', () => {
+    const { game } = makeGame({ roundS: 300, countdownS: 3, finalMinuteS: 60 });
+    const hf = game.terrainProvider.heightfield;
+    // fast-forward past countdown
+    for (let t = 0; t < 3.2; t += 1 / 60) game.update(1 / 60, NEUTRAL);
+    const player = game.player!.body;
+    player.damage = 1; // trigger wreck
+    game.update(1 / 60, NEUTRAL);
+    const respawnHeight = player.pos.y - hf.sample(player.pos.x, player.pos.z);
+    expect(respawnHeight).toBeLessThanOrEqual(20);
+    expect(respawnHeight).toBeGreaterThanOrEqual(10);
   });
 });
 

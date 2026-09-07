@@ -114,4 +114,14 @@ describe('NavGrid as OpenSpace', () => {
     expect(s.clearanceAt(0, 0)).toBe(Infinity);
     expect(s.findOpen(5, 6, 100)).toEqual({ x: 5, z: 6 });
   });
+
+  it('exposes initialDropHeight for match countdown drop and dropHeight for respawn', () => {
+    const planner = new SpawnPlanner(DEFAULT_SPAWN);
+    expect(planner.initialDropHeight).toBe(65);
+    expect(planner.dropHeight).toBe(14);
+
+    const custom = new SpawnPlanner({ ...DEFAULT_SPAWN, initialDropHeight: 80, dropHeight: 20 });
+    expect(custom.initialDropHeight).toBe(80);
+    expect(custom.dropHeight).toBe(20);
+  });
 });

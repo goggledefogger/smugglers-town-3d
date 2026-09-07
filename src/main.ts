@@ -137,7 +137,7 @@ const renderer = new GameRenderer({ canvas });
 const terrainMesh = new TerrainMesh();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
-const pickups = new Pickups(renderer.scene, () => renderer.camera);
+const pickups = new Pickups(renderer.scene, () => renderer.camera, () => world.terrainProvider.heightfield);
 const cameraRig = new CameraRig(
   renderer.camera, () => world.terrainProvider.heightfield, (a, b) => world.lineOfSight(a, b)
 );
@@ -358,6 +358,7 @@ function startMatch(terrain: TerrainProvider): void {
   game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
   game.reset(terrain);
   rebuildViews();
+  cameraRig.snap(vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
 }
 
 // one boot line per session: a bug report with no breadcrumbs is a guess, and
