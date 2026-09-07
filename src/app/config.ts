@@ -27,10 +27,12 @@ export const config = {
     transferCooldownS: 0.6
   },
   ai: {
-    reevaluateS: 0.5,
-    steerGain: 1.8,
-    slowTurnAngle: 1.3,
-    slowTurnSpeed: 20
+    reevaluateS: 0.2,
+    steerGain: 2.4,
+    slowTurnAngle: 1.55,
+    slowTurnSpeed: 45,
+    interceptLead: 1.0,
+    ramDist: 40
   },
   match: {
     /** Player + N allies on team 0. */
