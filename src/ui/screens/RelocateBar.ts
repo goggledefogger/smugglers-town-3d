@@ -83,7 +83,11 @@ export class RelocateBar extends LitElement {
        collapsed form is the same on a phone and a desktop. */
     .fields { display: none; }
     .toggle { display: block; min-height: 2.25rem; padding: var(--space-xs) var(--space-md); }
-    :host([open]) .fields {
+    /* While a relocate is in flight (busy), hide the form so the loader
+       overlay is all that shows; on failure busy clears and the fields return
+       for a retry */
+    :host([open]) .fields { display: none; }
+    :host([open]:not([busy])) .fields {
       display: flex;
       flex-wrap: wrap;
       justify-content: center;
@@ -144,7 +148,7 @@ export class RelocateBar extends LitElement {
   `;
 
   static override properties = {
-    busy: { type: Boolean },
+    busy: { type: Boolean, reflect: true },
     status: { type: String },
     open: { type: Boolean, reflect: true },
     featured: { type: Boolean, reflect: true }
@@ -181,9 +185,9 @@ export class RelocateBar extends LitElement {
     }
     if (q && this.onSearch) {
       this.onSearch(q, key);
-      // collapse back to the button once the search is dispatched — the status
-      // line sits below :host so it stays visible whether open or not
-      this.open = false;
+      // leave the panel open: the loader overlay covers it while the async
+      // relocate runs, and on success main.ts hides the bar outright (refresh
+      // to reset). On failure the status line shows inline for a retry
     }
   }
 

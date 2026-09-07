@@ -615,6 +615,10 @@ relocateBarEl.onSearch = async (q, key) => {
     if (tiles) attachTiles(tiles, terrain);
     startMatch(terrain);
     events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
+    // the relocate flow is done: hide the bar entirely (refresh to reset).
+    // keeps the post-submit screen free of the GO SOMEWHERE REAL button
+    relocateBarEl.featured = false;
+    relocateBarEl.hidden = true;
   } catch (err) {
     log.error('relocate failed', err);
     relocateBarEl.status = err instanceof Error ? err.message : String(err);
