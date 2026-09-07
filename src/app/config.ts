@@ -5,7 +5,9 @@
 export const config = {
   world: {
     /** Half-extent of the play field in world units. */
-    mapHalf: 2800
+    mapHalf: 2800,
+    /** Radius of the active gameplay arena where bases and contraband spawn. */
+    arenaRadius: 550
   },
   physics: {
     gravity: 22,

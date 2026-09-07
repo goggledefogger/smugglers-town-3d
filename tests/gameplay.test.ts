@@ -40,7 +40,8 @@ describe('MatchRules', () => {
     const m = makeMatch([a], new Map([[a.id, 0 as const]]));
     const b0 = m.state.bases[0].clone();
     const b1 = m.state.bases[1].clone();
-    expect(b0.distanceTo(b1)).toBeGreaterThan(2000);
+    expect(b0.distanceTo(b1)).toBeGreaterThan(700);
+    expect(b0.distanceTo(b1)).toBeLessThan(1000);
     a.pos.copy(m.state.contraband[0]!.pos);
     m.checkPickup();
     a.pos.copy(m.state.bases[0]);

@@ -27,8 +27,8 @@ import type { NavGoal } from '../../app/navTarget.ts';
  * heightfield and reshading it at 60 Hz is not affordable.
  */
 
-/** World units from the player to the rim. About a third of the field. */
-const RANGE = 1750;
+/** World units from the player to the rim, framing the active combat arena. */
+const RANGE = 750;
 /** Relief raster resolution. 256 is one texel per ~3 m of a 840-unit field. */
 const RELIEF_N = 256;
 /**
