@@ -66,11 +66,6 @@ export class RelocateBar extends LitElement {
       transform: translateY(4px);
       box-shadow: 0 3px 0 #c23800;
     }
-    :host([featured][open]) .toggle {
-      background: transparent;
-      color: var(--accent);
-      border-color: var(--accent);
-    }
     :host([featured][open]) .fields { width: min(28rem, calc(100vw - var(--space-xl) * 2)); }
     /* On a narrow screen the garage roster fills the column, so a dead-center
        button would sit on top of the car list. Drop it below the roster and
@@ -100,7 +95,9 @@ export class RelocateBar extends LitElement {
       border: var(--border) solid var(--line);
       border-radius: var(--radius-md);
     }
-    :host([open]) .toggle { border-color: var(--accent); color: var(--accent); }
+    /* No close button: once the panel is open it stays open — refresh to
+       reset. The toggle reappears after a submit collapses the panel. */
+    :host([open]) .toggle { display: none; }
 
     /* No usable gap between the HUD corners: drop below them instead of
        covering the score. The collapsed form is already the default above;
@@ -221,7 +218,7 @@ export class RelocateBar extends LitElement {
 
     return html`
       <button class="toggle" aria-expanded=${this.open ? 'true' : 'false'}
-        @click=${() => { this.open = !this.open; }}>${this.open ? 'CLOSE' : 'GO SOMEWHERE REAL'}</button>
+        @click=${() => { this.open = !this.open; }}>GO SOMEWHERE REAL</button>
       <div class="fields">
         <select id="scenario" @change=${(e: Event) => {
           this.selectScenario((e.target as HTMLSelectElement).value);
@@ -240,7 +237,7 @@ export class RelocateBar extends LitElement {
           @change=${(e: Event) => localStorage.setItem('gmap_key', (e.target as HTMLInputElement).value.trim())} />
         <input id="q" type="text" placeholder="Search any place or GPS lat, lon…"
           @keydown=${(e: KeyboardEvent) => { if (e.key === 'Enter') this.submit(); }} />
-        <button ?disabled=${this.busy} @click=${() => this.submit()}>RELOCATE</button>
+        <button ?disabled=${this.busy} @click=${() => this.submit()}>Let's Go!</button>
       </div>
       ${this.status ? html`<div class="status">${this.status}</div>` : ''}
     `;
