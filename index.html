@@ -60,8 +60,9 @@
       color: var(--ink);
       font-family: 'Inter', system-ui, sans-serif;
       -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
     }
-    #wrap { position: fixed; inset: 0; }
+    #wrap { position: fixed; inset: 0; touch-action: none; }
 
     /* the corners were named in main.ts from the first commit but never styled,
        so the whole HUD stacked in normal flow underneath the canvas */
@@ -128,7 +129,7 @@
         --edge-b: max(var(--space-sm), env(safe-area-inset-bottom)); }
       .hud-tl { width: min(11rem, 42vw); }
     }
-    canvas { display: block; width: 100%; height: 100%; }
+    canvas { display: block; width: 100%; height: 100%; touch-action: none; }
     .display { font-family: 'Russo One', sans-serif; letter-spacing: .01em; }
     .mono { font-family: 'JetBrains Mono', monospace; }
 

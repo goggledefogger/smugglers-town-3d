@@ -393,6 +393,9 @@ pickups.setVisible(false);
 // Driving input is polled each frame; UI actions and hotkeys are edge-triggered
 // and drained into whatever screen is active (or the gameplay hotkeys).
 const input = new InputManager();
+if (input.gamepad) {
+  input.gamepad.onActivity = () => audio.resume();
+}
 
 /** The active UI screen's handler, or null while in gameplay. Set by screens. */
 let uiHandler: ((action: UiAction) => boolean) | null = null;
@@ -791,7 +794,9 @@ function frame(now: number): void {
   input.poll();
   // UI actions and hotkeys drain every frame, menus open or not; each screen
   // registers a handler that returns true if it consumed the action
-  for (const action of input.drainUiActions()) {
+  const uiActions = input.drainUiActions();
+  if (uiActions.length > 0) audio.resume();
+  for (const action of uiActions) {
     if (uiHandler) {
       if (uiHandler(action)) continue;
     }

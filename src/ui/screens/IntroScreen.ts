@@ -1,5 +1,6 @@
 import { html, css, LitElement } from 'lit';
 import { VEHICLE_TYPES, type VehicleStats } from '../../core/physics/vehicleStats.ts';
+import { getGamepadDisplayName } from '../../input/gamepadNormalization.ts';
 
 /**
  * The garage: title, the roster to pick from, stats for the pick, and the
@@ -141,9 +142,27 @@ export class IntroScreen extends LitElement {
     this.focusIdx = 2;
   }
 
+  private padDisposer: (() => void) | null = null;
+
   override connectedCallback(): void {
     super.connectedCallback();
     queueMicrotask(() => { this.onSelect?.(this.selected); this.updateFocus(); });
+
+    if (typeof window !== 'undefined') {
+      const onPad = () => this.requestUpdate();
+      window.addEventListener('gamepadconnected', onPad);
+      window.addEventListener('gamepaddisconnected', onPad);
+      this.padDisposer = () => {
+        window.removeEventListener('gamepadconnected', onPad);
+        window.removeEventListener('gamepaddisconnected', onPad);
+      };
+    }
+  }
+
+  override disconnectedCallback(): void {
+    super.disconnectedCallback();
+    this.padDisposer?.();
+    this.padDisposer = null;
   }
 
   private select(idx: number): void {
@@ -155,6 +174,17 @@ export class IntroScreen extends LitElement {
   override render() {
     const v = VEHICLE_TYPES[this.selected]!;
     const hex = (c: number) => '#' + c.toString(16).padStart(6, '0');
+
+    let connectedGamepadName: string | null = null;
+    if (typeof navigator !== 'undefined' && navigator.getGamepads) {
+      for (const p of navigator.getGamepads()) {
+        if (p && p.connected) {
+          connectedGamepadName = getGamepadDisplayName(p.id);
+          break;
+        }
+      }
+    }
+
     return html`
       <header>
         <h1>SMUGGLERS <span class="ac">TOWN 3D</span></h1>
@@ -189,6 +219,12 @@ export class IntroScreen extends LitElement {
       </div>
       <footer>
         <div class="controls">
+          ${connectedGamepadName ? html`
+            <div style="color:var(--accent);font-weight:600;margin-bottom:4px;display:flex;align-items:center;gap:6px;">
+              <span>🎮</span> <span>${connectedGamepadName}</span>
+              <span style="color:var(--muted);font-weight:400;">(<kbd>A</kbd> start · <kbd>D-pad</kbd> pick · <kbd>Start</kbd> controls)</span>
+            </div>
+          ` : ''}
           <kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake/reverse ·
           <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump<br>
           <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>↑</kbd><kbd>↓</kbd> or <kbd>1-5</kbd> pick · <kbd>Enter</kbd> start

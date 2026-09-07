@@ -104,6 +104,7 @@ export class AudioManager {
     window.addEventListener('pointerdown', this.unlockHandler, { passive: true, once: true });
     window.addEventListener('keydown', this.unlockHandler, { passive: true, once: true });
     window.addEventListener('touchstart', this.unlockHandler, { passive: true, once: true });
+    window.addEventListener('gamepadconnected', this.unlockHandler, { passive: true, once: true });
   }
 
   private removeAutoplayListeners(): void {
@@ -111,6 +112,7 @@ export class AudioManager {
     window.removeEventListener('pointerdown', this.unlockHandler);
     window.removeEventListener('keydown', this.unlockHandler);
     window.removeEventListener('touchstart', this.unlockHandler);
+    window.removeEventListener('gamepadconnected', this.unlockHandler);
     this.unlockHandler = null;
   }
 
@@ -172,7 +174,10 @@ export class AudioManager {
       this.events.on('contraband:delivered', () => this.stingers?.playDelivered()),
       this.events.on('contraband:dropped', () => this.stingers?.playDropped()),
       this.events.on('vehicle:wrecked', e => this.playWreckedFor(e.vehicleId)),
-      this.events.on('match:countdown', e => this.stingers?.playCountdown(e.n)),
+      this.events.on('match:countdown', e => {
+        this.resume();
+        this.stingers?.playCountdown(e.n);
+      }),
       this.events.on('match:finalMinute', () => this.stingers?.playAlert()),
       this.events.on('match:suddenDeath', () => this.stingers?.playAlert()),
       this.events.on('match:win', () => this.stingers?.playWin())
@@ -192,7 +197,14 @@ export class AudioManager {
     state: MatchState | null,
     inPlay: boolean
   ): void {
-    if (!this.ctx || this.ctx.state !== 'running') return;
+    if (!this.ctx) return;
+    if (this.ctx.state === 'suspended') {
+      if (drive && (drive.throttle > 0 || drive.brake > 0 || drive.jump || drive.steer !== 0)) {
+        this.resume();
+      }
+      return;
+    }
+    if (this.ctx.state !== 'running') return;
     this.world = world;
 
     const player = world?.player ?? null;

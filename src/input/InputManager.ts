@@ -16,19 +16,23 @@ import type { Binding, DeviceKind } from './bindings.ts';
 import { Bindings } from './bindings.ts';
 import { KeyboardSource } from './KeyboardSource.ts';
 import { GamepadSource } from './GamepadSource.ts';
+import { normalizePadSnapshot } from './gamepadNormalization.ts';
 
 export type CapturedBinding = { device: DeviceKind; binding: Binding };
 
 export class InputManager {
   readonly bindings: Bindings;
+  readonly keyboard?: KeyboardSource;
+  readonly gamepad?: GamepadSource;
   private readonly sources: InputSource[];
 
   constructor(bindings?: Bindings) {
     this.bindings = bindings ?? new Bindings();
-    this.sources = [
-      new KeyboardSource(this.bindings),
-      new GamepadSource(this.bindings)
-    ];
+    const kb = new KeyboardSource(this.bindings);
+    const gp = new GamepadSource(this.bindings);
+    this.keyboard = kb;
+    this.gamepad = gp;
+    this.sources = [kb, gp];
   }
 
   /** Test seam: inject sources that don't need a DOM or gamepad. */
@@ -92,20 +96,22 @@ export class InputManager {
 
     // gamepad: poll for the first newly-pressed button or axis past a threshold
     let raf = 0;
-    const prevBtn = new Map<number, boolean>();
+    const prevBtn = new Map<string, boolean>();
     const poll = () => {
       if (cancelled) return;
       const pads = (navigator.getGamepads?.() ?? []);
-      for (const g of pads) {
-        if (!g?.connected) continue;
+      for (const rawG of pads) {
+        if (!rawG?.connected) continue;
+        const g = normalizePadSnapshot(rawG);
         for (let i = 0; i < g.buttons.length; i++) {
+          const btnKey = `${rawG.index}:${i}`;
           const pressed = g.buttons[i]?.pressed ?? false;
-          if (pressed && !prevBtn.get(i)) {
+          if (pressed && !prevBtn.get(btnKey)) {
             cancelKey();
             onCapture({ device: 'gamepad', binding: { kind: 'button', index: i } });
             return;
           }
-          prevBtn.set(i, pressed);
+          prevBtn.set(btnKey, pressed);
         }
         for (let i = 0; i < g.axes.length; i++) {
           const v = g.axes[i] ?? 0;
