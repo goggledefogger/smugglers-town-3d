@@ -26,6 +26,7 @@ import { Vector3, Box3, type Object3D, type Mesh } from 'three';
 import { WORLD_M_PER_M } from '../../core/geo/ecef.ts';
 import type { BuildingCollider } from '../../core/physics/VehicleBody.ts';
 import type { Heightfield } from '../../core/heightfield.ts';
+import type { RoadGrid } from '../../services/osm/roads.ts';
 
 export interface ColliderThresholds {
   /** 10 units = 10 m cells. */
@@ -366,6 +367,15 @@ function composite(rasters: readonly (TileRaster | null)[], n: number, max: bool
 }
 
 /**
+ * The road mask is OSM centrelines on the same grid (see services/osm/roads.ts).
+ * A road cell is never a building, and its ground surface is the roadbed itself,
+ * not the sagging morphological ground estimate.
+ */
+function roadExempt(roadMask: RoadGrid | null | undefined, c: number): boolean {
+  return roadMask != null && roadMask.mask[c] === 1;
+}
+
+/**
  * Incrementally builds the shared ground heightfield row-by-row across frames,
  * bounding execution time to ~1.5-2ms per frame to eliminate main-thread hitches
  * during runtime tile refinement.
@@ -377,6 +387,7 @@ export class AmortizedGroundBuilder {
   private readonly rasters: readonly (TileRaster | null)[];
   private readonly k: number;
   private readonly rise: number;
+  private readonly roadMask?: RoadGrid | null | undefined;
 
   private phase = 0;
   private row = 0;
@@ -399,7 +410,8 @@ export class AmortizedGroundBuilder {
     grid: Grid,
     terrainTop: Float32Array,
     reliefBoost = 1,
-    thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+    thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+    roadMask?: RoadGrid | null
   ) {
     this.n = grid.n;
     this.cell = grid.cell;
@@ -407,6 +419,7 @@ export class AmortizedGroundBuilder {
     this.rasters = rasters;
     this.k = thresholds.groundOpeningK;
     this.rise = thresholds.groundBuildingRiseM * WORLD_M_PER_M * reliefBoost;
+    this.roadMask = roadMask;
 
     const total = this.n * this.n;
     this.top = new Float32Array(total).fill(-Infinity);
@@ -569,7 +582,11 @@ export class AmortizedGroundBuilder {
             if (t === NO_DATA || b === NO_DATA) {
               this.raw[c] = this.terrainTop[c]!;
             } else {
-              const tileGround = (t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!));
+              // A road cell is not a building roof: the ground is the road surface itself,
+              // not the sagging morphological opening estimate b.
+              const tileGround = roadExempt(this.roadMask, c)
+                ? Math.min(t, this.low[c]!)
+                : ((t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!)));
               this.raw[c] = tileGround + TILE_GROUND_GAP;
             }
           }
@@ -629,9 +646,10 @@ export function groundField(
   grid: Grid,
   terrainTop: Float32Array,
   reliefBoost = 1,
-  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+  roadMask?: RoadGrid | null
 ): Float32Array {
-  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost, thresholds);
+  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost, thresholds, roadMask);
   builder.step(Infinity);
   return builder.result!;
 }
@@ -673,6 +691,7 @@ export function tileGroundOffset(
   return diffs[Math.floor(diffs.length * thresholds.datumPercentile)]!;
 }
 
+
 export function collidersFromRasters(
   rasters: readonly (TileRaster | null)[],
   grid: Grid,
@@ -681,7 +700,9 @@ export function collidersFromRasters(
   outDeckGrid?: Float32Array,
   thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
   /** n*n, receives 1 where the cell is a building, deck or ramp (what a render filter must leave alone). */
-  outStructureGrid?: Uint8Array
+  outStructureGrid?: Uint8Array,
+  /** OSM road-centreline mask on the same grid; road cells are exempt from building classification. */
+  roadMask?: RoadGrid | null
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1087,6 +1108,9 @@ export function collidersFromRasters(
     if (isDeck[c] || isRamp[c]) return false;
     // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
     if (isDriveableGround[c]) return false;
+    // OSM says a road runs through here: the crest error of the opening-based
+    // ground estimate is exactly the false wall this corridor was severed by
+    if (roadExempt(roadMask, c)) return false;
     return true;
   };
 
@@ -1199,7 +1223,8 @@ export function buildingCollidersFrom(
   tiles: Object3D,
   ground: Heightfield,
   reliefBoost = 1,
-  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+  roadMask?: RoadGrid | null
 ): BuildingCollider[] {
   const grid = gridFor(ground);
   tiles.updateMatrixWorld(true);
@@ -1209,6 +1234,8 @@ export function buildingCollidersFrom(
     sampleTerrain(grid, ground),
     reliefBoost,
     undefined,
-    thresholds
+    thresholds,
+    undefined,
+    roadMask
   );
 }

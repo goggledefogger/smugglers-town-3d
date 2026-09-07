@@ -31,6 +31,7 @@ import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
+import { fetchRoadPolylines, rasterizeRoads, type RoadGrid } from '../osm/roads.ts';
 import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
@@ -346,6 +347,8 @@ export class TileStreamer {
   private readonly reliefBoost: number;
   private readonly placement: Matrix4;
   private readonly worldToEcef: Matrix4;
+  /** OSM road-centreline mask on the same grid; null until fetched or when the fetch failed. */
+  private roadGrid: RoadGrid | null = null;
   private inFlight = false;
   private lastPickMs = 0;
   private dirty = false;
@@ -358,7 +361,7 @@ export class TileStreamer {
   constructor(
     private readonly apiKey: string,
     terrain: TerrainProvider,
-    origin: GeoOrigin,
+    private readonly origin: GeoOrigin,
     private readonly ecef0: Ecef,
     private readonly anisotropy = 1,
     private readonly lod: LodPolicy = STREAM_LOD
@@ -399,6 +402,9 @@ export class TileStreamer {
   }
 
   async loadInitial(root: TileNode, onProgress?: (loaded: number, total: number) => void): Promise<void> {
+    // roads are static for the match: fetch once, before the first collider
+    // build; a failure just means no mask (classifier behaves as before)
+    void this.loadRoads();
     const wanted = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey);
     let next = 0;
     let loaded = 0;
@@ -411,6 +417,36 @@ export class TileStreamer {
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     await this.refineCore(onProgress);
     this.calibrateGround();
+    // Allow a brief grace period for roads if ready during tile loading,
+    // but never hang match startup if Overpass is slow or timing out
+    if (this.roadsPromise) {
+      await Promise.race([
+        this.roadsPromise,
+        new Promise(resolve => setTimeout(resolve, 1500))
+      ]);
+    }
+  }
+
+  private roadsPromise: Promise<void> | null = null;
+
+  private async loadRoads(): Promise<void> {
+    if (this.roadsPromise) return this.roadsPromise;
+    const origin = this.origin;
+    this.roadsPromise = (async () => {
+      try {
+        const polys = await fetchRoadPolylines({
+          lat: origin.lat, lon: origin.lon,
+          halfM: this.grid.half
+        });
+        if (polys) {
+          this.roadGrid = rasterizeRoads(polys, this.grid);
+          this.dirty = true;
+        }
+      } catch (e) {
+        log.warn('road mask failed', e);
+      }
+    })();
+    return this.roadsPromise;
   }
 
   /** True if any loaded 3D tile covers (or comes within radiusM of) the world coordinate. */
@@ -542,7 +578,14 @@ export class TileStreamer {
    * the elevation grid where tiles have no data (see groundField).
    */
   groundHeightfield(): Heightfield {
-    const cells = groundField(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+    const cells = groundField(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost,
+      undefined,
+      this.roadGrid
+    );
     return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
   }
 
@@ -555,7 +598,9 @@ export class TileStreamer {
       this.tiles.map(t => t.raster),
       this.grid,
       this.terrainTop,
-      this.reliefBoost
+      this.reliefBoost,
+      undefined,
+      this.roadGrid
     );
   }
 
@@ -632,6 +677,20 @@ export class TileStreamer {
       });
   }
 
+  /**
+   * The rasters behind the current colliders, structured-cloneable — the
+   * offline measurement rigs (scripts/capture-rasters.mjs) read these to
+   * reproduce the classifier's exact inputs without a live session.
+   */
+  captureRasters(): { grid: Grid; terrainTop: Float32Array; rasters: (TileRaster | null)[]; roadMask: Uint8Array | null } {
+    return {
+      grid: this.grid,
+      terrainTop: this.terrainTop,
+      rasters: this.tiles.map(t => t.raster),
+      roadMask: this.roadGrid?.mask ?? null
+    };
+  }
+
   /** Rebuild building colliders from the current tiles, on this thread (~30 ms for a city). */
   colliders(): BuildingCollider[] {
     this.dirty = false;
@@ -642,7 +701,8 @@ export class TileStreamer {
       this.reliefBoost,
       this.deckGrid,
       undefined,
-      this.structureGrid
+      this.structureGrid,
+      this.roadGrid
     );
   }
 
@@ -668,7 +728,8 @@ export class TileStreamer {
       };
       worker.onerror = e => reject(new Error(e.message));
       const job: ColliderJob = {
-        rasters: this.tiles.map(t => t.raster), grid: this.grid, terrainTop: this.terrainTop, reliefBoost: this.reliefBoost
+        rasters: this.tiles.map(t => t.raster), grid: this.grid, terrainTop: this.terrainTop, reliefBoost: this.reliefBoost,
+        roadMask: this.roadGrid?.mask ?? null
       };
       worker.postMessage(job);
     });

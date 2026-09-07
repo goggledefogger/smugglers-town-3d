@@ -31,34 +31,45 @@ a tie. Left:
 
 ## 3. Bots — pathing done
 
-Done: BFS flow fields over a 20 m occupancy grid built from the colliders;
-bots follow waypoints around buildings and props. Left:
+Done: BFS flow fields over a 6 m occupancy grid built from the colliders;
+bots follow waypoints around buildings and props. The fields expand lazily,
+only as far as the bot asking, because a full sweep of the ~870k-cell grid
+measured 25-60 ms. Left:
 
 - Roles: when an ally carries, escorts should body-block chasers rather than
   drive to the base and wait.
 - Difficulty setting: reaction time (`reevaluateS`), top-speed cap, steal
   aggression.
-- Field quality: the 20 m grid treats any cell touching a collider as
-  blocked, so streets narrower than ~20 m close; a finer grid or a
-  clearance-aware BFS would open them.
+- Field quality: a cell is blocked when its centre is within a car half-width
+  of any collider. Where streets close, the cause is upstream in collider
+  classification rather than in this grid — see section 10.
 
 ## 4. Graphics
 
 - Real shadows: a directional shadow map on a ~200-unit frustum that follows
   the player; vehicles cast, terrain and tiles receive. Biggest single visual
   upgrade for grounding the cars.
-- Satellite drape: zoom 16 in a 5×5 grid (25 Static Maps calls) for
-  1.7 m/px, or hide the drape where fine tiles cover the ground.
+- Satellite drape **(Done, better than planned)**: `GroundStreamer` streams
+  zoom-18 patches (~0.25 m/px) around the player rather than a fixed grid, and
+  skips ground already covered by 3D tiles. The clutter filter's hidden mode
+  streams under tiles too, since it reveals the ground beneath them.
 - Streaming: evict the farthest tiles when over `MAX_TILES` so long sessions
   keep refining; coarsen behind the player.
 - Impact feedback: camera shake on rams and landings, sparks/smoke as
   integrity drops, skid marks.
 - Time of day: the painted sky (`skyTexture.ts`) takes a sun direction, so
   a dusk/night palette and a moving sun are a repaint plus light tweaks.
-- Performance headroom: move tile rasterization and collider rebuilds to a
-  Web Worker (they hitch 15–30 ms during streaming); add a quality preset
-  (tile caps, streaming LOD, MSAA off) on top of the adaptive resolution for
-  very weak GPUs.
+- Performance headroom: collider rebuilds now run in a Web Worker, and the
+  streaming hitches that made the game feel choppy are gone (a 30 s drive
+  through Manhattan holds p99 10.4 ms with zero long tasks). Tile
+  rasterization is still on the main thread at ~48 ms per streaming burst and
+  is the next candidate. A quality preset (tile caps, streaming LOD, MSAA off)
+  on top of the adaptive resolution would help very weak GPUs.
+- Street clutter filter **(Done)**: `TileClutterFilter` patches every tile
+  material so street-level photogrammetry noise is flattened onto the ground
+  or discarded entirely, leaving buildings over streamed satellite ground.
+  Hidden is the default. Note this is **render-side only** — the colliders
+  still contain the clutter it hides.
 
 ## 5. Input and platforms
 
@@ -116,24 +127,83 @@ phase plan. The per-driver input-source interface now exists
 
 ## 10. 3D Tiles, Collision & Physics Architecture
 
-- **Automated Scenario Regression Harness**:
-  Serialize real tile rasters from the 17 curated scenarios (`src/core/geo/testScenarios.ts`)
-  as test fixtures. Implement `tests/scenarios.harness.test.ts` to assert semantic claims
-  (drivable decks, open underpasses, slope driveability) across all 17 cities simultaneously.
-  Replaces city-by-city threshold guessing with systematic multi-city regression checks.
-- **Slope-Adaptive Morphological Thresholding**:
-  Replace static `BUILDING_RISE_M = 3.5` with gradient-scaled rise ($\text{rise} = \text{base} + s \cdot \tan\theta$),
-  standard in GIS progressive morphological filtering (PMF). Naturally unifies low-rise
-  flat districts (New Orleans, Portland) and steep terrain knolls (San Francisco) without
-  ad-hoc rule branching.
-- **Workerized Collider Rebuild**:
-  Move `collidersFromRasters` and raster clearance scans into a Web Worker, eliminating
-  the remaining 15–30 ms main-thread spike during tile LOD streaming.
+Measured findings and dead ends are written up in
+[`MAP-PIPELINE-BRIEF.md`](MAP-PIPELINE-BRIEF.md), which is self-contained and
+can be handed to someone with no context on this repo. Summary of what changed
+here: **the classifier is not the lever, and the metric we were optimising was
+the wrong one.**
+
+- **Optimise reachability, not wall count.** Counting false walls says San
+  Francisco has too many. Counting connectivity says its open space is roughly
+  the correct street fraction of a dense city but is shattered into 1,003
+  disconnected pockets, the largest covering 5.9% of the area. Flat New Orleans
+  has one network covering 38%. Any future attempt should be measured on
+  whether the street graph comes out connected; wall counts move without the
+  game getting better.
+
+- **Slope-Adaptive Morphological Thresholding — disproven as specified.**
+  The plan was `rise = base + s·tan(θ)`. Morphological opening is exact on a
+  constant grade, so slope is the wrong corrective variable: measured on real
+  bare-earth terrain, mean residual moves only 0.32 m → 1.67 m across the full
+  0-50% slope range, but 0.17 m → 4.87 m across curvature. The error appears at
+  crests and grade changes, and is about 0.35× the geometric sagitta over the
+  structuring element. On 5.3% of SF cells, bare terrain with no buildings in
+  the signal already produces a residual above the 3.5 m building threshold,
+  peaking at 17.5 m. `slopeAdaptiveRiseCoeff: 12.0` is currently declared in
+  the thresholds and **never read anywhere**; it should be deleted or replaced
+  with a curvature term. Either way it is not worth doing on its own: a
+  curvature-corrected ground estimate moved connectivity 5.9% → 6.0%.
+
+- **Threshold and mask tuning is a dead end.** Relaxed drivable caps,
+  curvature correction, height-banded box merging, mask despeckling and
+  morphological mask opening were all measured against both cities. Everything
+  that improves connectivity pays for it by deleting real buildings at roughly
+  one-to-one. The best variant reached 9.9% while nearly doubling missed
+  buildings. Do not spend more here without a new idea.
+
+- **Navmesh extraction (Recast) — live candidate, spike inconclusive.**
+  `recast-navigation-js` (MIT, WASM) voxelizes triangle soup and extracts
+  traversable surface, and is explicitly built for overlapping, imperfect
+  geometry. Its cell size is a parameter, which addresses the suspected root
+  cause: at 10 m a street between buildings on a grade is one or two cells wide
+  and any occupied cell severs it. Its handful of physically meaningful
+  parameters would replace clusters of our ~30 constants, and it is natively
+  multi-level, so the entire `deckGrid` bridge apparatus becomes unnecessary.
+  Detour could replace `NavGrid`. Build time looks viable (426 ms at 2 m cells
+  over an 800 m box, 132k triangles) and belongs in a worker. Two unknowns
+  before committing: the reachability measurement is not yet trustworthy, and
+  Recast will treat melted parked cars as obstacles and erode corridors exactly
+  as the raster did, so clutter may need filtering out of the navmesh input.
+  Spike lives on `spike/recast-navmesh`.
+
+- **Vector Road Hybrid (OSM / Overpass API) — Done.**
+  Merged on `main` in `services/osm/roads.ts`. Queries OpenStreetMap for drivable
+  `highway` centrelines, rasterized onto the 10 m grid to exempt streets from false
+  building classification on hill crests, with ground heightfield pinned to the
+  road surface. SF Russian Hill largest connected open region jumped from 4.4% to
+  45.5% (disconnected pockets reduced from 1,229 to 380). Bounded to 1.5 s startup
+  with async worker rebuilds.
+  *Long-term*: Recast remains the target to eliminate external network dependencies
+  and 10 m quantization.
+
+- **Automated Scenario Regression Harness — done, but synthetic.**
+  `tests/scenarios.harness.test.ts` runs all 17 curated scenarios in under
+  500 ms. Its fixtures are hand-built topographies, and its steep-slope cases
+  are constant-grade ramps, which morphological opening handles exactly. That
+  is precisely why it never caught the hill failure. It needs **real captured
+  tile rasters** as fixtures to be a meaningful regression net; the capture
+  path exists and two cities are already captured.
+
+- **Workerized Collider Rebuild — Done.**
+  `collidersFromRasters` runs in `services/tiles/colliderWorker.ts`; the frame
+  pays a structured clone instead of the pass. The raster clearance scan was
+  also indexed per cell rather than scanning every raster, taking it from
+  45 ms to 1 ms. Match start still uses the synchronous path so spawns are
+  clear of colliders before the first frame.
+
 - **Game 3D Procedural Aesthetic Upgrades**:
-  Enhance the stylized "Game 3D" visual mode (`BuildingMeshView.ts`) with architectural
-  window textures, asphalt road ribbons, and edge bevels to serve as a premium arcade
-  visual alternative with 100% collision parity.
-- **Vector Road Hybrid (OSM / Overpass API)**:
-  Explore querying OpenStreetMap road centerlines (`bridge=yes`, `layer=*`) for the
-  2.8 km match bounds to authoritatively generate smooth drivable ribbons over
-  complex multi-tier bridges and highway interchanges with zero heuristic guessing.
+  Enhance the stylized "Game 3D" visual mode (`BuildingMeshView.ts`) with
+  architectural window textures, asphalt road ribbons, and edge bevels to serve
+  as a premium arcade visual alternative with 100% collision parity. It is also
+  the QA view that exposed this whole class of bug, so keeping it honest
+  matters beyond aesthetics.
