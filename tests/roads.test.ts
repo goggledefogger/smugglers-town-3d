@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { rasterizeRoads } from '../src/services/osm/roads.ts';
 import {
-  collidersFromRasters, type TileRaster
+  collidersFromRasters, groundField, type TileRaster
 } from '../src/services/tiles/tileColliders.ts';
 
 const N = 60;
@@ -112,5 +112,19 @@ describe('collidersFromRasters with road mask', () => {
     const a = collidersFromRasters([makeRaster(top, low)], grid, terrain, 1, undefined, undefined, undefined, null);
     const b = collidersFromRasters([makeRaster(top, low)], grid, terrain, 1);
     expect(a.length).toBe(b.length);
+  });
+
+  it('preserves surface driving heightfield on crest roads instead of sinking into earth', () => {
+    const { top, low, terrain } = crestScenario();
+    const streetZ = -HALF + 22.5 * CELL;
+    const roads = rasterizeRoads([eastRoad(streetZ, 12)], grid);
+    const gfWithRoads = groundField([makeRaster(top, low)], grid, terrain, 1, undefined, roads);
+    const gfWithoutRoads = groundField([makeRaster(top, low)], grid, terrain, 1);
+
+    const crestRoadCell = 22 * N + 30;
+    // Without road mask, opening sag drops the driving heightfield ~12 m below the surface (to ~12 m)
+    expect(gfWithoutRoads[crestRoadCell]).toBeLessThan(15);
+    // With road mask, the driving heightfield stays on the road surface (24 m - 3x3 smoothing)
+    expect(gfWithRoads[crestRoadCell]).toBeGreaterThan(23);
   });
 });

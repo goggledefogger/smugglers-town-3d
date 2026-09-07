@@ -417,8 +417,14 @@ export class TileStreamer {
     await Promise.all(Array.from({ length: CONCURRENCY }, worker));
     await this.refineCore(onProgress);
     this.calibrateGround();
-    // make sure the mask race is settled before the first colliders() reads it
-    await this.roadsPromise;
+    // Allow a brief grace period for roads if ready during tile loading,
+    // but never hang match startup if Overpass is slow or timing out
+    if (this.roadsPromise) {
+      await Promise.race([
+        this.roadsPromise,
+        new Promise(resolve => setTimeout(resolve, 1500))
+      ]);
+    }
   }
 
   private roadsPromise: Promise<void> | null = null;
@@ -432,7 +438,10 @@ export class TileStreamer {
           lat: origin.lat, lon: origin.lon,
           halfM: this.grid.half
         });
-        if (polys) this.roadGrid = rasterizeRoads(polys, this.grid);
+        if (polys) {
+          this.roadGrid = rasterizeRoads(polys, this.grid);
+          this.dirty = true;
+        }
       } catch (e) {
         log.warn('road mask failed', e);
       }
@@ -569,7 +578,14 @@ export class TileStreamer {
    * the elevation grid where tiles have no data (see groundField).
    */
   groundHeightfield(): Heightfield {
-    const cells = groundField(this.tiles.map(t => t.raster), this.grid, this.terrainTop, this.reliefBoost);
+    const cells = groundField(
+      this.tiles.map(t => t.raster),
+      this.grid,
+      this.terrainTop,
+      this.reliefBoost,
+      undefined,
+      this.roadGrid
+    );
     return Heightfield.fromCells(cells, this.grid.n, this.grid.cell);
   }
 
@@ -582,7 +598,9 @@ export class TileStreamer {
       this.tiles.map(t => t.raster),
       this.grid,
       this.terrainTop,
-      this.reliefBoost
+      this.reliefBoost,
+      undefined,
+      this.roadGrid
     );
   }
 

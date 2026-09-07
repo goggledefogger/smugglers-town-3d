@@ -34,14 +34,19 @@ const HIGHWAY_WIDTH_M: Record<string, number> = {
   residential: 12,
   unclassified: 12,
   living_street: 10,
-  service: 8,
-  pedestrian: 8,
-  track: 5,
-  footway: 3,
-  path: 3,
-  cycleway: 3,
-  steps: 3
+  service: 8
 };
+
+const NON_DRIVABLE_HIGHWAYS = new Set([
+  'footway', 'path', 'steps', 'pedestrian', 'cycleway', 'track', 'bridleway', 'corridor', 'platform'
+]);
+
+function isDrivableWay(tags?: Record<string, string>): boolean {
+  if (!tags) return false;
+  const h = tags['highway'];
+  if (!h || NON_DRIVABLE_HIGHWAYS.has(h)) return false;
+  return true;
+}
 
 /** Fallback for tagged-but-unknown classes (motorway_link, road, busway...). */
 const DEFAULT_WIDTH_M = 10;
@@ -89,40 +94,34 @@ export async function fetchRoadPolylines(
   const cosLat = Math.max(0.0001, Math.cos((lat * Math.PI) / 180));
   const dLon = (halfM / (111_320 * cosLat)) * 1.05;
   const bbox = `${(lat - dLat).toFixed(6)},${(lon - dLon).toFixed(6)},${(lat + dLat).toFixed(6)},${(lon + dLon).toFixed(6)}`;
-  // driveable + walkable streets alike: on Russian Hill even steps and
-  // pedestrian ways sit between buildings, and a corridor is a corridor
-  const query = `[out:json][timeout:25];way["highway"](${bbox});out geom tags;`;
+  // Query only drivable roadway classes; exclude footways, paths, stairs and tracks so
+  // walkways do not punch holes through building atriums, courtyards and lobbies
+  const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)"](${bbox});out geom tags;`;
 
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
   let data: OverpassResponse | null = null;
-  try {
-    for (const endpoint of OVERPASS_ENDPOINTS) {
-      let res: Response;
-      try {
-        res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
-          signal: controller.signal,
-          headers: { Accept: 'application/json', 'User-Agent': USER_AGENT }
-        });
-      } catch {
-        continue;
-      }
+  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 6000);
+  for (const endpoint of OVERPASS_ENDPOINTS) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), endpointTimeoutMs);
+    try {
+      const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
+        signal: controller.signal,
+        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT }
+      });
       if (!res.ok) {
         log.warn('overpass http ' + res.status, { endpoint });
         continue;
       }
-      try {
-        data = await res.json() as OverpassResponse;
-        break;
-      } catch (e) {
-        log.warn('overpass json failed', { error: String(e).slice(0, 120) });
-      }
+      data = (await res.json()) as OverpassResponse;
+      if (data) break;
+    } catch (e) {
+      log.warn('overpass fetch failed', { endpoint, error: String(e).slice(0, 120) });
+    } finally {
+      clearTimeout(timer);
     }
-  } finally {
-    clearTimeout(timer);
   }
   if (!data) return null;
-  const ways = (data.elements ?? []).filter(el => el.type === 'way' && el.geometry && el.geometry.length >= 2);
+  const ways = (data.elements ?? []).filter(el => el.type === 'way' && el.geometry && el.geometry.length >= 2 && isDrivableWay(el.tags));
   if (ways.length === 0) {
     log.warn('overpass returned no highway ways', { bbox });
     return null;

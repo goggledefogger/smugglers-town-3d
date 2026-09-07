@@ -367,6 +367,15 @@ function composite(rasters: readonly (TileRaster | null)[], n: number, max: bool
 }
 
 /**
+ * The road mask is OSM centrelines on the same grid (see services/osm/roads.ts).
+ * A road cell is never a building, and its ground surface is the roadbed itself,
+ * not the sagging morphological ground estimate.
+ */
+function roadExempt(roadMask: RoadGrid | null | undefined, c: number): boolean {
+  return roadMask != null && roadMask.mask[c] === 1;
+}
+
+/**
  * Incrementally builds the shared ground heightfield row-by-row across frames,
  * bounding execution time to ~1.5-2ms per frame to eliminate main-thread hitches
  * during runtime tile refinement.
@@ -378,6 +387,7 @@ export class AmortizedGroundBuilder {
   private readonly rasters: readonly (TileRaster | null)[];
   private readonly k: number;
   private readonly rise: number;
+  private readonly roadMask?: RoadGrid | null;
 
   private phase = 0;
   private row = 0;
@@ -400,7 +410,8 @@ export class AmortizedGroundBuilder {
     grid: Grid,
     terrainTop: Float32Array,
     reliefBoost = 1,
-    thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+    thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+    roadMask?: RoadGrid | null
   ) {
     this.n = grid.n;
     this.cell = grid.cell;
@@ -408,6 +419,7 @@ export class AmortizedGroundBuilder {
     this.rasters = rasters;
     this.k = thresholds.groundOpeningK;
     this.rise = thresholds.groundBuildingRiseM * WORLD_M_PER_M * reliefBoost;
+    this.roadMask = roadMask;
 
     const total = this.n * this.n;
     this.top = new Float32Array(total).fill(-Infinity);
@@ -570,7 +582,11 @@ export class AmortizedGroundBuilder {
             if (t === NO_DATA || b === NO_DATA) {
               this.raw[c] = this.terrainTop[c]!;
             } else {
-              const tileGround = (t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!));
+              // A road cell is not a building roof: the ground is the road surface itself,
+              // not the sagging morphological opening estimate b.
+              const tileGround = roadExempt(this.roadMask, c)
+                ? Math.min(t, this.low[c]!)
+                : ((t - b >= this.rise) ? b : Math.max(b - 0.5, Math.min(t, this.low[c]!)));
               this.raw[c] = tileGround + TILE_GROUND_GAP;
             }
           }
@@ -630,9 +646,10 @@ export function groundField(
   grid: Grid,
   terrainTop: Float32Array,
   reliefBoost = 1,
-  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS
+  thresholds: ColliderThresholds = DEFAULT_COLLIDER_THRESHOLDS,
+  roadMask?: RoadGrid | null
 ): Float32Array {
-  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost, thresholds);
+  const builder = new AmortizedGroundBuilder(rasters, grid, terrainTop, reliefBoost, thresholds, roadMask);
   builder.step(Infinity);
   return builder.result!;
 }
@@ -674,15 +691,6 @@ export function tileGroundOffset(
   return diffs[Math.floor(diffs.length * thresholds.datumPercentile)]!;
 }
 
-/**
- * The road mask is OSM centrelines on the same grid (see services/osm/roads.ts).
- * A road cell is never a building, whatever the surface model says: the
- * morphological ground estimate is wrong by up to ~17 m at hill crests, and
- * that error — not the threshold — is what severed hilly-city streets.
- */
-function roadExempt(roadMask: RoadGrid | null | undefined, c: number): boolean {
-  return roadMask != null && roadMask.mask[c] === 1;
-}
 
 export function collidersFromRasters(
   rasters: readonly (TileRaster | null)[],
