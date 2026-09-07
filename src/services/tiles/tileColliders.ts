@@ -387,7 +387,7 @@ export class AmortizedGroundBuilder {
   private readonly rasters: readonly (TileRaster | null)[];
   private readonly k: number;
   private readonly rise: number;
-  private readonly roadMask?: RoadGrid | null;
+  private readonly roadMask?: RoadGrid | null | undefined;
 
   private phase = 0;
   private row = 0;
