@@ -7,6 +7,7 @@ import { Vector3, MathUtils } from 'three';
 import type { VehicleInput } from '../physics/vehicleStats.ts';
 import type { VehicleBody } from '../physics/VehicleBody.ts';
 import { chooseCrate, type MatchState } from '../gameplay/MatchRules.ts';
+import { config } from '../../app/config.ts';
 import type { Rng } from '../rng.ts';
 
 type AiState = 'seek' | 'chase' | 'deliver' | 'escort';
@@ -24,7 +25,7 @@ export const DEFAULT_DRIVER: DriverConfig = {
   reevaluateS: 0.2,
   steerGain: 2.4,
   slowTurnAngle: 1.55,
-  slowTurnSpeed: 45,
+  slowTurnSpeed: 45 * config.speedMultiplier,
   interceptLead: 1.0,
   ramDist: 40
 };

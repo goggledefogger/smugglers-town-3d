@@ -10,6 +10,7 @@
  *   amplifies tilt toward a flip and wedges at perfect inversion.
  */
 import { Quaternion, Vector3, MathUtils } from 'three';
+import { config } from '../../app/config.ts';
 import type { Heightfield } from '../heightfield.ts';
 import type { VehicleInput, VehicleStats } from './vehicleStats.ts';
 import type { Rng } from '../rng.ts';
@@ -39,11 +40,13 @@ export interface VehiclePhysicsConfig {
   readonly groundClearance: number;
 }
 
+const S = config.speedMultiplier;
+
 export const DEFAULT_PHYSICS: VehiclePhysicsConfig = {
   gravity: 22,
-  driveForce: 62,
-  maxSpeed: 78,
-  brakeForce: 80,
+  driveForce: 62 * S,
+  maxSpeed: 78 * S,
+  brakeForce: 80 * S,
   turnRate: 2.6,
   jumpBoost: 1.55,
   airControl: 2.1,
