@@ -129,6 +129,10 @@ export class VehicleBody {
    * landing should not cost integrity or flip anyone; set by the spawner.
    */
   graceS = 0;
+  /** Absolute lateral slip speed in m/s (side-skid), for tire screech audio and skid visuals. */
+  lateralSlip = 0;
+  /** Transient impact event from the latest physics step, consumed by audio/VFX. */
+  lastImpact: { kind: 'landing' | 'building' | 'vehicle'; speed: number } | null = null;
   private airTime = 0;
   /** Rate the ground under the car is rising, smoothed; the car's own climb. */
   private climbRate = 0;
@@ -179,6 +183,7 @@ export class VehicleBody {
     surfaceProvider?: SurfaceElevationFn | undefined
   ): void {
     this.snapPrev();
+    this.lastImpact = null;
     const fwd = this.forward(this._fwd);
     const right = this._right.set(1, 0, 0).applyQuaternion(this.quat);
     const up = this._up.set(0, 1, 0).applyQuaternion(this.quat);
@@ -253,6 +258,7 @@ export class VehicleBody {
     const dragK = (this.cfg.driveForce * stats.accel) / topSpeed;
     this.vel.multiplyScalar(1 - dragK * dt);
     const sideVel = this.vel.dot(right);
+    this.lateralSlip = Math.abs(sideVel);
     // handbrake drops lateral grip so the car slides: the grip bleed is the
     // only thing keeping the car on its heading, so skipping it lets momentum
     // carry the tail out. A small residual (0.05×) keeps a held slide from
@@ -315,6 +321,7 @@ export class VehicleBody {
   }
 
   private airControlStep(dt: number, input: VehicleInput, up: Vector3): void {
+    this.lateralSlip = 0;
     // Air control adds yaw from steer and pitch from input; angular velocity
     // is damped and capped so a spin settles instead of growing — unbounded
     // steer-roll accumulation was a direct path to landing roof-down.
@@ -434,6 +441,7 @@ export class VehicleBody {
         this.vel.y = 0;
         return this.keepInBounds();
       }
+      this.lastImpact = { kind: 'landing', speed: impact };
       const excess = Math.max(0, impact - SAFE_LANDING_V);
       this.damage = Math.min(1, this.damage + excess * 0.004 / this.stats.durability);
       this.vel.y = impact * 0.18;
@@ -504,6 +512,9 @@ export class VehicleBody {
         this.vel.y -= 1.3 * vn * hit.ny;
         this.vel.z -= 1.3 * vn * hit.nz;
         const impact = -vn;
+        if (impact > 2.5) {
+          this.lastImpact = { kind: 'building', speed: impact };
+        }
         if (impact > 6) {
           this.damage = Math.min(1, this.damage + impact * 0.01 / this.stats.durability);
           this.angVel.y += (this.rng() - 0.5) * impact * 0.04;

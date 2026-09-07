@@ -21,6 +21,7 @@ import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
+import { AudioManager } from './audio/AudioManager.ts';
 
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
@@ -71,6 +72,9 @@ app.innerHTML = `
       <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, or hide everything but buildings (Hotkey: F)">
         <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
       </button>
+      <button id="audio-btn" class="hud-btn active" type="button" title="Toggle audio mute (Hotkey: M)">
+        <span id="audio-icon">🔊</span> <span id="audio-text">AUDIO: ON</span> <span class="mono" style="opacity:0.6;font-size:9px;">[M]</span>
+      </button>
     </div>
     <div class="hud-corner hud-tr"><sr-score></sr-score></div>
     <div class="hud-corner hud-bl"><sr-objective></sr-objective></div>
@@ -100,6 +104,8 @@ const viewModeText = document.getElementById('view-mode-text') as HTMLSpanElemen
 
 // ---- stores, events, game ----
 const events = new EventBus<GameEventMap>();
+const audio = new AudioManager(events);
+if (typeof window !== 'undefined') (window as any).__audio = audio;
 const initialHud: HudSnapshot = {
   phase: 'intro', timeLeftS: config.match.roundS, speed: 0, damage: 0, vehicleName: '', scores: { 0: 0, 1: 0 },
   carrierName: null, carrierIsPlayer: false, carrierIsAlly: false,
@@ -219,6 +225,45 @@ function toggleViewMode(): void {
 
 viewModeBtn?.addEventListener('click', () => {
   toggleViewMode();
+});
+
+const audioBtn = document.getElementById('audio-btn') as HTMLButtonElement | null;
+const audioIcon = document.getElementById('audio-icon') as HTMLSpanElement | null;
+const audioText = document.getElementById('audio-text') as HTMLSpanElement | null;
+
+function updateAudioUi(): void {
+  if (!audioBtn || !audioIcon || !audioText) return;
+  if (audio.muted) {
+    audioIcon.textContent = '🔇';
+    audioText.textContent = 'AUDIO: MUTED';
+    audioBtn.classList.remove('active');
+  } else {
+    audioIcon.textContent = '🔊';
+    audioText.textContent = 'AUDIO: ON';
+    audioBtn.classList.add('active');
+  }
+}
+updateAudioUi();
+
+audioBtn?.addEventListener('click', () => {
+  audio.toggleMute();
+  updateAudioUi();
+});
+
+window.addEventListener('keydown', (e) => {
+  if (e.code === 'KeyM' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+    audio.toggleMute();
+    updateAudioUi();
+  }
+  if (e.code === 'KeyH' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+    audio.horn?.start();
+  }
+});
+
+window.addEventListener('keyup', (e) => {
+  if (e.code === 'KeyH') {
+    audio.horn?.stop();
+  }
 });
 
 /** Buildings from the streamed tiles plus the scattered props; sync, so a match can spawn clear of them. */
@@ -747,10 +792,14 @@ function frame(now: number): void {
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
-  } else if (introEl.isConnected) {
-    showroom.update(dt, window.innerWidth, window.innerHeight);
-    if (tiles) tiles.update(renderer.camera.position, now);
-    if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
+    audio.update(dt, world.player ?? null, drive, world.state, true);
+  } else {
+    audio.update(dt, null, null, null, false);
+    if (introEl.isConnected) {
+      showroom.update(dt, window.innerWidth, window.innerHeight);
+      if (tiles) tiles.update(renderer.camera.position, now);
+      if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
+    }
   }
   renderer.render();
   requestAnimationFrame(frame);
