@@ -85,7 +85,7 @@ const USER_AGENT = 'smugglers-town-3d/0.1 (game map pipeline; github.com/goggled
  */
 export async function fetchRoadPolylines(
   input: RoadMaskInput,
-  timeoutMs = 12000
+  timeoutMs = 20000
 ): Promise<{ east: number; north: number; widthM: number }[][] | null> {
   const { lat, lon, halfM } = input;
   const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(halfM)}`;
@@ -99,14 +99,18 @@ export async function fetchRoadPolylines(
   const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)"](${bbox});out geom tags;`;
 
   let data: OverpassResponse | null = null;
-  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 6000);
+  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 10000);
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (typeof navigator === 'undefined') {
+    headers['User-Agent'] = USER_AGENT;
+  }
   for (const endpoint of OVERPASS_ENDPOINTS) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), endpointTimeoutMs);
     try {
       const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
         signal: controller.signal,
-        headers: { Accept: 'application/json', 'User-Agent': USER_AGENT }
+        headers
       });
       if (!res.ok) {
         log.warn('overpass http ' + res.status, { endpoint });
@@ -185,7 +189,8 @@ export interface RoadGrid {
  */
 export function rasterizeRoads(
   polylines: readonly { east: number; north: number; widthM: number }[][],
-  grid: { cell: number; half: number; n: number }
+  grid: { cell: number; half: number; n: number },
+  reachSlackMultiplier = 0.5
 ): RoadGrid {
   const { cell, half, n } = grid;
   const mask = new Uint8Array(n * n);
@@ -194,10 +199,11 @@ export function rasterizeRoads(
     for (let k = 0; k + 1 < pts.length; k++) {
       const a = pts[k]!, b = pts[k + 1]!;
       const halfWidth = Math.max(a.widthM, b.widthM) / 2;
+      const reach = halfWidth + cell * reachSlackMultiplier;
       // world Z = -north; stamp in grid space directly to skip the flip
       const ax = a.east, az = -a.north, bx = b.east, bz = -b.north;
-      const minX = Math.min(ax, bx) - halfWidth, maxX = Math.max(ax, bx) + halfWidth;
-      const minZ = Math.min(az, bz) - halfWidth, maxZ = Math.max(az, bz) + halfWidth;
+      const minX = Math.min(ax, bx) - reach, maxX = Math.max(ax, bx) + reach;
+      const minZ = Math.min(az, bz) - reach, maxZ = Math.max(az, bz) + reach;
       const i0 = Math.max(0, Math.floor((minX + half) / cell));
       const i1 = Math.min(n - 1, Math.floor((maxX + half) / cell));
       const j0 = Math.max(0, Math.floor((minZ + half) / cell));
@@ -218,10 +224,9 @@ export function rasterizeRoads(
             const px = ax + t * dx, pz = az + t * dz;
             distSq = (cx - px) * (cx - px) + (cz - pz) * (cz - pz);
           }
-          // +1 cell slack: a 10 m quantised classifier cell straddles the
+          // slack: a quantised classifier cell straddles the
           // roadbed edge; better to exempt one extra borderline cell than
           // sever a corridor at its kerb
-          const reach = halfWidth + cell * 0.5;
           if (distSq <= reach * reach) mask[j * n + i] = 1;
         }
       }

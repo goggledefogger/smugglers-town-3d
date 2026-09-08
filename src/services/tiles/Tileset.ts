@@ -36,7 +36,7 @@ import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
   AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
-  type Grid, type TileRaster
+  type Grid, type TileRaster, type ColliderExperimentMode, thresholdsForMode
 } from './tileColliders.ts';
 
 export interface TileNode {
@@ -342,8 +342,8 @@ const _ecef = new Vector3();
 export class TileStreamer {
   readonly group = new Group();
   private readonly tiles: LoadedTile[] = [];
-  readonly grid: Grid;
-  private readonly terrainTop: Float32Array;
+  grid: Grid;
+  private terrainTop: Float32Array;
   private readonly reliefBoost: number;
   private readonly placement: Matrix4;
   private readonly worldToEcef: Matrix4;
@@ -354,13 +354,17 @@ export class TileStreamer {
   private dirty = false;
   private shiftY = 0;
   /** n*n cells, 1 = building/deck/ramp as of the last colliders() call; render filters sample it. */
-  readonly structureGrid: Uint8Array;
+  structureGrid: Uint8Array;
   /** Called with each tile's scene graph as it loads, before it joins the group. */
   onTileLoaded: ((group: Group) => void) | null = null;
+  /** Called when OSM road network geometry finishes downloading in background. */
+  onRoadsLoaded: (() => void) | null = null;
+  private currentExperiment: ColliderExperimentMode = 'baseline';
+  private roadPolys: { east: number; north: number; widthM: number }[][] | null = null;
 
   constructor(
     private readonly apiKey: string,
-    terrain: TerrainProvider,
+    private readonly terrain: TerrainProvider,
     private readonly origin: GeoOrigin,
     private readonly ecef0: Ecef,
     private readonly anisotropy = 1,
@@ -439,8 +443,11 @@ export class TileStreamer {
           halfM: this.grid.half
         });
         if (polys) {
-          this.roadGrid = rasterizeRoads(polys, this.grid);
+          this.roadPolys = polys;
+          const th = thresholdsForMode(this.currentExperiment);
+          this.roadGrid = rasterizeRoads(polys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
           this.dirty = true;
+          this.onRoadsLoaded?.();
         }
       } catch (e) {
         log.warn('road mask failed', e);
@@ -475,6 +482,38 @@ export class TileStreamer {
 
   get activeGrid(): Grid {
     return this.grid;
+  }
+
+  get experimentMode(): ColliderExperimentMode {
+    return this.currentExperiment;
+  }
+
+  get hasRoadGrid(): boolean {
+    return this.roadGrid != null;
+  }
+
+  setExperimentMode(mode: ColliderExperimentMode): void {
+    if (this.currentExperiment === mode) return;
+    this.currentExperiment = mode;
+    const th = thresholdsForMode(mode);
+    const targetCell = th.cell;
+    if (this.grid.cell !== targetCell) {
+      const half = this.grid.half;
+      const n = Math.ceil((half * 2) / targetCell);
+      this.grid = { cell: targetCell, half, n };
+      this.terrainTop = sampleTerrain(this.grid, this.terrain.heightfield);
+      this.deckGrid = new Float32Array(n * n).fill(NO_DATA);
+      this.structureGrid = new Uint8Array(n * n);
+      for (const t of this.tiles) {
+        t.raster = rasterizeTile(t.group, this.grid);
+      }
+    }
+    if (this.roadPolys) {
+      this.roadGrid = rasterizeRoads(this.roadPolys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
+    } else if (mode === 'road_carve') {
+      void this.loadRoads();
+    }
+    this.dirty = true;
   }
 
   /**
@@ -694,13 +733,14 @@ export class TileStreamer {
   /** Rebuild building colliders from the current tiles, on this thread (~30 ms for a city). */
   colliders(): BuildingCollider[] {
     this.dirty = false;
+    const th = thresholdsForMode(this.currentExperiment);
     return collidersFromRasters(
       this.tiles.map(t => t.raster),
       this.grid,
       this.terrainTop,
       this.reliefBoost,
       this.deckGrid,
-      undefined,
+      th,
       this.structureGrid,
       this.roadGrid
     );
@@ -717,6 +757,7 @@ export class TileStreamer {
     if (typeof Worker === 'undefined') return Promise.resolve(this.colliders());
     this.dirty = false;
     const worker = this.worker ??= new Worker(new URL('./colliderWorker.ts', import.meta.url), { type: 'module' });
+    const th = thresholdsForMode(this.currentExperiment);
     return new Promise((resolve, reject) => {
       worker.onmessage = (e: MessageEvent<ColliderResult>) => {
         this.deckGrid.set(e.data.deckGrid);
@@ -729,7 +770,8 @@ export class TileStreamer {
       worker.onerror = e => reject(new Error(e.message));
       const job: ColliderJob = {
         rasters: this.tiles.map(t => t.raster), grid: this.grid, terrainTop: this.terrainTop, reliefBoost: this.reliefBoost,
-        roadMask: this.roadGrid?.mask ?? null
+        roadMask: this.roadGrid?.mask ?? null,
+        thresholds: th
       };
       worker.postMessage(job);
     });

@@ -91,7 +91,13 @@ export interface ColliderThresholds {
   readonly terrainSmoothingToleranceM: number;
   /** Slope-adaptive rise coefficient scaling building rise with local terrain gradient tan(theta). */
   readonly slopeAdaptiveRiseCoeff: number;
+  /** Active driving experiment mode under evaluation. */
+  readonly experimentMode?: ColliderExperimentMode;
+  /** Slack multiplier for OSM road corridor reach padding (default 0.5; 0.85 in road_carve). */
+  readonly roadReachSlackMultiplier?: number;
 }
+
+export type ColliderExperimentMode = 'baseline' | 'road_carve' | 'curbside_inset' | 'high_res';
 
 export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
   cell: 10,
@@ -124,8 +130,46 @@ export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
   insetExteriorStreetM: 1.0,
   insetIsolatedColumnM: 2.8,
   terrainSmoothingToleranceM: 8.0,
-  slopeAdaptiveRiseCoeff: 12.0
+  slopeAdaptiveRiseCoeff: 12.0,
+  experimentMode: 'baseline',
+  roadReachSlackMultiplier: 0.5
 };
+
+/**
+ * Produces collider thresholds for each driving experiment mode.
+ */
+export function thresholdsForMode(mode: ColliderExperimentMode): ColliderThresholds {
+  switch (mode) {
+    case 'road_carve':
+      return {
+        ...DEFAULT_COLLIDER_THRESHOLDS,
+        experimentMode: 'road_carve',
+        roadReachSlackMultiplier: 0.85
+      };
+    case 'curbside_inset':
+      return {
+        ...DEFAULT_COLLIDER_THRESHOLDS,
+        experimentMode: 'curbside_inset',
+        // Inset exterior street-bordering faces by 2.4m to clear residential lanes from curb overhang
+        insetExteriorStreetM: 2.4
+      };
+    case 'high_res':
+      return {
+        ...DEFAULT_COLLIDER_THRESHOLDS,
+        experimentMode: 'high_res',
+        cell: 5,
+        groundOpeningK: 12, // 12 * 5m = 60m radius opening, matching physical 60m window
+        insetExteriorStreetM: 0.8
+      };
+    case 'baseline':
+    default:
+      return {
+        ...DEFAULT_COLLIDER_THRESHOLDS,
+        experimentMode: 'baseline',
+        roadReachSlackMultiplier: 0.5
+      };
+  }
+}
 
 /** 10 units = 10 m cells. */
 const CELL = DEFAULT_COLLIDER_THRESHOLDS.cell;
