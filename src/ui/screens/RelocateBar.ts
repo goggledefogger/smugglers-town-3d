@@ -125,18 +125,19 @@ export class RelocateBar extends LitElement {
       font-weight:600; cursor:pointer; min-height:2.75rem; flex:0 0 auto; }
     button:hover { border-color:var(--accent); color:var(--accent); }
     #scenario {
-      padding: var(--space-sm) var(--space-sm);
-      background: rgba(14, 21, 32, 0.92);
+      padding: var(--space-sm) var(--space-md);
+      background: rgba(14, 21, 32, 0.95);
       border: var(--border) solid var(--line);
       border-radius: var(--radius-sm);
       color: var(--ink);
       font-family: inherit;
       font-size: 13px;
-      font-weight: 500;
+      font-weight: 600;
       outline: none;
       cursor: pointer;
-      flex: 0 0 auto;
-      max-width: 15rem;
+      flex: 1 1 100%;
+      width: 100%;
+      min-height: 2.75rem;
     }
     #scenario:focus, #scenario:hover { border-color: var(--accent); color: var(--accent); }
     #scenario option, #scenario optgroup {
@@ -213,11 +214,15 @@ export class RelocateBar extends LitElement {
   override render() {
     // Group scenarios by category
     const categories = [
-      { key: 'bridge_water', label: '🌉 Bridges & Water' },
       { key: 'dense_city', label: '🏙️ Dense 3D Cities' },
-      { key: 'open_ground', label: '🏜️ Open Ground (2D Satellite)' },
+      { key: 'racing_circuits', label: '🏎️ Grand Prix & Race Tracks' },
+      { key: 'mountain_passes', label: '🏔️ Alpine Passes & Switchbacks' },
+      { key: 'historic_landmarks', label: '🏛️ Ancient & Historic Landmarks' },
+      { key: 'bridge_water', label: '🌉 Bridges & Water' },
+      { key: 'islands_waterways', label: '🏝️ Islands & Canal Towns' },
       { key: 'steep_slope', label: '⛰️ Steep Slopes & Hills' },
-      { key: 'coast_interface', label: '🌊 Shoreline & Interfaces' }
+      { key: 'coast_interface', label: '🌊 Shoreline & Waterfronts' },
+      { key: 'open_ground', label: '🏜️ Open Ground & Deserts' }
     ] as const;
 
     return html`
@@ -228,7 +233,7 @@ export class RelocateBar extends LitElement {
           this.selectScenario((e.target as HTMLSelectElement).value);
           (e.target as HTMLSelectElement).value = '';
         }}>
-          <option value="">🎯 Test Scenarios (GPS Benchmarks)…</option>
+          <option value="">🎯 Test Scenarios (58 GPS Benchmarks)…</option>
           ${categories.map(cat => html`
             <optgroup label=${cat.label}>
               ${TEST_SCENARIOS.filter(s => s.category === cat.key).map(s => html`

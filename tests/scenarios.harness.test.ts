@@ -78,11 +78,11 @@ function hasCollisionAt(
   return false;
 }
 
-describe('Automated Scenario Regression Harness (17 Curated Scenarios)', () => {
+describe('Automated Scenario Regression Harness (58 Curated Scenarios)', () => {
   const grid = createTestGrid();
 
-  it('contains exactly 17 curated scenarios', () => {
-    expect(TEST_SCENARIOS.length).toBe(17);
+  it('contains exactly 58 curated global scenarios', () => {
+    expect(TEST_SCENARIOS.length).toBe(58);
   });
 
   // =========================================================================
@@ -548,7 +548,7 @@ describe('Automated Scenario Regression Harness (17 Curated Scenarios)', () => {
   // 6. Regression Benchmark Speed & Threshold Invariance
   // =========================================================================
   describe('Regression Benchmark Performance & Threshold Sensitivity', () => {
-    it('executes full 17-scenario validation suite in under 500ms', () => {
+    it('executes full 58-scenario validation suite in under 500ms', () => {
       const t0 = performance.now();
       // Re-run the critical path of each scenario
       for (const scenario of TEST_SCENARIOS) {
