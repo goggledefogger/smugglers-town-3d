@@ -55,6 +55,7 @@ import { LoaderOverlay } from './ui/screens/LoaderOverlay.ts';
 import { RelocateBar } from './ui/screens/RelocateBar.ts';
 import { SettingsScreen } from './ui/screens/SettingsScreen.ts';
 import type { LobbyScreen } from './ui/screens/LobbyScreen.ts';
+import { isTypingInField } from './ui/controls.ts';
 import { applyThemeToDocument } from './core/theme.ts';
 
 const log = logger('app');
@@ -265,11 +266,11 @@ audioBtn?.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+  if (e.code === 'KeyM' && !e.repeat && !isTypingInField()) {
     audio.toggleMute();
     updateAudioUi();
   }
-  if (e.code === 'KeyH' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+  if (e.code === 'KeyH' && !e.repeat && !isTypingInField()) {
     audio.horn?.start();
   }
   if (game.matchPhase === 'countdown' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape')) {
@@ -279,6 +280,8 @@ window.addEventListener('keydown', (e) => {
 });
 
 window.addEventListener('keyup', (e) => {
+  // unguarded on purpose: a horn started outside a field must stop even when
+  // its keyup lands inside one (guarding can strand a blaring horn)
   if (e.code === 'KeyH') {
     audio.horn?.stop();
   }
@@ -705,11 +708,11 @@ window.addEventListener('keydown', (e) => {
     showDiagnostic = !showDiagnostic;
     diagEl.style.display = showDiagnostic ? 'flex' : 'none';
   }
-  if (e.code === 'F9' || (e.code === 'KeyE' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement))) {
+  if (e.code === 'F9' || (e.code === 'KeyE' && !e.repeat && !isTypingInField())) {
     cycleExperimentMode();
     e.preventDefault();
   }
-  if (e.code === 'KeyT' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+  if (e.code === 'KeyT' && !e.repeat && !isTypingInField()) {
     teleportToObstacle();
     e.preventDefault();
   }
