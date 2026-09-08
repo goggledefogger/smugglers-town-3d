@@ -35,22 +35,27 @@ export class GameRenderer {
   // last 1.5 s of frame times; the median ignores the hitches a mean does not
   private readonly frameWindow = new Float32Array(90);
   private frameCount = 0;
+  private dprCap = 1.5;
   private firstFrameMs = 0;
   private lastAdjustMs = -Infinity;
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
-    // On standard 1x displays (<=1.25): native 1:1 pixel mapping (1.0).
+    // On standard 1x displays (<=1.25): native 1:1 pixel mapping (or supersampled if dprCap > 1.5).
     // Minimum scale is 0.85 to maintain readability under extreme load.
     if (dpr <= 1.25) {
-      return { baseRatio: 1.0, minScale: 0.85 };
+      const baseRatio = this.dprCap > 1.5 ? Math.min(1.5, this.dprCap) : 1.0;
+      return { baseRatio, minScale: 0.85 };
     }
-    // High-DPI (Retina, mobile, 4K): 1.5x. Measured on an M1 Pro 14" driving
-    // Manhattan: 1.25 holds 120 Hz, 1.5 and 2.0 both hold a solid 60 Hz with
-    // no spikes, so 1.5 buys the sharper image for nothing visible; the tiers
-    // below take weaker GPUs down to 1.29 and 1.11.
-    const baseRatio = Math.min(dpr, 1.5);
+    // High-DPI (Retina, mobile, 4K): capped at dprCap (1.5 for balanced, 2.0 for native Retina, 2.5 for ultra)
+    const baseRatio = Math.min(dpr, this.dprCap);
     return { baseRatio, minScale: 0.72 };
+  }
+
+  setDprCap(cap: number): void {
+    if (this.dprCap === cap) return;
+    this.dprCap = cap;
+    this.handleResize();
   }
 
   constructor(deps: RendererDeps) {
@@ -177,7 +182,7 @@ export class GameRenderer {
   }
 
   get maxAnisotropy(): number {
-    return Math.min(this.renderer.capabilities.getMaxAnisotropy(), 4);
+    return Math.min(this.renderer.capabilities.getMaxAnisotropy(), 16);
   }
 
   /**

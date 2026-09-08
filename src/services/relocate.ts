@@ -6,7 +6,8 @@
 import { buildRealTerrain, type ElevationGrid } from '../core/terrain/RealTerrain.ts';
 import { loadMapsApi, geocode, fetchElevationGrid, fetchSatellite, satelliteUrl } from './maps/MapsApi.ts';
 import type { MatchMap } from '../net/protocol.ts';
-import { load3DTiles, type TileStreamer } from './tiles/Tileset.ts';
+import { load3DTiles, type TileStreamer, type Resolution3DMode } from './tiles/Tileset.ts';
+import { getResolutionProfile } from './tiles/resolutionProfiles.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import { logger } from '../app/log.ts';
 
@@ -21,6 +22,8 @@ export interface RelocateOptions {
   readonly apiKey: string;
   /** Renderer max anisotropy for tile textures. */
   readonly anisotropy?: number;
+  /** 3D resolution fidelity profile. */
+  readonly resolutionMode?: Resolution3DMode;
   /** Skip the geocode: a lobby already resolved this place for every player. */
   readonly at?: { readonly lat: number; readonly lon: number; readonly label: string };
   readonly onProgress: (message: string) => void;
@@ -72,11 +75,13 @@ export async function relocateTo(
   place: Extract<MatchMap, { kind: 'city' }>,
   apiKey: string,
   onProgress: (message: string) => void,
-  anisotropy?: number
+  anisotropy?: number,
+  resolutionMode?: Resolution3DMode
 ): Promise<RelocateResult> {
   return relocate({
     query: place.query, apiKey, onProgress,
     ...(anisotropy !== undefined ? { anisotropy } : {}),
+    ...(resolutionMode !== undefined ? { resolutionMode } : {}),
     at: { lat: place.lat, lon: place.lon, label: place.label }
   });
 }
@@ -118,25 +123,27 @@ export async function relocate(opts: RelocateOptions): Promise<RelocateResult> {
     tiles = await load3DTiles({
       lat, lon, apiKey, terrain,
       ...(opts.anisotropy !== undefined ? { anisotropy: opts.anisotropy } : {}),
+      ...(opts.resolutionMode !== undefined ? { resolutionMode: opts.resolutionMode } : {}),
       onProgress: (n, total) => onProgress(`Streaming 3D building tiles ${n}/${total}`)
     });
   } catch (e) {
     // the terrain still loads; the city just has no buildings to crash into
     log.warn('3D tiles failed, terrain only', e);
   }
-  // High-resolution satellite ground patches (Zoom 18, ~0.25m/px) stream outside
-  // 3D photogrammetry cities so the outskirts and rural areas have crisp imagery,
-  // while isTileCovered ensures no flat 2D patches drape over 3D bridges or city streets.
+  // High-resolution satellite ground patches stream outside and under 3D tiles,
+  // adapting zoom level (Zoom 18 / 19 / 20) to the selected fidelity profile.
+  const profile = getResolutionProfile(opts.resolutionMode ?? 'balanced');
   const groundStreamer = sat ? new GroundStreamer({
     apiKey,
     center: { lat, lon },
     heightfield: terrain.heightfield,
-    anisotropy: opts.anisotropy,
-    zoom: 18,
+    anisotropy: opts.anisotropy ?? profile.anisotropy,
+    zoom: profile.satelliteZoom,
+    maxPatches: profile.satelliteMaxPatches,
     isTileCovered: (wx, wz) => tiles?.hasTileNear(wx, wz, 350) ?? false
   }) : null;
   log.info('relocated', {
-    label, lat, lon, tiles: tiles?.tileCount ?? 0, ms: Date.now() - startedAt
+    label, lat, lon, tiles: tiles?.tileCount ?? 0, satZoom: profile.satelliteZoom, ms: Date.now() - startedAt
   });
   return { terrain, tiles, groundStreamer };
 }

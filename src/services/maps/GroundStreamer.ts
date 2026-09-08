@@ -47,16 +47,16 @@ export class GroundStreamer {
   private readonly apiKey: string;
   private readonly center: { lat: number; lon: number };
   private heightfield: Heightfield;
-  private readonly anisotropy: number;
-  private readonly zoom: number;
+  private anisotropy: number;
+  private zoom: number;
   private readonly keepRadiusUnits: number;
-  private readonly maxPatches: number;
+  private maxPatches: number;
   private readonly isTileCovered?: ((wx: number, wz: number) => boolean) | undefined;
   /** Stream under 3D tiles too: the clutter filter's hidden mode shows the ground beneath them. */
   underTiles = false;
 
   private readonly cosLat: number;
-  readonly tileSizeUnits: number;
+  tileSizeUnits: number;
 
   private readonly patches = new Map<string, LoadedPatch>();
   private readonly inFlightKeys = new Set<string>();
@@ -83,6 +83,36 @@ export class GroundStreamer {
 
   get patchCount(): number {
     return this.patches.size;
+  }
+
+  get activeZoom(): number {
+    return this.zoom;
+  }
+
+  /**
+   * Switch the streaming ground satellite zoom level (e.g. Zoom 18 -> 19 -> 20).
+   * Automatically clears existing patches and recalculates cell spans.
+   */
+  setZoom(zoom: number, maxPatches?: number, anisotropy?: number): void {
+    if (this.zoom === zoom && (!maxPatches || this.maxPatches === maxPatches)) return;
+    this.zoom = zoom;
+    if (maxPatches) this.maxPatches = maxPatches;
+    if (anisotropy) this.anisotropy = anisotropy;
+    this.tileSizeUnits = (5 * Math.PI * EARTH_RADIUS_M * this.cosLat) / Math.pow(2, this.zoom) * WORLD_M_PER_M;
+    for (const p of this.patches.values()) {
+      this.group.remove(p.mesh);
+      p.mesh.geometry.dispose();
+      const mat = p.mesh.material as MeshStandardMaterial;
+      mat.map?.dispose();
+      mat.dispose();
+    }
+    this.patches.clear();
+    this.inFlightKeys.clear();
+    log.info('ground satellite zoom updated', {
+      zoom: this.zoom,
+      maxPatches: this.maxPatches,
+      tileSizeM: Number(this.tileSizeUnits.toFixed(1))
+    });
   }
 
   dispose(): void {
@@ -155,9 +185,10 @@ export class GroundStreamer {
     let bestCol = 0, bestRow = 0;
     let bestWx = 0, bestWz = 0;
 
-    // Check a 3x3 ring of neighborhood patches around the player
-    for (let dr = -1; dr <= 1; dr++) {
-      for (let dc = -1; dc <= 1; dc++) {
+    // Check a ring of neighborhood patches matching keepRadiusUnits around the player
+    const searchRadius = Math.min(4, Math.max(1, Math.ceil(this.keepRadiusUnits / this.tileSizeUnits)));
+    for (let dr = -searchRadius; dr <= searchRadius; dr++) {
+      for (let dc = -searchRadius; dc <= searchRadius; dc++) {
         const c = centerCol + dc;
         const r = centerRow + dr;
         const key = `${this.zoom}:${c}:${r}`;
@@ -169,6 +200,7 @@ export class GroundStreamer {
         if (!this.underTiles && this.isTileCovered?.(cellWx, cellWz)) continue;
 
         const dist = Math.hypot(cellWx - playerWorld.x, cellWz - playerWorld.z);
+        if (dist > this.keepRadiusUnits) continue;
         if (dist < bestDist) {
           bestDist = dist;
           bestKey = key;
@@ -244,7 +276,7 @@ export class GroundStreamer {
     tex.minFilter = LinearMipmapLinearFilter;
     tex.magFilter = LinearFilter;
     tex.generateMipmaps = true;
-    tex.anisotropy = Math.min(this.anisotropy, 4);
+    tex.anisotropy = Math.min(this.anisotropy, 16);
     tex.needsUpdate = true;
 
     const segs = 16;
