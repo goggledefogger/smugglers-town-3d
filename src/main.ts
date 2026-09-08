@@ -266,14 +266,17 @@ audioBtn?.addEventListener('click', () => {
 });
 
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'KeyM' && !e.repeat && !isTypingInField()) {
+  // bare keys only: Cmd/Ctrl/Alt chords are the browser's (Cmd+M minimize,
+  // Cmd+H hide), so don't fire game hotkeys on them
+  const bareKey = !e.metaKey && !e.ctrlKey && !e.altKey;
+  if (e.code === 'KeyM' && bareKey && !e.repeat && !isTypingInField()) {
     audio.toggleMute();
     updateAudioUi();
   }
-  if (e.code === 'KeyH' && !e.repeat && !isTypingInField()) {
+  if (e.code === 'KeyH' && bareKey && !e.repeat && !isTypingInField()) {
     audio.horn?.start();
   }
-  if (game.matchPhase === 'countdown' && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape')) {
+  if (game.matchPhase === 'countdown' && bareKey && !isTypingInField() && (e.code === 'Space' || e.code === 'Enter' || e.code === 'Escape')) {
     skipCinematic();
     e.preventDefault();
   }
@@ -493,6 +496,9 @@ events.on('match:win', ({ team }) => {
 });
 events.on('location:changed', ({ label }) => {
   bannerEl.show(`RELOCATED: ${label}`, 2500);
+  // the garage shows where the next match plays; the banner alone is hidden
+  // behind the intro panel (z 25 < 40)
+  if (introEl.isConnected) introEl.locationLabel = label;
 });
 
 // ---- screens wiring ----
@@ -664,12 +670,17 @@ relocateBarEl.onSearch = async (q, key) => {
     }
     swapTerrainMesh(terrain);
     if (tiles) attachTiles(tiles, terrain);
-    startMatch(terrain);
-    events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
     if (introEl.isConnected) {
+      // garage: adopt the terrain without spawning — it becomes the backdrop
+      // behind the showroom, and START ENGINE plays the match on it
+      game.adoptTerrain(terrain);
+      prepareTerrain(terrain);
+      game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
+      events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
+    } else {
+      startMatch(terrain);
+      events.emit('location:changed', { label: terrain.label, isReal: terrain.isReal });
       showroom.dispose();
-      introEl.remove();
-      uiHandler = null;
       hudEl.hidden = false;
       pickups.setVisible(true);
     }
@@ -708,11 +719,15 @@ window.addEventListener('keydown', (e) => {
     showDiagnostic = !showDiagnostic;
     diagEl.style.display = showDiagnostic ? 'flex' : 'none';
   }
-  if (e.code === 'F9' || (e.code === 'KeyE' && !e.repeat && !isTypingInField())) {
+  // letter hotkeys are bare keys: any of Cmd/Ctrl/Alt held means the
+  // keystroke belongs to the browser (Cmd+R reload, Cmd+Shift+R hard reload),
+  // so neither fire the hotkey nor preventDefault it
+  const bareKey = !e.metaKey && !e.ctrlKey && !e.altKey;
+  if (e.code === 'F9' || (e.code === 'KeyE' && bareKey && !e.repeat && !isTypingInField())) {
     cycleExperimentMode();
     e.preventDefault();
   }
-  if (e.code === 'KeyT' && !e.repeat && !isTypingInField()) {
+  if (e.code === 'KeyT' && bareKey && !e.repeat && !isTypingInField()) {
     teleportToObstacle();
     e.preventDefault();
   }
@@ -845,12 +860,9 @@ if (urlParams) {
     const activeKey = urlKey || localStorage.getItem('gmap_key') || '';
     if (activeKey) {
       setTimeout(() => {
-        if (relocateBarEl.onSearch) {
-          if (introEl.isConnected) {
-            introEl.onStart?.(targetScenario?.recommendedVehicleType ?? 0);
-          }
-          relocateBarEl.onSearch(targetCoords, activeKey);
-        }
+        // a deep link relocates into the garage backdrop — START ENGINE (or a
+        // game already in progress) plays from there; no forced match start
+        relocateBarEl.onSearch?.(targetCoords, activeKey);
       }, 400);
     } else {
       setTimeout(() => {

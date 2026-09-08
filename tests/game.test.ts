@@ -263,3 +263,25 @@ describe('Game line of sight', () => {
     expect(t).toBeLessThan(0.72);
   });
 });
+
+describe('Game terrain adoption (garage relocate)', () => {
+  it('adopts a terrain without spawning: vehicles, phase and match state untouched', () => {
+    const { game } = makeGame();
+    const before = game.vehicles.length;
+    expect(before).toBeGreaterThan(0);
+    const other = createDesertTerrain(new Heightfield(840, 1, new Float32Array([0, 0, 0, 0])));
+    game.adoptTerrain(other);
+    // adoption is purely a swap of what the next match plays on
+    expect(game.terrainProvider).toBe(other);
+    expect(game.vehicles.length).toBe(before);
+    expect(game.matchPhase).toBe('playing');
+  });
+
+  it('the next reset plays on the adopted terrain', () => {
+    const { game } = makeGame();
+    const other = createDesertTerrain(new Heightfield(840, 1, new Float32Array([0, 0, 0, 0])));
+    game.adoptTerrain(other);
+    game.reset(game.terrainProvider);
+    expect(game.terrainProvider).toBe(other);
+  });
+});
