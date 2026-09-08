@@ -140,16 +140,16 @@ export const TEST_SCENARIOS: readonly TestScenario[] = [
     recommendedVehicleType: 4 // coupe
   },
   {
-    id: 'broadway_financial',
-    name: 'Broadway & Wall St, NY',
+    id: 'pudong_lujiazui_shanghai',
+    name: 'Pudong & Shanghai Tower, China',
     category: 'dense_city',
     categoryLabel: '🏙️ Dense 3D Cities',
-    lat: 40.7075,
-    lon: -74.0113,
-    label: 'Broadway & Wall St, New York, NY',
-    description: 'Historical financial district with narrow diagonal streets and high-rise facades.',
-    testFocus: 'Diagonal street orientation cutting across 10m grid; narrow lane navigation without corner snags.',
-    recommendedVehicleType: 0 // buggy
+    lat: 31.2397,
+    lon: 121.5000,
+    label: 'Century Avenue & Lujiazui Ring, Pudong, Shanghai, China',
+    description: 'Futuristic financial district featuring the 632m Shanghai Tower, Jin Mao Tower, and circular pedestrian skybridge.',
+    testFocus: 'Super-tall skyscraper colliders; multi-lane roundabout rings; circular elevated pedestrian skyway.',
+    recommendedVehicleType: 4 // coupe
   },
   {
     id: 'french_quarter_nola',
@@ -596,28 +596,28 @@ export const TEST_SCENARIOS: readonly TestScenario[] = [
 
   // ---- 8. Shoreline & Waterfront Interfaces ----
   {
-    id: 'battery_park_seawall',
-    name: 'Battery Park Seawall, NY',
+    id: 'sydney_opera_house',
+    name: 'Sydney Opera House, Australia',
     category: 'coast_interface',
     categoryLabel: '🌊 Shoreline & Interfaces',
-    lat: 40.7033,
-    lon: -74.0170,
-    label: 'Battery Park & Harbor Seawall, New York, NY',
-    description: 'Southern tip of Manhattan where dense urban park and promenade meet NY Harbor.',
-    testFocus: '3D photogrammetry seawall meeting water; zero floating drape sheets over harbor water.',
+    lat: -33.8568,
+    lon: 151.2153,
+    label: 'Bennelong Point & Circular Quay, Sydney, Australia',
+    description: 'Famous multi-venue performing arts centre with iconic sail roofs protruding into Sydney Harbour.',
+    testFocus: 'Curved shell geometric colliders; harbor apron promenade meeting deep water; passenger ferry wharves.',
     recommendedVehicleType: 4 // coupe
   },
   {
-    id: 'central_park_north',
-    name: 'Central Park Interface, NY',
+    id: 'the_bund_shanghai',
+    name: 'The Bund & Huangpu River, China',
     category: 'coast_interface',
     categoryLabel: '🌊 Shoreline & Interfaces',
-    lat: 40.7967,
-    lon: -73.9554,
-    label: 'Central Park North & Harlem Meer, New York, NY',
-    description: 'Immediate transition from 100m+ dense residential high-rises to open parkland and water.',
-    testFocus: 'Sharp interface between 3D photogrammetry city blocks and open park terrain; perimeter alignment.',
-    recommendedVehicleType: 2 // pickup
+    lat: 31.2400,
+    lon: 121.4900,
+    label: 'Zhongshan East 1st Rd & The Bund Promenade, Shanghai, China',
+    description: 'Historic waterfront boulevard with 1920s European colonial architecture facing the modern Pudong skyline across the river.',
+    testFocus: 'Seawall embankment promenade driving; wide multi-lane boulevard running parallel to riverfront.',
+    recommendedVehicleType: 1 // muscle
   },
   {
     id: 'copacabana_beach_rio',

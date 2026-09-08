@@ -259,7 +259,7 @@ describe('Automated Scenario Regression Harness (58 Curated Scenarios)', () => {
       }
     });
 
-    it('broadway_financial: contiguous building blocks have 0m interior gap and zero cracks', () => {
+    it('pudong_lujiazui: contiguous building blocks have 0m interior gap and zero cracks', () => {
       const top = new Float32Array(N * N).fill(0);
       const low = new Float32Array(N * N).fill(0);
       const terrain = new Float32Array(N * N).fill(0);
@@ -496,7 +496,7 @@ describe('Automated Scenario Regression Harness (58 Curated Scenarios)', () => {
   // 5. Urban-to-Nature & Coastline Interfaces
   // =========================================================================
   describe('Category 5: Urban-to-Nature & Coastline Interfaces', () => {
-    it('battery_park_seawall: promenade edge to water does not produce false walls in water', () => {
+    it('sydney_opera_house: promenade edge to water does not produce false walls in water', () => {
       const top = new Float32Array(N * N);
       const low = new Float32Array(N * N);
       const terrain = new Float32Array(N * N);
@@ -517,7 +517,7 @@ describe('Automated Scenario Regression Harness (58 Curated Scenarios)', () => {
       expect(colliders).toHaveLength(0);
     });
 
-    it('central_park_north: sharp 1-cell step from 100m towers terminates cleanly without spilling onto park', () => {
+    it('the_bund_shanghai: sharp 1-cell step from 100m towers terminates cleanly without spilling onto park or promenade', () => {
       const top = new Float32Array(N * N).fill(0);
       const low = new Float32Array(N * N).fill(0);
       const terrain = new Float32Array(N * N).fill(0);
