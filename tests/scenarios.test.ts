@@ -8,8 +8,8 @@ import {
 } from '../src/core/geo/testScenarios.ts';
 
 describe('TEST_SCENARIOS catalog', () => {
-  it('contains at least 10 diverse scenarios', () => {
-    expect(TEST_SCENARIOS.length).toBeGreaterThanOrEqual(10);
+  it('contains at least 50 diverse global scenarios', () => {
+    expect(TEST_SCENARIOS.length).toBeGreaterThanOrEqual(50);
   });
 
   it('has unique IDs for every scenario', () => {
@@ -34,20 +34,28 @@ describe('TEST_SCENARIOS catalog', () => {
       expect(s.label.trim().length).toBeGreaterThan(0);
       expect(s.testFocus.trim().length).toBeGreaterThan(0);
       expect(s.categoryLabel.trim().length).toBeGreaterThan(0);
+      if (s.recommendedVehicleType !== undefined) {
+        expect(s.recommendedVehicleType).toBeGreaterThanOrEqual(0);
+        expect(s.recommendedVehicleType).toBeLessThanOrEqual(5);
+      }
     }
   });
 
-  it('covers all five required testing scenario categories', () => {
+  it('covers all nine required testing scenario categories with multiple locations each', () => {
     const requiredCategories: ScenarioCategory[] = [
       'bridge_water',
       'dense_city',
       'open_ground',
       'steep_slope',
-      'coast_interface'
+      'coast_interface',
+      'racing_circuits',
+      'historic_landmarks',
+      'mountain_passes',
+      'islands_waterways'
     ];
     for (const cat of requiredCategories) {
       const matches = TEST_SCENARIOS.filter(s => s.category === cat);
-      expect(matches.length).toBeGreaterThanOrEqual(2);
+      expect(matches.length).toBeGreaterThanOrEqual(4);
     }
   });
 });
