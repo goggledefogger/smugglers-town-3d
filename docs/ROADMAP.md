@@ -183,15 +183,35 @@ the wrong one.**
   - **Street Preservation vs Rooftops:** Ground-elevation filtering prunes elevated rooftops while preserving ground-level road ribbons (11k+ polygons across 1.3 km).
   - **Production Conclusion:** Raw photogrammetry triangle soup inherently contains gaps caused by tree canopies, shadows, power lines, and steep curbs, while driveways and plazas can get falsely marked drivable. The vector road corridor hybrid (OSM) on `main` remains substantially more reliable for gameplay navigation because it provides human-curated road topology. Recast work is safely preserved on `spike/recast-navmesh` for future reference.
 
-- **Vector Road Hybrid (OSM / Overpass API) — Done.**
+- **Vector Road Hybrid (OSM / Overpass API) — Done & Hardened.**
   Merged on `main` in `services/osm/roads.ts`. Queries OpenStreetMap for drivable
-  `highway` centrelines, rasterized onto the 10 m grid to exempt streets from false
+  `highway` centrelines, rasterized onto the grid to exempt streets from false
   building classification on hill crests, with ground heightfield pinned to the
   road surface. SF Russian Hill largest connected open region jumped from 4.4% to
   45.5% (disconnected pockets reduced from 1,229 to 380). Bounded to 1.5 s startup
   with async worker rebuilds.
-  *Long-term*: Recast remains the target to eliminate external network dependencies
-  and 10 m quantization.
+  - **Browser W3C Header Fix:** Removed forbidden `'User-Agent'` header that caused
+    silent Overpass fetch aborts in Chrome/Brave.
+  - **Bounding Box Fix:** Expanded raster cell search box from `halfWidth` to total
+    `reach` (`halfWidth + cellSize * 0.85`), preventing diagonal/curved road segments
+    from dropping curbside cells.
+  - **Reactive Background Rebuild (`onRoadsLoaded`):** Rebuilds colliders dynamically
+    as soon as Overpass returns, preventing initial match colliders from blocking
+    streets during network latency.
+
+- **Empirical Road Corridor Experiments & Sub-Lane Resolution (2026-09):**
+  Investigated false building colliders ("black objects") blocking drivable streets
+  in Game 3D. Diagnosed two primary root causes:
+  1. *10 m Quantization Bleed*: 10 m cells are wider than residential road lanes
+     (6–8 m), causing roadside facades and fences to mark the entire lane as a building.
+  2. *2.5D Elevation Extrusion*: Street trees and overhanging eaves get extruded
+     downward into solid black columns in the street.
+  Four in-engine experiment modes were implemented and validated through live test drives:
+  - **Mode 0 (Baseline 10m)**: Recreated the bug; vehicle crashes directly into the black box.
+  - **Mode 1 (Road-Carve OSM)**: Completely clears the roadway corridor; best gameplay solution with semantic ground truth.
+  - **Mode 2 (Curbside-Inset 2.4m)**: Insetting shrinks obstacle boxes by ~2.8m, but an isolated pillar remains standing in the street. Proves geometric insetting alone cannot distinguish an isolated tree canopy from a building corner.
+  - **Mode 3 (High-Res 5m Grid)**: 5m sub-lane grid resolution prevents canopy bleed into the lane and completely opens the street 100% offline without external network queries.
+  *Diagnostic Harness*: `F9` / `E` cycles experiment modes live in the HUD; `T` teleports directly to the benchmark obstacle test site (`X:290, Z:12`).
 
 - **Automated Scenario Regression Harness — done, but synthetic.**
   `tests/scenarios.harness.test.ts` runs all 17 curated scenarios in under

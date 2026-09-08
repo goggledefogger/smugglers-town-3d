@@ -22,6 +22,7 @@ import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
 import { AudioManager } from './audio/AudioManager.ts';
+import { Vector3 } from 'three';
 
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
@@ -37,7 +38,7 @@ import { logger } from './app/log.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
-import { AmortizedGroundBuilder } from './services/tiles/tileColliders.ts';
+import { AmortizedGroundBuilder, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
 import { worldToLl } from './core/geo/projection.ts';
@@ -194,6 +195,14 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     groundStreamer.useHeightfield(terrain.heightfield);
     groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   }
+  if (currentExperiment !== 'baseline') {
+    streamer.setExperimentMode(currentExperiment);
+  }
+  streamer.onRoadsLoaded = () => {
+    log.info('OSM roads arrived in background, refreshing colliders');
+    refreshColliders();
+    showToast('OSM Road Mask Loaded: Road Corridors Carved');
+  };
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.onTileLoaded = g => {
@@ -696,6 +705,110 @@ window.addEventListener('keydown', (e) => {
     showDiagnostic = !showDiagnostic;
     diagEl.style.display = showDiagnostic ? 'flex' : 'none';
   }
+  if (e.code === 'F9' || (e.code === 'KeyE' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement))) {
+    cycleExperimentMode();
+    e.preventDefault();
+  }
+  if (e.code === 'KeyT' && !e.repeat && !(e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement)) {
+    teleportToObstacle();
+    e.preventDefault();
+  }
+});
+
+// ---- Driving Experiments (Road Clearance & Building Collider Fidelity) ----
+const EXPERIMENT_MODES: readonly ColliderExperimentMode[] = [
+  'baseline',
+  'road_carve',
+  'curbside_inset',
+  'high_res'
+];
+
+let currentExperiment: ColliderExperimentMode = 'baseline';
+const expParam = urlParams?.get('colliderExp') as ColliderExperimentMode | null;
+if (expParam && EXPERIMENT_MODES.includes(expParam)) {
+  currentExperiment = expParam;
+}
+
+function experimentLabel(mode: ColliderExperimentMode): string {
+  switch (mode) {
+    case 'baseline': return 'Baseline (10m)';
+    case 'road_carve': return 'Road-Carve (OSM)';
+    case 'curbside_inset': return 'Curbside-Inset (2.4m)';
+    case 'high_res': return 'High-Res 5m Grid';
+  }
+}
+
+function experimentDescription(mode: ColliderExperimentMode): string {
+  switch (mode) {
+    case 'baseline': return '10m grid, 1.0m inset (reproduces road obstruction)';
+    case 'road_carve': return 'OSM Overpass reactive rebuild + 0.85 reach clearance corridor';
+    case 'curbside_inset': return '2.4m exterior street insetting (100% offline-safe)';
+    case 'high_res': return '5m sub-lane grid resolution (fine-grained geometry)';
+  }
+}
+
+const toastEl = document.createElement('div');
+toastEl.id = 'exp-toast';
+toastEl.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(15,23,42,0.94);backdrop-filter:blur(10px);border:1px solid #38bdf8;border-radius:8px;padding:8px 18px;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:#f1f5f9;box-shadow:0 8px 30px rgba(0,0,0,0.6);transition:opacity 0.3s ease, transform 0.3s ease;pointer-events:none;opacity:0;';
+document.body.appendChild(toastEl);
+let toastTimer: ReturnType<typeof setTimeout> | null = null;
+
+function showToast(msg: string): void {
+  toastEl.textContent = msg;
+  toastEl.style.opacity = '1';
+  toastEl.style.transform = 'translateX(-50%) translateY(0)';
+  if (toastTimer) clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => {
+    toastEl.style.opacity = '0';
+    toastEl.style.transform = 'translateX(-50%) translateY(8px)';
+  }, 3500);
+}
+
+function setExperiment(mode: ColliderExperimentMode): void {
+  currentExperiment = mode;
+  if (tiles) {
+    tiles.setExperimentMode(mode);
+    if (clutterFilter) {
+      clutterFilter.updateStructureGrid(tiles.structureGrid, tiles.grid.n);
+    }
+    applyColliders();
+  }
+  showToast(`[EXP: ${experimentLabel(mode)}] ${experimentDescription(mode)}`);
+}
+
+function cycleExperimentMode(): void {
+  const idx = EXPERIMENT_MODES.indexOf(currentExperiment);
+  const next = EXPERIMENT_MODES[(idx + 1) % EXPERIMENT_MODES.length]!;
+  setExperiment(next);
+}
+
+function teleportToObstacle(): void {
+  const player = world.player;
+  if (!player) return;
+  const targetX = 290;
+  const targetZ = 12;
+  const hf = world.terrainProvider.heightfield;
+  const targetY = (tiles ? tiles.surfaceElevation(targetX, targetZ, 15, hf.sample(targetX, targetZ)) : null)
+    ?? (hf.sample(targetX, targetZ) + 1.2);
+
+  player.body.pos.set(targetX, targetY, targetZ);
+  player.body.vel.set(0, 0, 0);
+  player.body.angVel.set(0, 0, 0);
+  player.body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -Math.PI / 2);
+  player.body.snapPrev();
+  cameraRig.skipIntro(player.body);
+  cameraRig.snap(player.body);
+  showToast('Teleported in front of St. Johns Bridge road test spot (X:290, Z:12)');
+}
+
+diagEl.addEventListener('click', (e) => {
+  const target = e.target as HTMLElement | null;
+  if (!target) return;
+  if (target.id === 'exp-toggle-btn' || target.closest('#exp-toggle-btn')) {
+    cycleExperimentMode();
+  } else if (target.id === 'exp-teleport-btn' || target.closest('#exp-teleport-btn')) {
+    teleportToObstacle();
+  }
 });
 
 // ---- URL test scenarios / deep linking (?scenario=<id> | ?lat=<lat>&lon=<lon> | ?key=<apiKey>) ----
@@ -789,6 +902,13 @@ function frame(now: number): void {
         ${isUnder ? `⚠️ UNDERGROUND (${Math.abs(diff).toFixed(1)}m)` : `✅ ON SURFACE (Δ ${diff.toFixed(2)}m)`}
       </span>
       <span>Tiles: ${tiles ? `${tiles.tileCount} active` : 'off'}</span>
+      <span style="color:${tiles?.hasRoadGrid ? '#38bdf8' : '#eab308'};font-weight:600;">OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}</span>
+      <button id="exp-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #38bdf8;color:#38bdf8;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
+        EXP: ${experimentLabel(currentExperiment)} [F9]
+      </button>
+      <button id="exp-teleport-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #a855f7;color:#c084fc;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
+        Teleport [T]
+      </button>
     `;
   }
 

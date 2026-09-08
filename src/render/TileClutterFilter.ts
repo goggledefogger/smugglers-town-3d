@@ -181,6 +181,13 @@ export class TileClutterFilter {
     this.uMask.value.needsUpdate = true;
   }
 
+  /** Update structure mask buffer and dimensions (e.g. when switching grid resolution). */
+  updateStructureGrid(cells: Uint8Array, n: number): void {
+    if (cells.length !== n * n) throw new Error(`structure mask length ${cells.length} != n^2 ${n * n}`);
+    this.uMask.value.dispose();
+    this.uMask.value = maskTexture(cells, n);
+  }
+
   /** Patch every material under `root`; safe to call again, already-patched materials are skipped. */
   patch(root: Object3D): void {
     root.traverse(obj => {

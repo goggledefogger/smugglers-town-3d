@@ -35,6 +35,7 @@ the garage's **Controls** screen.
 | `W` `S` in the air | Pitch the nose down / up |
 | `R` | Reset your car nearby |
 | `C` | Camera: chase, wide, hood |
+| `V` | View mode: Real 3D tiles vs Game 3D colliders |
 | `1`–`5` | Change vehicle mid-match |
 
 Gamepad defaults are mapped from the original game's PS2 controller onto the
@@ -100,7 +101,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (445 tests, plain node) |
+| `npm test` | Test suite (451 tests, plain node) |
 | `npm run test:watch` | The same, re-running as you edit |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run smoke:gamepad` | Headless gamepad E2E test with simulated Bluetooth Stadia controller |
@@ -109,6 +110,17 @@ Truck between two towers if you try.
 | `npm run build` | Typecheck and build to `dist/` |
 | `npm run serve` | Build and serve through the Firebase emulator, as hosting will |
 | `npm run deploy` | Build and ship to Firebase Hosting |
+
+### Diagnostics & Collider Experiments
+
+When testing building and road collider generation in real-world locations (e.g. St. Johns Bridge area in Portland or Russian Hill in SF):
+- `V`: Switch between **Real 3D** (photorealistic tiles) and **Game 3D** (instanced physical collider boxes and ground mesh) to visually diagnose any discrepancies between visible roads and physical collisions.
+- `F9` or `E` (or HUD button): Cycle live collider experiment modes:
+  - **Mode 0: Baseline (10m)** — Standard 10m grid without OSM corridor carving (reproduces false obstacles).
+  - **Mode 1: Road-Carve (OSM)** — Reactive Overpass road carving with reach padding (opens street corridors).
+  - **Mode 2: Curbside-Inset (2.4m)** — Geometric exterior building retraction.
+  - **Mode 3: High-Res 5m Grid** — Sub-lane 5m voxelization (eliminates curbside canopy bleed offline).
+- `T` (or HUD button): Instantly teleports the vehicle to the benchmark road obstruction test site (`X:290, Z:12`), skipping the camera sweep and aligning the car down the street.
 
 ```
 src/

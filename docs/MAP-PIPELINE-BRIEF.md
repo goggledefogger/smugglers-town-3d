@@ -202,20 +202,44 @@ Implemented in `services/osm/roads.ts` and integrated with `tileColliders.ts` an
 - **Critical Ground Heightfield Fix:**
   Initial implementation exempted road cells from building boxes but left `AmortizedGroundBuilder` sagging by up to 17 m at hill crests, dropping the vehicle heightfield underground. Fixed by pinning road-cell ground directly to `Math.min(top, low)`.
 - **Highway Sanitization:** Non-drivable footpaths, steps, and pedestrian ways are filtered out to prevent walkways from coring out building lobbies.
-- **Known Limitations:** Network latency (mitigated by a 1.5 s startup timeout with async background rebuild) and public Overpass rate-limit constraints.
+- **Critical Browser Fetch & Bounding Box Fixes (2026-09):**
+  1. **Bounding Box Clipping in `rasterizeRoads`:** Segment grid-search bounding boxes previously used `halfWidth` rather than the total corridor `reach` (`halfWidth + grid.cellSize * 0.85`), which clipped segment bounding boxes and skipped outer roadside cells along diagonal and curving streets. Fixed to search all cells within `reach`.
+  2. **W3C Forbidden Header Removal:** `roads.ts` previously attempted to set `'User-Agent': 'SmugglersTown3D/1.0'`, which browsers refuse to set (`Refusal to set unsafe header "User-Agent"`), causing fetch aborts in Chrome and Brave. Removed to use standard browser HTTP headers.
+  3. **Reactive Collider Refresh (`onRoadsLoaded`):** Synchronous match start generated initial colliders before Overpass returned (or if Overpass had latency), leaving obstacles uncarved if the user drove immediately. Added `Tileset.onRoadsLoaded` callback which automatically triggers an asynchronous worker rebuild (`refreshColliders()`) the instant Overpass road data completes downloading.
 
-### B. Recast Navigation Spike (`spike/recast-navmesh`)
+### B. Curbside Canopy Bleed & The 4 Driving Experiments
+
+A critical discrepancy was investigated: why does photorealistic 3D (Real 3D) show a clean drivable asphalt road, but the Game 3D collider view renders black boxes blocking the road?
+
+#### Root Causes Identified:
+1. **10 m Grid Quantization:** A 10 m cell is wider than residential vehicle lanes (6–8 m). If a building facade, porch, fence, or curbside tree canopy overlaps even 10% of a 10 m cell, the entire cell is rasterized with a high `top` elevation and marked as a solid building.
+2. **2.5D DSM Extrusion of Overhanging Foliage:** Top-down rasterization projects tree branches and utility wires hanging over the curb down to ground level as solid vertical volumes, generating solid black obstacle columns standing directly in the street.
+3. **OSM Overpass Availability & Gaps:** When Overpass requests are delayed, blocked, or not yet completed, the fallback pipeline is exposed to raw quantization and canopy extrusion.
+
+#### Empirical Results from Live Driving Experiments:
+An in-engine diagnostic suite was built into `tileColliders.ts` and `main.ts` (cycled live via `F9` / `E`, with `T` for instant teleport to the obstacle site at `X:290, Z:12` in St. Johns, Portland):
+
+| Experiment Mode | Mechanism | Live Driving Result | Verdict |
+|---|---|---|---|
+| **Mode 0: Baseline (10m)** | Standard 10m grid, no OSM carve (control reference). | Car drives forward and **crashes directly into a solid black box** in the lane. | Confirms and reproduces the bug. |
+| **Mode 1: Road-Carve (OSM)** | Reactive Overpass arrival + widened 0.85-cell reach padding + bounding box fix. | **Obstacle is completely erased** from the street; road is 100% open and drivable. | **Best gameplay solution** when OSM data is available. |
+| **Mode 2: Curbside-Inset (2.4m)** | Inset building colliders by 2.4 m away from open street faces (offline geometric fix). | Shrunk the obstacle width by ~2.8 m, but **an isolated pillar remained standing in the road**. | Insetting shrinks building corners, but cannot remove isolated tree canopy cells. |
+| **Mode 3: High-Res 5m Grid** | Double spatial grid resolution to 5 m cells (sub-lane granularity). | **Road completely opens up!** Car drives cleanly through the lane. | **Best offline solution**: eliminates canopy bleed at the curb without network calls. |
+
+### C. Recast Navigation Spike (`spike/recast-navmesh`)
 - **Status:** Spike evaluated, findings documented, and branch preserved.
   - **Transform & Snapping:** World coordinate matrices refreshed before vertex extraction; spawn point reliably snapped to pavement across steep grades and datum shifts.
   - **Rooftop Pruning vs Street Preservation:** Multi-island elevation filtering prunes elevated rooftops while preserving ground-level street ribbons (11k+ polygons across 1.3 km).
   - **Verdict & Production Decision:** Raw photogrammetry triangle soup inherently contains gaps caused by tree canopies, shadows, power lines, and steep curbs, while driveways and plazas can get falsely marked drivable. The vector road corridor hybrid (OSM) on `main` remains substantially more reliable for gameplay navigation because it provides human-curated road topology. Recast work is safely preserved on `spike/recast-navmesh` for future reference (e.g. multi-deck bot pathfinding).
 
-### C. Other Options
+### D. Other Options
 - **GPU rasterization of the surface model:** Rendering tiles top-down orthographic into a depth texture for 1 m surface data.
 - **Cloth Simulation Filter (CSF):** Standard point-cloud ground filter, though prone to loss of ground adhesion on rising terrain.
 
-## 10. Verification Coordinates
+## 10. Verification Coordinates & Diagnostic Shortcuts
 
 - **Russian Hill (SF):** `?lat=37.79344&lon=-122.42127&debug` (Press `V` for Game 3D collider view).
 - **Lombard Street (SF):** `?scenario=lombard_street_sf&debug` (Steep 27% hairpin switchbacks).
 - **French Quarter (NOLA):** `?scenario=french_quarter_nola&debug` (Sea-level dense low-rise grid).
+- **St. Johns Obstacle Test Site (Portland):** `?lat=45.58969&lon=-122.76238&debug` (Press `T` to teleport to `X:290, Z:12`; press `F9` or `E` to cycle experiment modes).
+

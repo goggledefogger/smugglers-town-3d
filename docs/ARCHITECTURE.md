@@ -382,9 +382,12 @@ From this raster, two physical surfaces are extracted:
 4. **OSM Road Corridors (`services/osm/roads.ts`)**: In hilly cities, morphological
    opening sags by up to 17 m across crests, misclassifying streets as buildings.
    Drivable OpenStreetMap road centrelines fetched via Overpass are rasterized
-   into a 10 m `roadMask` grid. Road cells are exempt from building classification,
-   and their driving ground height in `AmortizedGroundBuilder` is pinned directly
-   to the true surface (`Math.min(top, low)`) rather than the sagging estimate.
+   into a `roadMask` grid with reach-aware bounding box clearance (`halfWidth + cellSize * 0.85`).
+   Road cells are exempt from building classification, and their driving ground height in
+   `AmortizedGroundBuilder` is pinned directly to the true surface (`Math.min(top, low)`)
+   rather than the sagging estimate. An asynchronous event (`onRoadsLoaded`) dynamically
+   rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
+   driving corridors carve out seamlessly without delaying match start.
 
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
@@ -434,8 +437,8 @@ patterns:
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
 | **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
-| **D. Slope-Adaptive Morphology** *(GIS / PMF Standard)* | Scale morphological building thresholds with terrain gradient ($\text{rise} = \text{base} + s \cdot \tan\theta$). | Would unify flat and steep cities without rule branching, if slope were the driver. | Opening is exact on a constant grade, so slope is the wrong variable: measured residual moves 0.32-1.67 m across the slope range but 0.17-4.87 m across curvature. | **Disproven.** See `MAP-PIPELINE-BRIEF.md`; `slopeAdaptiveRiseCoeff` is declared and never read. |
-| **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Candidate for v2 relocation**. |
+| **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.85 reach padding. |
+| **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 
 ## UI notes
 
