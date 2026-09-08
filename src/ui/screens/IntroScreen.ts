@@ -61,6 +61,8 @@ export class IntroScreen extends LitElement {
     .pick { position:absolute; left:28px; top:6px; }
     .pick h2 { font-family:'Russo One',sans-serif; font-size:clamp(24px,3.2vw,36px); margin:0; text-shadow:0 3px 0 #0008; }
     .pick .blurb { color:var(--muted); font-size:12px; margin-top:2px; }
+    .where { position:absolute; left:28px; top:74px; color:var(--sand); font-size:13px; font-weight:600;
+      text-shadow:0 2px 6px #000c; max-width:40vw; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .stats { position:absolute; left:28px; bottom:14px; width:270px; padding:12px 14px;
       background:rgba(17,26,38,.86); border:1px solid var(--line); border-radius:10px; backdrop-filter:blur(8px); }
     .stat { display:grid; grid-template-columns:96px 1fr; align-items:center; gap:10px; margin:5px 0;
@@ -93,8 +95,10 @@ export class IntroScreen extends LitElement {
     }
   `;
 
-  static override properties = { selected: { type: Number } };
+  static override properties = { selected: { type: Number }, locationLabel: { type: String } };
   declare selected: number;
+  /** Where the next match plays: the desert by default, a relocated place after GO SOMEWHERE REAL. */
+  declare locationLabel: string;
 
   onStart?: (typeIdx: number) => void;
   /** The multiplayer lobby, with the same garage pick. */
@@ -141,6 +145,7 @@ export class IntroScreen extends LitElement {
     super();
     this.selected = 2;
     this.focusIdx = 2;
+    this.locationLabel = '';
   }
 
   private padDisposer: (() => void) | null = null;
@@ -212,6 +217,7 @@ export class IntroScreen extends LitElement {
           <h2>${v.name}</h2>
           <div class="blurb">${blurb(v)}</div>
         </div>
+        ${this.locationLabel ? html`<div class="where">📍 ${this.locationLabel}</div>` : ''}
         <div class="stats">
           ${STAT_ROWS.map(([key, label]) => html`
             <div class="stat">

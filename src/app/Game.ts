@@ -174,6 +174,15 @@ export class Game {
     return e.field.waypoint(from.x, from.z, 3, this._wp);
   };
 
+  /**
+   * Adopt a terrain without spawning a match. The garage uses this after a
+   * relocate: the new world renders behind the showroom, and the next
+   * `reset()` — START ENGINE — plays on it.
+   */
+  adoptTerrain(terrain: TerrainProvider): void {
+    this.terrain = terrain;
+  }
+
   /** Full reset for a new match (new terrain or rematch). Set colliders first so spawns avoid them. */
   reset(terrain: TerrainProvider, seats: readonly Seat[] = this.defaultSeats()): void {
     this.terrain = terrain;
