@@ -5,6 +5,9 @@ import type { InputManager } from '../../input/InputManager.ts';
 import type { AudioManager } from '../../audio/AudioManager.ts';
 import type { GameEvents } from '../../app/events.ts';
 import { GAMEPAD_BUTTON_NAMES, GAMEPAD_AXIS_NAMES } from '../../input/gamepadNormalization.ts';
+import {
+  type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile
+} from '../../services/tiles/resolutionProfiles.ts';
 
 /**
  * Rebind screen: lists every logical action and its current binding on each
@@ -248,10 +251,12 @@ export class SettingsScreen extends LitElement {
   `;
 
   static override properties = {
-    listening: { type: String }
+    listening: { type: String },
+    resolutionMode: { type: String }
   };
   /** Which action is in listening mode, or null. */
   declare listening: LogicalAction | null;
+  declare resolutionMode: Resolution3DMode;
   private manager: InputManager | null = null;
   private audio: AudioManager | null = null;
   private offAudio: (() => void) | null = null;
@@ -262,6 +267,17 @@ export class SettingsScreen extends LitElement {
   constructor() {
     super();
     this.listening = null;
+    const savedRes = typeof localStorage !== 'undefined' ? localStorage.getItem('stt.res3d') as Resolution3DMode | null : null;
+    this.resolutionMode = (savedRes && RESOLUTION_3D_MODES.includes(savedRes)) ? savedRes : 'balanced';
+  }
+
+  private handleResolutionChange(mode: Resolution3DMode): void {
+    this.resolutionMode = mode;
+    if (typeof localStorage !== 'undefined') {
+      localStorage.setItem('stt.res3d', mode);
+    }
+    this.requestUpdate();
+    this.dispatchEvent(new CustomEvent('resolution-change', { detail: { mode }, bubbles: true, composed: true }));
   }
 
   bindAudio(audio: AudioManager, events?: GameEvents): void {
@@ -434,6 +450,31 @@ export class SettingsScreen extends LitElement {
               >
                 📯 TEST HORN
               </button>
+            </div>
+          </div>
+        </div>
+
+        <div class="group graphics-group">
+          <h2>3D Graphics & Resolution</h2>
+          <div class="audio-panel">
+            <div class="audio-control-row">
+              <div>
+                <div class="audio-label">Photogrammetry & 3D Detail</div>
+                <div style="font-size:var(--text-xs);color:var(--muted);margin-top:2px;">
+                  ${getResolutionProfile(this.resolutionMode).description}
+                </div>
+              </div>
+              <div class="audio-actions-row" style="margin-top:4px;">
+                ${RESOLUTION_3D_MODES.map(mode => html`
+                  <button
+                    type="button"
+                    class="audio-btn ${this.resolutionMode === mode ? 'active' : ''}"
+                    @click=${() => this.handleResolutionChange(mode)}
+                  >
+                    ${mode.toUpperCase()}
+                  </button>
+                `)}
+              </div>
             </div>
           </div>
         </div>

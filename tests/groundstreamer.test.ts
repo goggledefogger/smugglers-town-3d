@@ -71,4 +71,33 @@ describe('GroundStreamer', () => {
     const backPix = latLonToWorldPixel(eastTile.lat, eastTile.lon, zoom);
     expect(backPix.x).toBeCloseTo(eastTilePix.x, 3);
   });
+
+  it('allows live zoom changes (e.g. Zoom 18 -> 19 -> 20) and halves tileSizeUnits per zoom step', () => {
+    const hf = createMockHeightfield();
+    const streamer = new GroundStreamer({
+      apiKey: 'TEST_KEY',
+      center: { lat: 37.7934, lon: -122.4212 },
+      heightfield: hf,
+      zoom: 18,
+      maxPatches: 16
+    });
+
+    expect(streamer.activeZoom).toBe(18);
+    const z18Size = streamer.tileSizeUnits;
+    expect(z18Size).toBeGreaterThan(280);
+    expect(z18Size).toBeLessThan(320);
+
+    // Zoom 19 covers half the ground span per patch (double the ground resolution)
+    streamer.setZoom(19, 36, 8);
+    expect(streamer.activeZoom).toBe(19);
+    expect(streamer.tileSizeUnits).toBeCloseTo(z18Size / 2, 1);
+
+    // Zoom 20 covers a quarter the ground span (4x resolution)
+    streamer.setZoom(20, 48, 16);
+    expect(streamer.activeZoom).toBe(20);
+    expect(streamer.tileSizeUnits).toBeCloseTo(z18Size / 4, 1);
+
+    streamer.dispose();
+  });
 });
+

@@ -38,6 +38,13 @@ import {
   AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
   type Grid, type TileRaster, type ColliderExperimentMode, thresholdsForMode
 } from './tileColliders.ts';
+import {
+  type Resolution3DMode, type Resolution3DProfile, RESOLUTION_3D_PROFILES, getResolutionProfile
+} from './resolutionProfiles.ts';
+
+export {
+  type Resolution3DMode, type Resolution3DProfile, RESOLUTION_3D_PROFILES, getResolutionProfile
+};
 
 export interface TileNode {
   boundingVolume?: { box?: number[] };
@@ -82,7 +89,7 @@ const MAX_TILES = 350;
 const FOG_HORIZON_M = 1500;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-const CORE_RADIUS_M = 500;
+export const CORE_RADIUS_M = 500;
 /** ...in rounds of this many refinements. */
 const CORE_REFINE_BATCH = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
@@ -302,9 +309,9 @@ async function loadTileGlb(
   root.matrixAutoUpdate = false;
   root.matrix.copy(placement);
   root.matrixWorldNeedsUpdate = true;
-  // Enforce trilinear mipmapping + balanced anisotropy (4x) so grazing ground and facades stay sharp without GPU texture sampler stalls
+  // Enforce trilinear mipmapping + anisotropy so grazing ground and facades stay sharp without GPU texture sampler stalls
   forEachMap(root, map => {
-    map.anisotropy = Math.min(anisotropy, 4);
+    map.anisotropy = Math.min(anisotropy, 16);
     map.minFilter = LinearMipmapLinearFilter;
     map.magFilter = LinearFilter;
   });
@@ -361,15 +368,31 @@ export class TileStreamer {
   onRoadsLoaded: (() => void) | null = null;
   private currentExperiment: ColliderExperimentMode = 'baseline';
   private roadPolys: { east: number; north: number; widthM: number }[][] | null = null;
+  private resolutionMode: Resolution3DMode = 'balanced';
+  private lod: LodPolicy = STREAM_LOD;
+  private maxTiles = MAX_TILES;
+  private refineIntervalMs = 250;
+  private refineBatchSize = 1;
 
   constructor(
     private readonly apiKey: string,
     private readonly terrain: TerrainProvider,
     private readonly origin: GeoOrigin,
     private readonly ecef0: Ecef,
-    private readonly anisotropy = 1,
-    private readonly lod: LodPolicy = STREAM_LOD
+    private anisotropy = 1,
+    resolutionModeOrLod: Resolution3DMode | LodPolicy = 'balanced'
   ) {
+    if (typeof resolutionModeOrLod === 'string') {
+      this.resolutionMode = resolutionModeOrLod;
+      const profile = getResolutionProfile(resolutionModeOrLod);
+      this.lod = profile.lod;
+      this.maxTiles = profile.maxTiles;
+      this.refineIntervalMs = profile.refineIntervalMs;
+      this.refineBatchSize = profile.refineBatchSize;
+      this.anisotropy = Math.max(this.anisotropy, profile.anisotropy);
+    } else {
+      this.lod = resolutionModeOrLod;
+    }
     this.grid = gridFor(terrain.heightfield);
     this.terrainTop = sampleTerrain(this.grid, terrain.heightfield);
     this.reliefBoost = terrain.reliefBoost;
@@ -377,6 +400,43 @@ export class TileStreamer {
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
     this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
     this.structureGrid = new Uint8Array(this.grid.n * this.grid.n);
+  }
+
+  get activeResolutionMode(): Resolution3DMode {
+    return this.resolutionMode;
+  }
+
+  get activeLodPolicy(): LodPolicy {
+    return this.lod;
+  }
+
+  get activeMaxTiles(): number {
+    return this.maxTiles;
+  }
+
+  setResolutionMode(mode: Resolution3DMode): void {
+    if (this.resolutionMode === mode) return;
+    this.resolutionMode = mode;
+    const profile = getResolutionProfile(mode);
+    this.lod = profile.lod;
+    this.maxTiles = profile.maxTiles;
+    this.refineIntervalMs = profile.refineIntervalMs;
+    this.refineBatchSize = profile.refineBatchSize;
+    this.anisotropy = Math.max(this.anisotropy, profile.anisotropy);
+    // Allow tiles that stopped at a coarser LOD to be refined further
+    for (const t of this.tiles) {
+      if ((t.node.children?.length ?? 0) > 0) {
+        t.done = false;
+      }
+    }
+    this.dirty = true;
+    log.info('3D resolution profile set', {
+      mode,
+      maxTiles: this.maxTiles,
+      minErrorM: this.lod.minErrorM,
+      intervalMs: this.refineIntervalMs,
+      anisotropy: this.anisotropy
+    });
   }
 
   get tileCount(): number {
@@ -596,10 +656,13 @@ export class TileStreamer {
    * during gameplay without stalling.
    */
   private async refineCore(onProgress?: (loaded: number, total: number) => void): Promise<void> {
+    const profile = getResolutionProfile(this.resolutionMode);
     const CORE_TARGET_ERROR_M = this.lod.minErrorM;
-    for (let round = 0; round < 6 && this.tiles.length < MAX_TILES; round++) {
+    const coreRadius = profile.coreRadiusM;
+    const maxRounds = profile.coreRefineRounds;
+    for (let round = 0; round < maxRounds && this.tiles.length < this.maxTiles; round++) {
       const coarse = this.tiles
-        .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < CORE_RADIUS_M
+        .filter(t => !t.done && nodeDistM(t.node, this.ecef0) < coreRadius
           && (t.node.geometricError ?? 0) > CORE_TARGET_ERROR_M)
         .sort((a, b) => nodeDistM(a.node, this.ecef0) - nodeDistM(b.node, this.ecef0))
         .slice(0, CORE_REFINE_BATCH);
@@ -671,12 +734,12 @@ export class TileStreamer {
    * refinement every 250 ms and never runs two at once.
    */
   update(playerWorld: Vector3, nowMs: number): void {
-    if (this.inFlight || nowMs - this.lastPickMs < 250) return;
+    if (this.inFlight || nowMs - this.lastPickMs < this.refineIntervalMs) return;
     this.lastPickMs = nowMs;
     const p = _ecef.set(playerWorld.x, playerWorld.y - this.shiftY, playerWorld.z).applyMatrix4(this.worldToEcef);
 
     // If approaching tile capacity, evict the farthest tile beyond the fog horizon
-    if (this.tiles.length >= MAX_TILES) {
+    if (this.tiles.length >= this.maxTiles) {
       let farthest: LoadedTile | null = null;
       let farthestD = 0;
       for (const t of this.tiles) {
@@ -693,27 +756,25 @@ export class TileStreamer {
       }
     }
 
-    let best: LoadedTile | null = null;
-    let bestD = Infinity;
+    const candidates: LoadedTile[] = [];
     for (const t of this.tiles) {
       if (t.done) continue;
       const d = nodeDistM(t.node, p);
-      if (d < bestD && (t.node.geometricError ?? 0) > allowedErrorM(d, this.lod)) {
-        best = t;
-        bestD = d;
+      if ((t.node.geometricError ?? 0) > allowedErrorM(d, this.lod)) {
+        candidates.push(t);
       }
     }
-    if (!best) return;
-    const tile = best;
+    if (candidates.length === 0) return;
+    candidates.sort((a, b) => nodeDistM(a.node, p) - nodeDistM(b.node, p));
+    const batch = candidates.slice(0, this.refineBatchSize);
+
     this.inFlight = true;
-    this.refine(tile)
-      .catch(e => {
-        noteFailure('refine failed', e);
-        tile.done = true;
-      })
-      .finally(() => {
-        this.inFlight = false;
-      });
+    Promise.all(batch.map(tile => this.refine(tile).catch(e => {
+      noteFailure('refine failed', e);
+      tile.done = true;
+    }))).finally(() => {
+      this.inFlight = false;
+    });
   }
 
   /**
@@ -846,6 +907,7 @@ export interface LoadTilesOptions {
   readonly terrain: TerrainProvider;
   /** Renderer max anisotropy for tile textures. */
   readonly anisotropy?: number;
+  readonly resolutionMode?: Resolution3DMode;
   readonly onProgress?: (loaded: number, total: number) => void;
 }
 
@@ -857,7 +919,14 @@ export async function load3DTiles(opts: LoadTilesOptions): Promise<TileStreamer>
   const root = await fetchTilesRoot(apiKey);
   // datum altitude puts the tile ground at world y≈0 alongside the terrain mesh
   const ecef0 = latLonToEcef(lat, lon, terrain.datumAltM);
-  const streamer = new TileStreamer(apiKey, terrain, { lat, lon }, ecef0, opts.anisotropy ?? 1);
+  const streamer = new TileStreamer(
+    apiKey,
+    terrain,
+    { lat, lon },
+    ecef0,
+    opts.anisotropy ?? 1,
+    opts.resolutionMode ?? 'balanced'
+  );
   await streamer.loadInitial(root.root ?? root, opts.onProgress);
   const tally = Object.fromEntries(failures);
   const summary = { tiles: streamer.tileCount, ms: Date.now() - startedAt, lat, lon, ...tally };

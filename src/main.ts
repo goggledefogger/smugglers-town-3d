@@ -39,6 +39,9 @@ import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
 import { AmortizedGroundBuilder, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
+import {
+  type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile
+} from './services/tiles/resolutionProfiles.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
 import { worldToLl } from './core/geo/projection.ts';
@@ -199,6 +202,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   if (currentExperiment !== 'baseline') {
     streamer.setExperimentMode(currentExperiment);
   }
+  streamer.setResolutionMode(currentResolution3D);
   streamer.onRoadsLoaded = () => {
     log.info('OSM roads arrived in background, refreshing colliders');
     refreshColliders();
@@ -544,6 +548,10 @@ settingsEl.addEventListener('settings-close', () => {
     uiHandler = null;
   }
 });
+settingsEl.addEventListener('resolution-change', (e: Event) => {
+  const mode = (e as CustomEvent).detail.mode as Resolution3DMode;
+  applyResolutionProfile(mode);
+});
 
 /** The lobby and its network code load on first use, so single player never pays for Firebase. */
 async function openOnline(type: number): Promise<void> {
@@ -567,7 +575,7 @@ async function openOnline(type: number): Promise<void> {
         loaderEl.hidden = false;
         try {
           const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocateTo(
-            map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy
+            map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy, currentResolution3D
           );
           clearTiles();
           tiles = newTiles;
@@ -650,6 +658,7 @@ relocateBarEl.onSearch = async (q, key) => {
   try {
     const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocate({
       query: q, apiKey: key, anisotropy: renderer.maxAnisotropy,
+      resolutionMode: currentResolution3D,
       onProgress: (msg) => { loaderEl.message = msg; }
     });
     // one ground for everything: physics, spawn, drape and props all sample
@@ -712,7 +721,36 @@ const diagEl = document.createElement('div');
 diagEl.id = 'debug-diagnostic';
 diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(11,15,23,0.92);backdrop-filter:blur(8px);border:1px solid #ff5500;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f1f5f9;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
 diagEl.style.display = showDiagnostic ? 'flex' : 'none';
+diagEl.innerHTML = `
+  <span style="color:#ff5a1f;font-weight:700;">[F8 DIAG]</span>
+  <span id="diag-gps" style="color:#ffb84d;font-weight:600;display:none;"></span>
+  <span id="diag-xz">X:0 Z:0</span>
+  <span id="diag-ground">Ground: 0.0m</span>
+  <span id="diag-car">Car Y: 0.0m</span>
+  <span id="diag-status" style="font-weight:700;"></span>
+  <span id="diag-tiles">Tiles: off</span>
+  <span id="diag-osm" style="font-weight:600;color:#eab308;">OSM: ⏳ Pending</span>
+  <button id="res-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #10b981;color:#34d399;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
+    RES: Balanced [F10]
+  </button>
+  <button id="exp-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #38bdf8;color:#38bdf8;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
+    EXP: Baseline (10m) [F9]
+  </button>
+  <button id="exp-teleport-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #a855f7;color:#c084fc;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
+    Teleport [T]
+  </button>
+`;
 document.body.appendChild(diagEl);
+
+const diagGpsEl = diagEl.querySelector('#diag-gps') as HTMLElement | null;
+const diagXzEl = diagEl.querySelector('#diag-xz') as HTMLElement | null;
+const diagGroundEl = diagEl.querySelector('#diag-ground') as HTMLElement | null;
+const diagCarEl = diagEl.querySelector('#diag-car') as HTMLElement | null;
+const diagStatusEl = diagEl.querySelector('#diag-status') as HTMLElement | null;
+const diagTilesEl = diagEl.querySelector('#diag-tiles') as HTMLElement | null;
+const diagOsmEl = diagEl.querySelector('#diag-osm') as HTMLElement | null;
+const resToggleBtn = diagEl.querySelector('#res-toggle-btn') as HTMLButtonElement | null;
+const expToggleBtn = diagEl.querySelector('#exp-toggle-btn') as HTMLButtonElement | null;
 
 window.addEventListener('keydown', (e) => {
   if (e.code === 'F8') {
@@ -727,11 +765,62 @@ window.addEventListener('keydown', (e) => {
     cycleExperimentMode();
     e.preventDefault();
   }
+  if (e.code === 'F10' || ((e.code === 'KeyV' || e.code === 'KeyR') && e.shiftKey && bareKey && !e.repeat && !isTypingInField())) {
+    cycleResolutionMode();
+    e.preventDefault();
+  }
   if (e.code === 'KeyT' && bareKey && !e.repeat && !isTypingInField()) {
     teleportToObstacle();
     e.preventDefault();
   }
 });
+
+// ---- 3D Resolution & Photogrammetry Fidelity Profiles ----
+let currentResolution3D: Resolution3DMode = 'balanced';
+const resParam = urlParams?.get('res3d') as Resolution3DMode | null;
+const savedRes = typeof localStorage !== 'undefined' ? localStorage.getItem('stt.res3d') as Resolution3DMode | null : null;
+if (resParam && RESOLUTION_3D_MODES.includes(resParam)) {
+  currentResolution3D = resParam;
+} else if (savedRes && RESOLUTION_3D_MODES.includes(savedRes)) {
+  currentResolution3D = savedRes;
+}
+
+function applyResolutionProfile(mode: Resolution3DMode): void {
+  currentResolution3D = mode;
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('stt.res3d', mode);
+  }
+  const profile = getResolutionProfile(mode);
+  renderer.setDprCap(profile.dprCap);
+  if (tiles) {
+    tiles.setResolutionMode(mode);
+  }
+  if (groundStreamer) {
+    groundStreamer.setZoom(profile.satelliteZoom, profile.satelliteMaxPatches, profile.anisotropy);
+  }
+  if (settingsEl) {
+    settingsEl.resolutionMode = mode;
+  }
+  if (resToggleBtn) {
+    resToggleBtn.textContent = `RES: ${profile.label} [F10]`;
+  }
+  showToast(`[3D RES: ${profile.label}] ${profile.description}`);
+}
+
+function cycleResolutionMode(): void {
+  const idx = RESOLUTION_3D_MODES.indexOf(currentResolution3D);
+  const next = RESOLUTION_3D_MODES[(idx + 1) % RESOLUTION_3D_MODES.length]!;
+  applyResolutionProfile(next);
+}
+
+// Initialize renderer DPR cap from chosen profile
+renderer.setDprCap(getResolutionProfile(currentResolution3D).dprCap);
+if (settingsEl) {
+  settingsEl.resolutionMode = currentResolution3D;
+}
+if (resToggleBtn) {
+  resToggleBtn.textContent = `RES: ${getResolutionProfile(currentResolution3D).label} [F10]`;
+}
 
 // ---- Driving Experiments (Road Clearance & Building Collider Fidelity) ----
 const EXPERIMENT_MODES: readonly ColliderExperimentMode[] = [
@@ -791,6 +880,9 @@ function setExperiment(mode: ColliderExperimentMode): void {
     }
     applyColliders();
   }
+  if (expToggleBtn) {
+    expToggleBtn.textContent = `EXP: ${experimentLabel(mode)} [F9]`;
+  }
   showToast(`[EXP: ${experimentLabel(mode)}] ${experimentDescription(mode)}`);
 }
 
@@ -822,7 +914,9 @@ function teleportToObstacle(): void {
 diagEl.addEventListener('click', (e) => {
   const target = e.target as HTMLElement | null;
   if (!target) return;
-  if (target.id === 'exp-toggle-btn' || target.closest('#exp-toggle-btn')) {
+  if (target.id === 'res-toggle-btn' || target.closest('#res-toggle-btn')) {
+    cycleResolutionMode();
+  } else if (target.id === 'exp-toggle-btn' || target.closest('#exp-toggle-btn')) {
     cycleExperimentMode();
   } else if (target.id === 'exp-teleport-btn' || target.closest('#exp-teleport-btn')) {
     teleportToObstacle();
@@ -899,32 +993,28 @@ function frame(now: number): void {
     const diff = b.pos.y - groundY;
     const isUnder = diff < -0.3;
     const center = world.terrainProvider.center;
-    let gpsSnippet = '';
-    if (center) {
+    if (center && diagGpsEl) {
       const gps = worldToLl(b.pos.x, b.pos.z, center);
       const matched = findScenarioByCoords(gps.lat, gps.lon);
-      gpsSnippet = `
-        <span style="color:#ffb84d;font-weight:600;">${matched ? `[${matched.name}]` : 'GPS'} ${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}</span>
-      `;
+      diagGpsEl.style.display = 'inline';
+      diagGpsEl.textContent = `${matched ? `[${matched.name}]` : 'GPS'} ${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
+    } else if (diagGpsEl) {
+      diagGpsEl.style.display = 'none';
     }
-    diagEl.innerHTML = `
-      <span style="color:#ff5a1f;font-weight:700;">[F8 DIAG]</span>
-      ${gpsSnippet}
-      <span>X:${b.pos.x.toFixed(0)} Z:${b.pos.z.toFixed(0)}</span>
-      <span>Ground: ${groundY.toFixed(1)}m</span>
-      <span>Car Y: ${b.pos.y.toFixed(1)}m</span>
-      <span style="color:${isUnder ? '#ff2d55' : '#7dd87d'};font-weight:700;">
-        ${isUnder ? `⚠️ UNDERGROUND (${Math.abs(diff).toFixed(1)}m)` : `✅ ON SURFACE (Δ ${diff.toFixed(2)}m)`}
-      </span>
-      <span>Tiles: ${tiles ? `${tiles.tileCount} active` : 'off'}</span>
-      <span style="color:${tiles?.hasRoadGrid ? '#38bdf8' : '#eab308'};font-weight:600;">OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}</span>
-      <button id="exp-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #38bdf8;color:#38bdf8;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
-        EXP: ${experimentLabel(currentExperiment)} [F9]
-      </button>
-      <button id="exp-teleport-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #a855f7;color:#c084fc;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
-        Teleport [T]
-      </button>
-    `;
+    if (diagXzEl) diagXzEl.textContent = `X:${b.pos.x.toFixed(0)} Z:${b.pos.z.toFixed(0)}`;
+    if (diagGroundEl) diagGroundEl.textContent = `Ground: ${groundY.toFixed(1)}m`;
+    if (diagCarEl) diagCarEl.textContent = `Car Y: ${b.pos.y.toFixed(1)}m`;
+    if (diagStatusEl) {
+      diagStatusEl.style.color = isUnder ? '#ff2d55' : '#7dd87d';
+      diagStatusEl.textContent = isUnder ? `⚠️ UNDERGROUND (${Math.abs(diff).toFixed(1)}m)` : `✅ ON SURFACE (Δ ${diff.toFixed(2)}m)`;
+    }
+    if (diagTilesEl) {
+      diagTilesEl.textContent = `Tiles: ${tiles ? `${tiles.tileCount} active` : 'off'}${groundStreamer ? ` | Sat: Z${groundStreamer.activeZoom} (${groundStreamer.patchCount}p)` : ''}`;
+    }
+    if (diagOsmEl) {
+      diagOsmEl.style.color = tiles?.hasRoadGrid ? '#38bdf8' : '#eab308';
+      diagOsmEl.textContent = `OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}`;
+    }
   }
 
   // poll every source each frame so gamepad edges fire on menus too — the
