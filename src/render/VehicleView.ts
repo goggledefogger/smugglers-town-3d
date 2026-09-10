@@ -19,10 +19,13 @@ export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
-/** Shadow footprint: the car's track and wheelbase plus the penumbra past each side. */
-const SHADOW_W = TRACK + 1.6;
-const SHADOW_L = WHEELBASE + 2.4;
-const SHADOW_ALPHA = 0.5;
+/**
+ * Shadow footprint: just past the tyres. A wide soft pool reads as the shadow
+ * of something hovering; contact is a tight dark patch with a short edge.
+ */
+const SHADOW_W = TRACK + 0.7;
+const SHADOW_L = WHEELBASE + 1.4;
+const SHADOW_ALPHA = 0.55;
 
 let shadowTex: Texture | null = null;
 /**
@@ -38,8 +41,8 @@ function contactShadowTexture(): Texture {
   const ctx = c.getContext('2d')!;
   const g = ctx.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
   g.addColorStop(0, 'rgba(0,0,0,1)');
-  g.addColorStop(0.45, 'rgba(0,0,0,0.85)');
-  g.addColorStop(0.75, 'rgba(0,0,0,0.3)');
+  g.addColorStop(0.6, 'rgba(0,0,0,0.95)');
+  g.addColorStop(0.85, 'rgba(0,0,0,0.35)');
   g.addColorStop(1, 'rgba(0,0,0,0)');
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, n, n);
@@ -194,9 +197,11 @@ export class VehicleView {
       for (const t of this.tinted) t.m.color.copy(t.base).multiplyScalar(this.shade);
     }
 
-    this.shadow.position.y = body.groundY - this.group.position.y + 0.2;
+    this.shadow.position.y = body.groundY - this.group.position.y + 0.06;
     this.shadow.material.opacity = SHADOW_ALPHA * MathUtils.clamp(1 - height * 0.12, 0.25, 1);
-    const s = MathUtils.clamp(1 - height * 0.03, 0.6, 1);
+    // a gap opens between car and shadow as it lifts; the shadow also spreads,
+    // which is what the eye uses to read height
+    const s = MathUtils.clamp(1 + height * 0.08, 1, 1.6);
     this.shadow.scale.set(s, s, 1);
     this.updateHealthBar();
   }
