@@ -497,7 +497,7 @@ export class Pickups {
   /** One Smoking Golden Toilet with billowing smoke plume and sky beacon. */
   private makeCrate(): CrateView {
     const toilet = new SmokingToilet(this.fade);
-    toilet.group.visible = this.visible;
+    toilet.setShown(this.visible);
     this.scene.add(toilet.group);
     const view: CrateView = { group: toilet.group, toilet };
     this.crates.push(view);
@@ -507,7 +507,7 @@ export class Pickups {
   /** Hidden in the garage, where no match exists yet. */
   setVisible(v: boolean): void {
     this.visible = v;
-    for (const c of this.crates) c.group.visible = v;
+    for (const c of this.crates) c.toilet.setShown(v);
     for (const b of this.bases) b.group.visible = v;
   }
 
@@ -521,14 +521,17 @@ export class Pickups {
       const view = this.crates[i]!;
       const crate = live[i];
       // a delivered crate leaves the map until its wave resets
+      // shown/hidden through the toilet, never the group: the group holds
+      // point lights, and a change in the visible light count recompiles
+      // every shader in the scene
       if (!crate || crate.delivered) {
-        view.group.visible = false;
+        view.toilet.setShown(false);
         continue;
       }
-      view.group.visible = this.visible;
+      view.toilet.setShown(this.visible);
       const pose = crate.carrier ? poseOf(crate.carrier) : null;
       const isCarried = !!crate.carrier;
-      view.toilet.beacon.visible = !isCarried;
+      view.toilet.beacon.visible = this.visible && !isCarried;
 
       // Update smoke plumes and fire flicker
       view.toilet.update(dt, timeS + i * 1.3, camera, isCarried);

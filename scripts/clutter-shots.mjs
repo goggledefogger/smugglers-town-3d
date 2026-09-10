@@ -11,6 +11,7 @@
 //   LAT=36.1147 LON=-115.1728 node scripts/clutter-shots.mjs vegas
 //   TP=300,-200 ...    metres east,south of the centre to snap from (default 0,0)
 //   DRIVE=1 ...        also hold W for 20 s in hidden and swept and print frame stats
+//   DPR=2 ...          Retina-sized backbuffer, for GPU-bound comparisons
 // Needs the dev server on :5173 and .sm-key.txt (see the browser-verification notes).
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -24,7 +25,8 @@ const [TX, TZ] = (process.env.TP ?? '0,0').split(',').map(Number);
 const key = readFileSync('.sm-key.txt', 'utf8').trim();
 
 const b = await chromium.launch({ channel: 'chrome', headless: false });
-const page = await b.newPage({ viewport: { width: 1280, height: 800 } });
+// DPR=2 approximates a Retina laptop (the game caps its own pixel ratio at 1.5)
+const page = await b.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
 const errs = [];
 page.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 

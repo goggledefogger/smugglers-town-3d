@@ -12,7 +12,7 @@ const BASE = 'http://localhost:5173';
 const LAT = process.env.LAT ?? '40.7484', LON = process.env.LON ?? '-73.9857';
 const key = readFileSync('.sm-key.txt', 'utf8').trim();
 const b = await chromium.launch({ channel: 'chrome', headless: false });
-const page = await b.newPage({ viewport: { width: 1280, height: 800 } });
+const page = await b.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
 await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
@@ -21,6 +21,15 @@ await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });
 await page.waitForTimeout(8000);
 if (process.env.MODE === 'hidden') { await page.keyboard.press('KeyF'); await page.waitForTimeout(500); }
+// START=x,z: teleport and face north (the Strip run from drive-perf: LAT=36.1075 LON=-115.1727 START=785,-5)
+if (process.env.START) {
+  await page.evaluate(([x, z]) => {
+    const body = window.__game.player.body;
+    body.pos.set(x, 60, z); body.vel.set(0, 0, 0); body.prevPos?.copy(body.pos);
+    body.quat.set(0, 0, 0, 1); body.prevQuat?.copy(body.quat);
+  }, process.env.START.split(',').map(Number));
+  await page.waitForTimeout(6000);
+}
 const cdp = await page.context().newCDPSession(page);
 await cdp.send('Profiler.enable');
 await cdp.send('Profiler.setSamplingInterval', { interval: 200 });
@@ -39,8 +48,9 @@ let t = profile.startTime; const samples = [];
 for (let i = 0; i < profile.samples.length; i++) { t += profile.timeDeltas[i]; samples.push({ t: t / 1000, id: profile.samples[i] }); }
 // hitches: frames > 40 ms (browser clock is performance.now-relative; profile uses monotonic µs; align by offset from first sample vs first frame)
 const off = samples[0].t - frames[0][0];
-const hitches = frames.filter(f => f[1] > 40).slice(0, 6);
-console.log('frames', frames.length, 'hitches>40ms', frames.filter(f => f[1] > 40).map(f => f[1].toFixed(0)).join(','));
+const LIM = Number(process.env.LIM ?? 40);
+const hitches = frames.filter(f => f[1] > LIM).slice(0, 8);
+console.log('frames', frames.length, 'hitches>40ms', frames.filter(f => f[1] > LIM).map(f => f[1].toFixed(0)).join(','));
 for (const [end, dt] of hitches) {
   const s0 = end - dt + off, s1 = end + off;
   const incl = new Map();
