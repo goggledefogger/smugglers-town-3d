@@ -496,9 +496,14 @@ field has focus, and `input/` keeps no dependency on `ui/`.
 ## Render notes
 
 `VehicleView` keeps the world position on its group and rotates the car body
-inside it, so the health bar and blob shadow stay upright. The body's pose is
+inside it, so the health bar stays upright. The body's pose is
 interpolated between sim steps; a cosmetic pitch/roll from the terrain under
-the wheels is added on top. `render/vehicleMeshes.ts` builds one silhouette
+the wheels is added on top. The mesh's origin is its ground contact while the
+physics origin sits `groundClearance` above the ground, so the mesh hangs a
+clearance below the body (it rode a metre in the air until the contact shadow
+gave that away), and the wheels reach down by however far the suspension is
+holding the body above its ride height, so the tyres stay planted without
+giving up the smoothing that keeps the camera calm. `render/vehicleMeshes.ts` builds one silhouette
 per roster type from primitives (buggy cage, rally spoiler, SUV rack, lifted
 pickups) with clearcoat paint in the team color, the type's accent on trim,
 headlights, and tail lights that flare while braking. Wheels sit in pivots

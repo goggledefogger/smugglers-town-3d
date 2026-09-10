@@ -20,18 +20,21 @@ const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
 /**
- * Shadow footprint: just past the tyres. A wide soft pool reads as the shadow
- * of something hovering; contact is a tight dark patch with a short edge.
+ * Shadow footprint: the body's outline, a little past the tyres. A round soft
+ * blob centred under the body is the drop-shadow cue the eye reads as "this
+ * is hovering over a circle"; contact is a flat, near-uniform patch the shape
+ * of the car, darkest where the tyres meet the ground.
  */
-const SHADOW_W = TRACK + 0.7;
-const SHADOW_L = WHEELBASE + 1.4;
-const SHADOW_ALPHA = 0.55;
+const SHADOW_W = TRACK + 0.9;
+const SHADOW_L = WHEELBASE + 1.9;
+const SHADOW_ALPHA = 0.5;
 
 let shadowTex: Texture | null = null;
 /**
- * A soft dark ellipse for the contact shadow, painted once and shared. A
- * photo tile already has its sun baked in, so a real shadow map would fight
- * it; this is the ambient-occlusion pool every car has under it in any light.
+ * The contact shadow, painted once and shared. A photo tile already has its
+ * sun baked in, so a real shadow map would fight it; this is the ambient
+ * occlusion every car has under it in any light: a rounded rectangle of the
+ * body with a short edge, plus a darker pad under each tyre.
  */
 function contactShadowTexture(): Texture {
   if (shadowTex) return shadowTex;
@@ -39,13 +42,23 @@ function contactShadowTexture(): Texture {
   const c = document.createElement('canvas');
   c.width = c.height = n;
   const ctx = c.getContext('2d')!;
-  const g = ctx.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
-  g.addColorStop(0, 'rgba(0,0,0,1)');
-  g.addColorStop(0.6, 'rgba(0,0,0,0.95)');
-  g.addColorStop(0.85, 'rgba(0,0,0,0.35)');
-  g.addColorStop(1, 'rgba(0,0,0,0)');
-  ctx.fillStyle = g;
-  ctx.fillRect(0, 0, n, n);
+  const inset = 14, r = 18;
+  // texture x spans SHADOW_W, y spans SHADOW_L
+  ctx.shadowColor = 'rgba(0,0,0,1)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.beginPath();
+  ctx.roundRect(inset, inset, n - 2 * inset, n - 2 * inset, r);
+  ctx.fill();
+  ctx.fill();
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = 'rgba(0,0,0,1)';
+  const px = (TRACK / 2 / SHADOW_W) * n, pz = (WHEELBASE / 2 / SHADOW_L) * n;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(n / 2 + sx * px, n / 2 + sz * pz, 9, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
   shadowTex = new CanvasTexture(c);
   return shadowTex;
 }
@@ -97,6 +110,12 @@ export class VehicleView {
         }
       }
     });
+    // the model's origin is its ground contact; the body's is groundClearance
+    // above the ground. Without this the whole car rode a metre in the air,
+    // which nothing gave away until it had a shadow. carRoot itself sits at
+    // the contact point so the cosmetic tilt rolls about the ground, not a
+    // point above the roof
+    this.carRoot.position.y = -actor.body.cfg.groundClearance;
     this.carRoot.add(this.car.root);
     this.group.add(this.carRoot);
 
@@ -197,7 +216,13 @@ export class VehicleView {
       for (const t of this.tinted) t.m.color.copy(t.base).multiplyScalar(this.shade);
     }
 
-    this.shadow.position.y = body.groundY - this.group.position.y + 0.06;
+    // the suspension lets the body ride above its clearance while it settles
+    // (that smoothing is what keeps the camera calm); the wheels reach down
+    // to the ground it is settling toward, so the tyres stay planted
+    const reach = MathUtils.clamp(this.group.position.y - body.groundY - body.cfg.groundClearance, 0, 0.6);
+    for (const w of this.car.wheels) w.spin.parent!.position.y = w.r - reach;
+
+    this.shadow.position.y = body.groundY - this.group.position.y + body.cfg.groundClearance + 0.06;
     this.shadow.material.opacity = SHADOW_ALPHA * MathUtils.clamp(1 - height * 0.12, 0.25, 1);
     // a gap opens between car and shadow as it lifts; the shadow also spreads,
     // which is what the eye uses to read height
