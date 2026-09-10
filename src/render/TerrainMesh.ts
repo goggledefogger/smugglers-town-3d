@@ -9,14 +9,43 @@
  * continuing outside the 3D tile boundary with zero gaps or holes.
  */
 import {
-  Mesh, PlaneGeometry, MeshStandardMaterial, BufferAttribute, CanvasTexture,
+  Mesh, PlaneGeometry, MeshStandardMaterial, MeshBasicMaterial, BufferAttribute, CanvasTexture,
+  DataTexture, RedFormat, UnsignedByteType, NearestFilter,
   SRGBColorSpace, ClampToEdgeWrapping, RepeatWrapping, LinearMipmapLinearFilter,
-  LinearFilter, Color, type BufferAttribute as BufferAttributeT, type BufferGeometry
+  LinearFilter, Color, type BufferAttribute as BufferAttributeT, type BufferGeometry, type Material
 } from 'three';
 import { TERRAIN_COLORS } from '../core/theme.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Heightfield } from '../core/heightfield.ts';
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
+import { injectDetailGrain } from './DetailGrain.ts';
+
+/**
+ * Where a streamed high-res satellite patch is loaded, the base terrain under
+ * it is discarded per fragment instead of fought for with polygon offset: the
+ * patch is a coarser triangulation of the same heightfield, so it dips below
+ * the base mesh between its vertices and the blurry zoom-15 imagery (with its
+ * painted building footprints) bled through as dark polygons.
+ */
+const COVER_PARS_VERTEX = `
+varying vec2 vCoverXZ;
+`;
+const COVER_VERTEX = `
+vCoverXZ = (modelMatrix * vec4(transformed, 1.0)).xz;
+`;
+const COVER_PARS_FRAGMENT = `
+uniform sampler2D uCover;
+uniform float uCoverCell;
+uniform float uCoverN;
+varying vec2 vCoverXZ;
+`;
+const COVER_FRAGMENT = `
+if (uCoverCell > 0.0) {
+  vec2 cc = floor(vCoverXZ / uCoverCell + 0.5) + uCoverN * 0.5;
+  if (all(greaterThanEqual(cc, vec2(0.0))) && all(lessThan(cc, vec2(uCoverN)))
+      && texelFetch(uCover, ivec2(cc), 0).r > 0.0) discard;
+}
+`;
 
 export interface TileFootprint {
   readonly minX: number;
@@ -149,8 +178,11 @@ export class TerrainMesh {
   private _texture: CanvasTexture | null = null;
   private _sandTexture: CanvasTexture | null = null;
   private _gridTexture: CanvasTexture | null = null;
-  private _photorealMat: MeshStandardMaterial | null = null;
+  private _photorealMat: Material | null = null;
   private _game3dMat: MeshStandardMaterial | null = null;
+  private readonly _uCover = { value: new DataTexture(new Uint8Array(1), 1, 1, RedFormat, UnsignedByteType) };
+  private readonly _uCoverCell = { value: 0 };
+  private readonly _uCoverN = { value: 1 };
   private _mode: 'photoreal' | 'game3d' = 'photoreal';
   private _sourceCanvas: HTMLCanvasElement | null = null;
   private _workingCanvas: HTMLCanvasElement | null = null;
@@ -248,14 +280,28 @@ export class TerrainMesh {
       tex.needsUpdate = true;
       this._texture = tex;
 
-      this._photorealMat = new MeshStandardMaterial({
+      // unlit like the Google tiles: the imagery already carries its own
+      // daylight, and lighting it again put a blue cast on the ground that the
+      // buildings standing on it did not have
+      const mat = new MeshBasicMaterial({
         map: tex,
-        roughness: 0.96,
-        metalness: 0,
+        toneMapped: false,
         polygonOffset: true,
         polygonOffsetFactor: 3,
         polygonOffsetUnits: 3
       });
+      mat.onBeforeCompile = shader => {
+        injectDetailGrain(shader);
+        shader.uniforms.uCover = this._uCover;
+        shader.uniforms.uCoverCell = this._uCoverCell;
+        shader.uniforms.uCoverN = this._uCoverN;
+        shader.vertexShader = COVER_PARS_VERTEX + shader.vertexShader
+          .replace('#include <begin_vertex>', '#include <begin_vertex>' + COVER_VERTEX);
+        shader.fragmentShader = COVER_PARS_FRAGMENT + shader.fragmentShader
+          .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + COVER_FRAGMENT);
+      };
+      mat.customProgramCacheKey = () => 'satellite-ground';
+      this._photorealMat = mat;
     } else {
       // Crisp alpine/canyon biome: low=dark slate bedrock, mid=mossy steppe, high=granite cliff, peaks=snowcap
       const colors = new Float32Array(pos.count * 3);
@@ -323,9 +369,23 @@ export class TerrainMesh {
     return this._mesh;
   }
 
-  /** No-op compatibility hook */
-  updateCutout(_bounds: readonly TileFootprint[]): void {
-    // Continuous seamless terrain underlay; no alpha cutouts
+  /**
+   * Cells of the ground streamer's patch grid that currently hold a patch
+   * (n*n, cell (c, r) at index (r + n/2) * n + c + n/2; cells are `cellSize`
+   * wide and centred on multiples of it). The buffer is wrapped; call again
+   * after every change.
+   */
+  setPatchCoverage(cells: Uint8Array, n: number, cellSize: number): void {
+    const tex = this._uCover.value;
+    if (tex.image.data !== cells) {
+      tex.dispose();
+      const t = new DataTexture(cells, n, n, RedFormat, UnsignedByteType);
+      t.minFilter = t.magFilter = NearestFilter;
+      this._uCover.value = t;
+    }
+    this._uCover.value.needsUpdate = true;
+    this._uCoverCell.value = cellSize;
+    this._uCoverN.value = n;
   }
 
   /** Re-drape on a changed heightfield of the same size; the streamed ground sharpens after play starts. */
@@ -414,7 +474,7 @@ export class TerrainMesh {
   dispose(): void {
     if (this._mesh) {
       this._mesh.geometry.dispose();
-      this._photorealMat?.map?.dispose();
+      (this._photorealMat as MeshBasicMaterial | null)?.map?.dispose();
       this._photorealMat?.dispose();
       this._game3dMat?.map?.dispose();
       this._game3dMat?.dispose();
@@ -430,6 +490,7 @@ export class TerrainMesh {
     }
     this._photorealMat = null;
     this._game3dMat = null;
+    this._uCoverCell.value = 0;
     this._texture = null;
     this._sourceCanvas = null;
     this._workingCanvas = null;

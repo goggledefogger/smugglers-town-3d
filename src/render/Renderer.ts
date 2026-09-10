@@ -22,6 +22,18 @@ export interface RendererDeps {
 
 const SUN_POS = new Vector3(120, 200, 80);
 
+/**
+ * Two light rigs. Arcade lights the procedural desert and Game 3D boxes the
+ * way they were designed. Photo is for real places: the tiles and satellite
+ * ground are unlit photos shown as-is, so the sun, sky and ambient are scaled
+ * to put a lit car's upward faces at about the brightness of a photographed
+ * surface with the same albedo, instead of half again brighter.
+ */
+const LIGHT_RIGS = {
+  arcade: { sun: 1.4, ambient: 0.6, hemi: 0.5, exposure: 1.05 },
+  photo: { sun: 1.0, ambient: 0.35, hemi: 0.35, exposure: 1.0 }
+} as const;
+
 export class GameRenderer {
   readonly scene = new Scene();
   readonly camera: PerspectiveCamera;
@@ -38,6 +50,9 @@ export class GameRenderer {
   private dprCap = 1.5;
   private firstFrameMs = 0;
   private lastAdjustMs = -Infinity;
+  private readonly sun: DirectionalLight;
+  private readonly ambient: AmbientLight;
+  private readonly hemi: HemisphereLight;
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -84,11 +99,14 @@ export class GameRenderer {
     );
     this.camera.position.set(0, 20, 30);
 
-    const sun = new DirectionalLight(LIGHTING_COLORS.sun, 1.4);
-    sun.position.copy(SUN_POS);
-    this.scene.add(sun);
-    this.scene.add(new AmbientLight(LIGHTING_COLORS.ambient, 0.6));
-    this.scene.add(new HemisphereLight(SKY_MID_LIGHT, LIGHTING_COLORS.groundBounce, 0.5));
+    this.sun = new DirectionalLight(LIGHTING_COLORS.sun, 1.4);
+    this.sun.position.copy(SUN_POS);
+    this.scene.add(this.sun);
+    this.ambient = new AmbientLight(LIGHTING_COLORS.ambient, 0.6);
+    this.scene.add(this.ambient);
+    this.hemi = new HemisphereLight(SKY_MID_LIGHT, LIGHTING_COLORS.groundBounce, 0.5);
+    this.scene.add(this.hemi);
+    this.setLightRig('arcade');
 
     if (typeof window !== 'undefined') {
       window.addEventListener('resize', () => this.handleResize());
@@ -101,6 +119,15 @@ export class GameRenderer {
         window.location.reload();
       });
     }
+  }
+
+  /** Photo for real places seen through their tiles; arcade for everything drawn by the game. */
+  setLightRig(rig: keyof typeof LIGHT_RIGS): void {
+    const r = LIGHT_RIGS[rig];
+    this.sun.intensity = r.sun;
+    this.ambient.intensity = r.ambient;
+    this.hemi.intensity = r.hemi;
+    this.renderer.toneMappingExposure = r.exposure;
   }
 
   private handleResize(): void {
@@ -170,7 +197,15 @@ export class GameRenderer {
    * spreads the same work over the download.
    */
   warm(obj: Object3D): void {
-    this.renderer.compile(obj, this.camera, this.scene);
+    // link status is only read on first draw, and reading it blocks until the
+    // driver has finished linking: with sync compile that wait landed inside
+    // a frame (30-100 ms). compileAsync polls KHR_parallel_shader_compile
+    // instead, so hide the object until every program is actually ready
+    const wasVisible = obj.visible;
+    obj.visible = false;
+    this.renderer.compileAsync(obj, this.camera, this.scene)
+      .catch(e => log.warn('shader compile failed', e))
+      .finally(() => { obj.visible = wasVisible; });
     obj.traverse(o => {
       const mesh = o as Mesh;
       if (!mesh.isMesh) return;

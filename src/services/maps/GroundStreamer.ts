@@ -1,5 +1,5 @@
 import {
-  Group, Mesh, PlaneGeometry, MeshStandardMaterial, Texture, BufferAttribute,
+  Group, Mesh, PlaneGeometry, MeshBasicMaterial, Texture, BufferAttribute,
   SRGBColorSpace, ClampToEdgeWrapping, LinearMipmapLinearFilter, LinearFilter
 } from 'three';
 import { satelliteUrl, latLonToWorldPixel, worldPixelToLatLon } from './MapsApi.ts';
@@ -54,6 +54,16 @@ export class GroundStreamer {
   private readonly isTileCovered?: ((wx: number, wz: number) => boolean) | undefined;
   /** Stream under 3D tiles too: the clutter filter's hidden mode shows the ground beneath them. */
   underTiles = false;
+  /** Called with each patch mesh just before it is added; the renderer hangs its shader patches and warm-up here. */
+  onPatch: ((mesh: Mesh) => void) | null = null;
+  /**
+   * Which grid cells hold a patch right now, for the base terrain to cut out
+   * under them: n*n, cell (col, row) at (row + n/2) * n + col + n/2. Fires
+   * after every add and evict with the same buffer.
+   */
+  onCoverageChanged: ((cells: Uint8Array, n: number, cellSize: number) => void) | null = null;
+  private readonly coverN = 32;
+  private readonly coverage = new Uint8Array(this.coverN * this.coverN);
 
   private readonly cosLat: number;
   tileSizeUnits: number;
@@ -102,12 +112,14 @@ export class GroundStreamer {
     for (const p of this.patches.values()) {
       this.group.remove(p.mesh);
       p.mesh.geometry.dispose();
-      const mat = p.mesh.material as MeshStandardMaterial;
+      const mat = p.mesh.material as MeshBasicMaterial;
       mat.map?.dispose();
       mat.dispose();
     }
     this.patches.clear();
     this.inFlightKeys.clear();
+    this.coverage.fill(0);
+    this.onCoverageChanged?.(this.coverage, this.coverN, this.tileSizeUnits);
     log.info('ground satellite zoom updated', {
       zoom: this.zoom,
       maxPatches: this.maxPatches,
@@ -120,13 +132,22 @@ export class GroundStreamer {
     for (const p of this.patches.values()) {
       this.group.remove(p.mesh);
       p.mesh.geometry.dispose();
-      const mat = p.mesh.material as MeshStandardMaterial;
+      const mat = p.mesh.material as MeshBasicMaterial;
       mat.map?.dispose();
       mat.dispose();
     }
     this.patches.clear();
     this.inFlightKeys.clear();
     this.group.clear();
+    this.coverage.fill(0);
+    this.onCoverageChanged?.(this.coverage, this.coverN, this.tileSizeUnits);
+  }
+
+  private setCovered(col: number, row: number, v: number): void {
+    const h = this.coverN / 2;
+    if (col < -h || col >= h || row < -h || row >= h) return;
+    this.coverage[(row + h) * this.coverN + col + h] = v;
+    this.onCoverageChanged?.(this.coverage, this.coverN, this.tileSizeUnits);
   }
 
   /** Re-sample vertex heights if heightfield is updated (e.g. 3D tiles datum calibration). */
@@ -164,10 +185,11 @@ export class GroundStreamer {
       if (dist > this.keepRadiusUnits) {
         this.group.remove(p.mesh);
         p.mesh.geometry.dispose();
-        const mat = p.mesh.material as MeshStandardMaterial;
+        const mat = p.mesh.material as MeshBasicMaterial;
         mat.map?.dispose();
         mat.dispose();
         this.patches.delete(key);
+        this.setCovered(p.col, p.row, 0);
       }
     }
 
@@ -279,7 +301,9 @@ export class GroundStreamer {
     tex.anisotropy = Math.min(this.anisotropy, 16);
     tex.needsUpdate = true;
 
-    const segs = 16;
+    // near the heightfield's 10 m cell, so the patch follows the physics ground
+    // the car sits on instead of cutting chords under its bumps
+    const segs = Math.max(16, Math.round(this.tileSizeUnits / 10));
     const geo = new PlaneGeometry(this.tileSizeUnits, this.tileSizeUnits, segs, segs);
     geo.rotateX(-Math.PI / 2);
     const pos = geo.attributes.position as BufferAttribute;
@@ -295,10 +319,10 @@ export class GroundStreamer {
     pos.needsUpdate = true;
     geo.computeVertexNormals();
 
-    const mat = new MeshStandardMaterial({
+    // unlit, as the 3D tiles are: the photo is the light
+    const mat = new MeshBasicMaterial({
       map: tex,
-      roughness: 0.94,
-      metalness: 0,
+      toneMapped: false,
       polygonOffset: true,
       polygonOffsetFactor: 2,
       polygonOffsetUnits: 2
@@ -306,6 +330,7 @@ export class GroundStreamer {
 
     const mesh = new Mesh(geo, mat);
     mesh.position.set(cellWx, 0, cellWz);
+    this.onPatch?.(mesh);
 
     this.group.add(mesh);
     this.patches.set(key, {
@@ -316,6 +341,7 @@ export class GroundStreamer {
       centerWx: cellWx,
       centerWz: cellWz
     });
+    this.setCovered(col, row, 1);
   }
 
   private decodeBlob(blob: Blob): Promise<HTMLImageElement> {

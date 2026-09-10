@@ -415,7 +415,11 @@ common at the kerb. Swept is the alternative: flatten, then discard only
 triangles whose three vertices all flattened. Kerbside walls survive, and so
 do street trees, since no top-down mask separates a tree at the kerb from the
 wall behind it; in open ground with no structure cell within reach the cut
-rises to 6 m so buses and RVs go too. Both stream satellite ground under
+rises to 6 m so buses and RVs go too, and there any triangle with even one
+flattened vertex goes whole: a triangle from a flattened car roof up to a
+sign or a tree was a dark tent lying across the road. The price is that a
+tree standing in the open loses its trunk and floats; near a facade it keeps
+everything. Both stream satellite ground under
 tiles. Every patched material shares one set of uniform objects, so switching
 modes is a value write and a ground refinement is a re-upload, never a
 recompile.
@@ -513,7 +517,59 @@ and the frustum shifted right of the garage panel (`setViewOffset`).
 
 The sky is an equirectangular canvas painted once (`render/skyTexture.ts`):
 gradient, sun disc at the light's direction, a cloud band above the horizon,
-haze below; the fog takes the horizon color.
+haze below; the fog takes the horizon color. The same canvas, run through
+PMREM, is the environment map for car paint, glass and chrome, so a car
+reflects the sky it is parked under rather than a studio.
+
+### Compositing game objects into photo tiles
+
+A real place is two photographs with their own sunlight baked in: Google's
+tiles (unlit `MeshBasicMaterial`s straight from the GLB) and the satellite
+ground. Everything the game draws on top is lit by one scene sun. Making the
+two read as one picture is the same problem as augmented reality, and it uses
+the same standard answers:
+
+- **The photo is shown as shot.** Tile, satellite terrain and ground patch
+  materials are unlit and `toneMapped = false`: running display-referred
+  imagery through the filmic curve again crushed facades and darkened every
+  street, and lighting the satellite ground with the scene lights put a blue
+  cast on it that the buildings standing on it did not have. The satellite
+  terrain used to be a lit `MeshStandardMaterial`; that is why.
+- **Two light rigs** (`GameRenderer.setLightRig`). `arcade` is the original
+  sun/ambient/hemisphere for the procedural desert and Game 3D. `photo`
+  scales them so a lit car's upward faces land at about the brightness of a
+  photographed surface with the same albedo. `main.ts` switches on view mode
+  and whether the terrain is real.
+- **Ground shade** (`render/GroundShade.ts`). The imagery's own shadows are
+  the truth about the light here, so each car samples the brightness of the
+  ground under it and scales its body colours to match, easing in over
+  ~0.15 s. The base satellite canvas and every streamed patch are reduced once
+  to a small luminance grid on load; "sunlit" is the field's 45th percentile,
+  which is ordinary asphalt, not roofs. Headlights and tail lights keep their
+  own glow. Off in Game 3D.
+- **Contact shadow.** Every car carries a soft dark ellipse on the ground,
+  always on, thinning as it lifts off. A real shadow map would fight the
+  shadows already baked into the tiles; this is the ambient-occlusion pool a
+  car has under it in any light, and it is what stops the car floating over
+  the picture.
+- **Detail grain** (`render/DetailGrain.ts`). Within ~100 m of the camera a
+  satellite patch or tile is magnified thirty times and turns to smear, so a
+  tiling grey grain (three cache-resident reads, triplanar so facades get it
+  too, fading to nothing by 110 m) is multiplied into the albedo. It is
+  injected into every tile material by the clutter filter's shader patch and
+  into the ground materials directly.
+- **Patch coverage cutout.** A streamed patch and the base terrain are two
+  triangulations of the same heightfield, so polygon offset alone let the
+  blurry zoom-15 base bleed through as dark polygons wherever the coarser
+  patch dipped under it. `GroundStreamer.onCoverageChanged` hands the terrain
+  a 32×32 grid of which patch cells are loaded and the terrain shader discards
+  its fragments under them. Patches are also subdivided to ~10 m so they
+  follow the same bumps the physics ground has.
+
+What this cannot fix is the two photographs disagreeing: the satellite pass
+and the tile capture were flown on different days, so a street in a tower's
+shadow in one is sunlit in the other. Ground shade follows the satellite
+because that is what the car is standing on.
 
 ## Performance
 
@@ -552,6 +608,13 @@ fixed:
   textures are compiled and uploaded as each tile lands rather than when it
   first enters the frustum; and the satellite footprint repaint, a 3840²
   re-upload with mipmaps, is throttled.
+- **Shader linking**: a program's link status is only read on its first draw,
+  and reading it blocks until the driver has finished linking, so a
+  synchronously compiled tile still cost 30-100 ms inside the first frame
+  that drew it (`getProgramInfoLog` in a profile). `GameRenderer.warm` now
+  uses `compileAsync`, which polls `KHR_parallel_shader_compile`, and hides
+  the object until every program is ready. `scripts/hitch-profile.mjs`
+  attributes long frames like that one function by function.
 - Remaining known costs: tile rasterization on the main thread, ground-builder
   completion (~15-25 ms), and satellite patch decode (~10 ms each).
 

@@ -8,8 +8,8 @@
  * under the wheels to make hills read as hills.
  */
 import {
-  Group, Mesh, CircleGeometry, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
-  Quaternion, Euler, Vector3, type Material
+  Group, Mesh, PlaneGeometry, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
+  Quaternion, Euler, Vector3, Color, type Material, type Texture
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
@@ -19,6 +19,33 @@ export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
+/** Shadow footprint: the car's track and wheelbase plus the penumbra past each side. */
+const SHADOW_W = TRACK + 1.6;
+const SHADOW_L = WHEELBASE + 2.4;
+const SHADOW_ALPHA = 0.5;
+
+let shadowTex: Texture | null = null;
+/**
+ * A soft dark ellipse for the contact shadow, painted once and shared. A
+ * photo tile already has its sun baked in, so a real shadow map would fight
+ * it; this is the ambient-occlusion pool every car has under it in any light.
+ */
+function contactShadowTexture(): Texture {
+  if (shadowTex) return shadowTex;
+  const n = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  const ctx = c.getContext('2d')!;
+  const g = ctx.createRadialGradient(n / 2, n / 2, 0, n / 2, n / 2, n / 2);
+  g.addColorStop(0, 'rgba(0,0,0,1)');
+  g.addColorStop(0.45, 'rgba(0,0,0,0.85)');
+  g.addColorStop(0.75, 'rgba(0,0,0,0.3)');
+  g.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, n, n);
+  shadowTex = new CanvasTexture(c);
+  return shadowTex;
+}
 
 /** A rendered (interpolated) pose; what the camera and pickups follow. */
 export interface Pose {
@@ -35,7 +62,7 @@ export class VehicleView {
   private readonly healthBar: Sprite;
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
-  private readonly shadow: Mesh<CircleGeometry, MeshBasicMaterial>;
+  private readonly shadow: Mesh<PlaneGeometry, MeshBasicMaterial>;
   private readonly team: number;
   private lastDamage = -1;
   private pitch = 0;
@@ -45,25 +72,44 @@ export class VehicleView {
   private readonly _fwd = new Vector3();
   private readonly _right = new Vector3();
 
+  /** Body materials and their designed colours, scaled by the photo ground's brightness. */
+  private readonly tinted: { m: Material & { color: Color }; base: Color }[] = [];
+  private shade = 1;
+
   constructor(
     readonly actor: VehicleActor,
-    private readonly ground: () => Heightfield
+    private readonly ground: () => Heightfield,
+    /** Brightness of the photo ground under (x, z), 1 where there is none; see GroundShade. */
+    private readonly groundShade: (x: number, z: number) => number = () => 1
   ) {
     this.car = buildVehicle(actor.body.stats, actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1]);
+    this.car.root.traverse(obj => {
+      if (!(obj instanceof Mesh)) return;
+      for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+        const c = (m as Material & { color?: Color; emissive?: Color }).color;
+        const e = (m as Material & { emissive?: Color }).emissive;
+        // lights keep their own glow; everything else takes the ground's light
+        if (c && !(e && (e.r > 0.2 || e.g > 0.2 || e.b > 0.2)) && !this.tinted.some(t => t.m === m)) {
+          this.tinted.push({ m: m as Material & { color: Color }, base: c.clone() });
+        }
+      }
+    });
     this.carRoot.add(this.car.root);
     this.group.add(this.carRoot);
 
-    // blob shadow on the ground under the car: invisible while planted, fades
-    // in with height so a gap between car and shadow reads as "airborne"
+    // contact shadow under the car: always on so the car sits on the ground
+    // instead of floating over it, thinning with height so a gap between car
+    // and shadow reads as "airborne". Lives in carRoot so it turns and tilts
+    // with the body.
     this.shadow = new Mesh(
-      new CircleGeometry(2.4, 20),
+      new PlaneGeometry(SHADOW_W, SHADOW_L),
       new MeshBasicMaterial({
-        color: 0x000000, transparent: true, opacity: 0, depthWrite: false,
-        polygonOffset: true, polygonOffsetFactor: -4
+        map: contactShadowTexture(), color: 0x000000, transparent: true, opacity: SHADOW_ALPHA,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4
       })
     );
     this.shadow.rotation.x = -Math.PI / 2;
-    this.group.add(this.shadow);
+    this.carRoot.add(this.shadow);
 
     // health bar sprite above the vehicle
     this.barCanvas = document.createElement('canvas');
@@ -141,9 +187,16 @@ export class VehicleView {
     for (const p of this.car.frontPivots) p.rotation.y = body.steer * 0.45;
     this.car.tail.emissiveIntensity = body.brake > 0 ? 3 : 0.6;
 
-    this.shadow.position.y = body.groundY - this.group.position.y + 0.15;
-    this.shadow.material.opacity = MathUtils.clamp(height * 0.15, 0, 0.45);
-    const s = MathUtils.clamp(1 - height * 0.02, 0.5, 1);
+    // ease into the photographed shadow the car is driving through
+    const target = this.groundShade(x, z);
+    if (Math.abs(target - this.shade) > 0.005) {
+      this.shade += (target - this.shade) * (1 - Math.exp(-dt * 6));
+      for (const t of this.tinted) t.m.color.copy(t.base).multiplyScalar(this.shade);
+    }
+
+    this.shadow.position.y = body.groundY - this.group.position.y + 0.2;
+    this.shadow.material.opacity = SHADOW_ALPHA * MathUtils.clamp(1 - height * 0.12, 0.25, 1);
+    const s = MathUtils.clamp(1 - height * 0.03, 0.6, 1);
     this.shadow.scale.set(s, s, 1);
     this.updateHealthBar();
   }

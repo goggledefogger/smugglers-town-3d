@@ -30,6 +30,7 @@ import {
   type Object3D, type Mesh, type Material, type WebGLProgramParametersWithUniforms
 } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
+import { injectDetailGrain } from './DetailGrain.ts';
 
 export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept';
 /** Index order is baked into the shader's mode comparisons: append, never reorder. */
@@ -49,6 +50,7 @@ uniform float uClutterRise;
 uniform float uClutterTall;
 varying float vClutterStructure;
 varying float vClutterFlat;
+varying float vClutterOpenFlat;
 `;
 
 /**
@@ -60,6 +62,7 @@ const VERTEX_BODY = `
 float cClutterDy = 0.0;
 vClutterStructure = 1.0;
 vClutterFlat = 0.0;
+vClutterOpenFlat = 0.0;
 if (uClutterMode > 0.5) {
   vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 cuv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
@@ -80,6 +83,9 @@ if (uClutterMode > 0.5) {
   bool cFlatten = uClutterMode < 1.5 || uClutterMode > 2.5;
   if (cFlatten && cStreet && abs(crise) < uClutterRise) cClutterDy = -crise;
   if (cStreet && abs(crise) < uClutterRise * (cStructure > 0.0 ? 1.0 : uClutterTall)) vClutterFlat = 1.0;
+  // flattened with no structure in reach: a triangle from here up to a tree or
+  // a sign is a dark tent over the road, not the base of a wall
+  if (cFlatten && cStreet && cStructure <= 0.0 && abs(crise) < uClutterRise * uClutterTall) vClutterOpenFlat = 1.0;
 }
 `;
 
@@ -99,14 +105,16 @@ const FRAGMENT_PARS = `
 uniform float uClutterMode;
 varying float vClutterStructure;
 varying float vClutterFlat;
+varying float vClutterOpenFlat;
 `;
 
 /**
  * Hidden: interpolated mask, so the cut runs between cell centres, not per triangle.
- * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base.
+ * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base;
+ * and any triangle with a vertex flattened in the open goes whole, so nothing tents up from the road.
  */
 const FRAGMENT_CUT = `
-if (uClutterMode > 2.5) { if (vClutterFlat > 0.999) discard; }
+if (uClutterMode > 2.5) { if (vClutterFlat > 0.999 || vClutterOpenFlat > 0.0) discard; }
 else if (uClutterMode > 1.5 && vClutterStructure < 0.5) discard;
 `;
 
@@ -201,6 +209,7 @@ export class TileClutterFilter {
         m.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms, renderer) => {
           prev?.call(m, shader, renderer);
           this.inject(shader);
+          injectDetailGrain(shader);
         };
         m.needsUpdate = true;
       }
