@@ -80,8 +80,11 @@ export class BuildingMeshView {
         let minY = b.min.y;
         if (sampleGround) {
           const groundY = sampleGround(cx, cz);
-          // Firmly embed building base into ground so buildings never hover as floating roofs
-          minY = Math.min(minY, groundY - 1.5);
+          // Firmly embed ground-anchored building bases into ground so buildings never hover,
+          // but preserve elevated floating overhead obstacles (bridge spans, high canopies)
+          if (b.min.y <= groundY + 1.5) {
+            minY = Math.min(minY, groundY - 1.5);
+          }
         }
         const maxY = b.max.y;
 
