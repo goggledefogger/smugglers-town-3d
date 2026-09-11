@@ -1186,8 +1186,13 @@ export function collidersFromRasters(
           lo = Infinity;
         }
         hi = Math.max(hi, top[c]!);
-        // Box floor follows true ground level so buildings extend all the way down to the terrain
-        lo = Math.min(lo, getGroundY(c));
+        const gC = getGroundY(c);
+        // When an overhead structure has confirmed open driving clearance below (e.g. elevated canopy,
+        // skybridge, or viaduct), elevate its floor so vehicles can drive cleanly underneath
+        const cellFloor = hasGroundClearance(c, gC, top[c]!)
+          ? gC + thresholds.clearanceDriveMaxM + 1.0
+          : gC;
+        lo = Math.min(lo, cellFloor);
         continue;
       }
       if (start < 0) continue;
