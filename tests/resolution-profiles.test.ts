@@ -102,7 +102,7 @@ describe('TileStreamer Resolution Switching', () => {
 
     expect(streamer.activeResolutionMode).toBe('balanced');
     expect(streamer.activeLodPolicy.minErrorM).toBe(1.5);
-    expect(streamer.activeMaxTiles).toBe(350);
+    expect(streamer.activeMaxTiles).toBe(260);
 
     // Switch to High
     streamer.setResolutionMode('high');

@@ -65,60 +65,39 @@ if (uHasTexture > 0.5) {
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
   if (vIsRoof > 0.5) {
-    // Rooftop: Pristine satellite aerial imagery with realistic rooftop structures
+    // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
     diffuseColor.rgb = sat.rgb;
-  } else if (uTextureStyle < 0.5) {
-    // Pure top-down planar stretch: edge pixels stretched down straight box walls
-    // Baseline minimum brightness so shadowed faces don't crush to pitch black
-    diffuseColor.rgb = max(sat.rgb * 0.88, vec3(0.12, 0.14, 0.18));
   } else {
-    // Rich architectural facade with axis-aligned windows, floor bands, glass reflections, and ground foundation plinth
-    // 1. Determine wall horizontal coordinate aligned to facade normal
-    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
-    float wallV = vWorldPos.y;
+    // Wall facades: Grounded directly in real aerial imagery of the building
+    // 1. Directional sun and ambient shading per facade
+    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
+    if (vBuildingNormal.y < -0.5) faceLight = 0.5;
 
-    // 2. Story heights and window bays
-    // Standard commercial/residential story is ~3.5m high
-    float storyHeight = 3.5;
-    float storyCoord = wallV / storyHeight;
-    float storyFrac = fract(storyCoord);
+    // 2. Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
+    float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
+    float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
+    float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.32 * groundPlinth);
 
-    // Floor spandrel / slab divider (bottom 20% of each story is structural frieze)
-    float isFloorSlab = step(storyFrac, 0.20);
+    // Base wall color is drawn directly from the genuine satellite photography
+    vec3 baseWall = sat.rgb * faceLight * verticalAO;
 
-    // Window bays: 2.5m spacing with 0.6m masonry piers between glass
-    float baySpacing = 2.5;
-    float bayCoord = wallU / baySpacing;
-    float bayFrac = fract(bayCoord);
-    float isMullion = step(bayFrac, 0.24);
+    if (uTextureStyle < 0.5) {
+      // Planar mode: Authentic satellite texture draped with natural ambient occlusion
+      diffuseColor.rgb = max(baseWall, vec3(0.10, 0.12, 0.15));
+    } else {
+      // Hybrid mode: Real satellite imagery modulated with subtle architectural floor relief
+      // Architectural story height ~3.5m
+      float storyFrac = fract(vWorldPos.y / 3.5);
+      float isFloorBand = step(storyFrac, 0.18);
 
-    // Window glass pane region: between floor slabs and between mullions
-    float isWindow = (1.0 - isFloorSlab) * (1.0 - isMullion);
+      // Subtle horizontal facade frieze derived from building's own satellite tone
+      vec3 floorBandColor = baseWall * 0.82;
+      vec3 facadeColor = mix(baseWall, floorBandColor, isFloorBand * 0.45);
 
-    // 3. Ground-level foundation plinth (lowest part of building where it enters the earth)
-    // Darker, heavier masonry/concrete base that visually anchors the building into the slope
-    float isPlinth = step(vLocalNormY, 0.07);
-
-    // 4. Color synthesis:
-    // Base wall masonry tone derived from building's satellite aerial color
-    vec3 aerialTone = max(sat.rgb, vec3(0.20, 0.22, 0.26));
-    vec3 wallMasonry = aerialTone * 0.92;
-    vec3 floorTrim = wallMasonry * 0.78;
-    vec3 plinthColor = vec3(0.14, 0.16, 0.19); // solid concrete/slate foundation base
-
-    // Architectural reflective glass: dark tinted core + sky gradient reflection + subtle floor-to-floor variation
-    float windowVar = fract(sin(floor(storyCoord) * 12.9898 + floor(bayCoord) * 78.233) * 43758.5453);
-    vec3 glassColor = vec3(0.10, 0.15, 0.22) + vec3(0.04, 0.05, 0.07) * (1.0 - storyFrac);
-    if (windowVar > 0.65) {
-      // Subtle warm interior ambient light in some windows
-      glassColor += vec3(0.06, 0.05, 0.03);
+      // Deep foundation contact at terrain
+      vec3 plinthTone = mix(facadeColor, vec3(0.12, 0.14, 0.16), groundPlinth * 0.7);
+      diffuseColor.rgb = max(plinthTone, vec3(0.08, 0.10, 0.12));
     }
-
-    vec3 facadeColor = mix(wallMasonry, floorTrim, isFloorSlab);
-    facadeColor = mix(facadeColor, glassColor, isWindow);
-    facadeColor = mix(facadeColor, plinthColor, isPlinth);
-
-    diffuseColor.rgb = facadeColor;
   }
 }
 `;
@@ -246,7 +225,7 @@ export class BuildingMeshView {
     const count = colliders.length;
     if (count > 0) {
       const mesh = new InstancedMesh(this.boxGeo, this.buildingMat, count);
-      mesh.castShadow = true;
+      mesh.castShadow = false; // Perf: avoid rendering thousands of instances in shadow pass
       mesh.receiveShadow = true;
 
       for (let i = 0; i < count; i++) {
@@ -321,6 +300,8 @@ export class BuildingMeshView {
 
       if (deckIndices.length > 0) {
         const deckMesh = new InstancedMesh(this.boxGeo, this.deckMat, deckIndices.length);
+        deckMesh.castShadow = false;
+        deckMesh.receiveShadow = true;
         const THICKNESS = 1.4;
         for (let idx = 0; idx < deckIndices.length; idx++) {
           const c = deckIndices[idx]!;

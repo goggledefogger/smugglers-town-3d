@@ -43,10 +43,10 @@ export const RESOLUTION_3D_PROFILES: Record<Resolution3DMode, Resolution3DProfil
   balanced: {
     mode: 'balanced',
     label: 'Balanced (1.5m, Z18)',
-    description: '1.5m LOD, 350 tiles, Zoom 18 ground (~24cm/px), 1.5x DPR',
+    description: '1.5m LOD, 260 tiles, Zoom 18 ground (~24cm/px), 1.5x DPR',
     lod: { minErrorM: 1.5, maxErrorM: 40, errorPerMeter: 1 / 60 },
-    maxTiles: 350,
-    refineIntervalMs: 250,
+    maxTiles: 260,
+    refineIntervalMs: 300,
     refineBatchSize: 1,
     anisotropy: 4,
     dprCap: 1.5,

@@ -51,6 +51,10 @@ describe('BuildingMeshView', () => {
 
     view.update(mockColliders, mockDeckGrid, mockGrid);
     expect(view.group.children.length).toBe(2); // 1 building mesh + 1 deck mesh
+    expect((view as any).buildingMesh.castShadow).toBe(false);
+    expect((view as any).buildingMesh.receiveShadow).toBe(true);
+    expect((view as any).deckMesh.castShadow).toBe(false);
+    expect((view as any).deckMesh.receiveShadow).toBe(true);
 
     view.clear();
     expect(view.group.children.length).toBe(0);
@@ -161,3 +165,25 @@ describe('TerrainMesh visual modes', () => {
     tm.dispose();
   });
 });
+
+describe('TileClutterFilter modes for Real 3D vs Masked 3D Tiles', () => {
+  it('correctly maps off for Real 3D and hidden for Masked 3D Tiles', async () => {
+    const { TileClutterFilter } = await import('../src/render/TileClutterFilter.ts');
+    const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
+    const structure = new Uint8Array(16);
+    const filter = new TileClutterFilter(hf, structure, 4);
+
+    expect(filter.mode).toBe('off');
+
+    filter.mode = 'hidden';
+    expect(filter.mode).toBe('hidden');
+    expect((filter as any).uMode.value).toBe(2);
+
+    filter.mode = 'off';
+    expect(filter.mode).toBe('off');
+    expect((filter as any).uMode.value).toBe(0);
+
+    filter.dispose();
+  });
+});
+

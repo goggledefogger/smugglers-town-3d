@@ -95,19 +95,24 @@ try {
   await page.screenshot({ path: `${SCRATCH}/03_spectrum_textured_3d_driving.png` });
   copyFileSync(`${SCRATCH}/03_spectrum_textured_3d_driving.png`, `${ARTIFACT_DIR}/03_spectrum_textured_3d_driving.png`);
 
-  // 5. Cycle back to REAL 3D
-  console.log('[playwright] Pressing KeyV to return to Real 3D...');
-  await page.keyboard.press('KeyV');
+  // 5. Cycle back to REAL 3D (from TEXTURED 3D -> MASKED 3D TILES -> REAL 3D)
+  console.log('[playwright] Pressing KeyV to cycle through Masked to Real 3D...');
+  await page.keyboard.press('KeyV'); // to MASKED 3D TILES
+  await page.waitForTimeout(500);
+  await page.keyboard.press('KeyV'); // to REAL 3D
   await page.waitForTimeout(1000);
   const mode5 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
-  console.log(`[playwright] Mode 5: ${mode5}`);
+  const clutter5 = await page.$eval('#clutter-text', el => el.textContent?.trim()).catch(() => 'none');
+  console.log(`[playwright] Mode 5: ${mode5} (${clutter5})`);
+  await page.screenshot({ path: `${SCRATCH}/05_spectrum_back_to_real_3d.png` });
+  copyFileSync(`${SCRATCH}/05_spectrum_back_to_real_3d.png`, `${ARTIFACT_DIR}/05_spectrum_back_to_real_3d.png`);
 
   console.log('\n--- VERIFICATION SUMMARY ---');
   console.log(`Step 1 (Raw Photoreal):      ${mode1}`);
   console.log(`Step 2 (Arcade 3D):           ${mode2}`);
   console.log(`Step 3 (Textured 3D Objects): ${mode3}`);
   console.log(`Step 4 (Masked 3D Tiles):     ${mode4}`);
-  console.log(`Step 5 (Back to Real 3D):     ${mode5}`);
+  console.log(`Step 5 (Back to Real 3D):     ${mode5} [${clutter5}]`);
 
   if (consoleErrors.length > 0) {
     console.warn('\nPage logged errors:', consoleErrors);

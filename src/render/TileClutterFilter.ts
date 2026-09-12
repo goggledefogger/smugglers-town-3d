@@ -48,6 +48,7 @@ uniform float uClutterMode;
 uniform vec2 uClutterField;
 uniform float uClutterRise;
 uniform float uClutterTall;
+varying vec3 vClutterWorldPos;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
@@ -63,8 +64,9 @@ float cClutterDy = 0.0;
 vClutterStructure = 1.0;
 vClutterFlat = 0.0;
 vClutterOpenFlat = 0.0;
+vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
+vClutterWorldPos = cwp;
 if (uClutterMode > 0.5) {
-  vec3 cwp = (modelMatrix * vec4(transformed, 1.0)).xyz;
   vec2 cuv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
   // an R8 UNSIGNED_BYTE texture samples normalised, so the mask's 1 reads as 1/255:
   // scale back up before comparing, bilinear blends between cells still land in 0..1
@@ -102,20 +104,28 @@ gl_Position = projectionMatrix * mvPosition;
 `;
 
 const FRAGMENT_PARS = `
+uniform sampler2D uClutterMask;
+uniform vec2 uClutterField;
 uniform float uClutterMode;
+varying vec3 vClutterWorldPos;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
 `;
 
 /**
- * Hidden: interpolated mask, so the cut runs between cell centres, not per triangle.
+ * Hidden: sharp fragment-stage structure mask lookup so the cut follows building footprints exactly.
  * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base;
  * and any triangle with a vertex flattened in the open goes whole, so nothing tents up from the road.
  */
 const FRAGMENT_CUT = `
-if (uClutterMode > 2.5) { if (vClutterFlat > 0.999 || vClutterOpenFlat > 0.0) discard; }
-else if (uClutterMode > 1.5 && vClutterStructure < 0.5) discard;
+if (uClutterMode > 2.5) {
+  if (vClutterFlat > 0.999 || vClutterOpenFlat > 0.0) discard;
+} else if (uClutterMode > 1.5) {
+  vec2 fUv = clamp(vClutterWorldPos.xz / uClutterField.x + 0.5, 0.0, 1.0);
+  float fStructure = texture2D(uClutterMask, fUv).r * 255.0;
+  if (fStructure < 0.5) discard;
+}
 `;
 
 type Patchable = Material & { _clutterPatched?: boolean };

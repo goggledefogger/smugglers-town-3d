@@ -173,7 +173,7 @@ let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // swept by default: flattens road clutter while keeping kerbside building facades
 // and trees over the sharper streamed satellite ground
-let clutterMode: ClutterMode = 'swept';
+let clutterMode: ClutterMode = 'off';
 /** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
 const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept']);
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
@@ -202,7 +202,15 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
-  clutterFilter.mode = clutterMode;
+  if (viewMode === 'masked-tiles') {
+    clutterFilter.mode = 'hidden';
+    clutterMode = 'hidden';
+  } else if (viewMode === 'photoreal') {
+    clutterFilter.mode = 'off';
+    clutterMode = 'off';
+  } else {
+    clutterFilter.mode = clutterMode;
+  }
   if (groundStreamer) {
     // the tiles shifted the ground datum; patches under them must sit on the same field the car drives on
     groundStreamer.useHeightfield(terrain.heightfield);
@@ -249,9 +257,14 @@ function setViewMode(mode: ViewMode): void {
   const hasTiles = isRawPhotoreal || isMaskedTiles;
 
   if (tiles) tiles.group.visible = hasTiles;
-  if (clutterFilter && isMaskedTiles) {
-    clutterFilter.mode = 'hidden';
-    clutterMode = 'hidden';
+  if (clutterFilter) {
+    if (isMaskedTiles) {
+      clutterFilter.mode = 'hidden';
+      clutterMode = 'hidden';
+    } else if (isRawPhotoreal) {
+      clutterFilter.mode = 'off';
+      clutterMode = 'off';
+    }
     updateClutterUi();
   }
 
