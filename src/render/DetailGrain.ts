@@ -36,15 +36,17 @@ varying vec3 vGrainWorld;
 const GRAIN_FRAGMENT = `
 {
   float gw = uGrainStrength * (1.0 - smoothstep(uGrainFade.x, uGrainFade.y, distance(vGrainWorld, cameraPosition)));
-  vec3 c = cross(dFdx(vGrainWorld), dFdy(vGrainWorld));
-  float clen = length(c);
-  vec3 gn = clen > 1e-5 ? abs(c / clen) : vec3(0.0, 1.0, 0.0);
-  vec3 gb = gn * gn * gn * gn;
-  float sumGb = gb.x + gb.y + gb.z;
-  gb /= (sumGb > 1e-5 ? sumGb : 1.0);
-  vec3 gp = vGrainWorld * uGrainScale;
-  float g = texture2D(uGrain, gp.yz).r * gb.x + texture2D(uGrain, gp.xz).r * gb.y + texture2D(uGrain, gp.xy).r * gb.z;
-  diffuseColor.rgb *= 1.0 + (g - 0.5) * 2.0 * gw;
+  if (gw > 0.01) {
+    vec3 c = cross(dFdx(vGrainWorld), dFdy(vGrainWorld));
+    float clen = length(c);
+    vec3 gn = clen > 1e-5 ? abs(c / clen) : vec3(0.0, 1.0, 0.0);
+    vec3 gb = gn * gn * gn * gn;
+    float sumGb = gb.x + gb.y + gb.z;
+    gb /= (sumGb > 1e-5 ? sumGb : 1.0);
+    vec3 gp = vGrainWorld * uGrainScale;
+    float g = texture2D(uGrain, gp.yz).r * gb.x + texture2D(uGrain, gp.xz).r * gb.y + texture2D(uGrain, gp.xy).r * gb.z;
+    diffuseColor.rgb *= 1.0 + (g - 0.5) * 2.0 * gw;
+  }
 }
 `;
 

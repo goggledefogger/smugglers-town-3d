@@ -49,6 +49,7 @@ uniform vec2 uClutterField;
 uniform float uClutterRise;
 uniform float uClutterTall;
 varying vec3 vClutterWorldPos;
+varying float vClutterRiseVal;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
@@ -61,6 +62,7 @@ varying float vClutterOpenFlat;
  */
 const VERTEX_BODY = `
 float cClutterDy = 0.0;
+vClutterRiseVal = 0.0;
 vClutterStructure = 1.0;
 vClutterFlat = 0.0;
 vClutterOpenFlat = 0.0;
@@ -81,6 +83,7 @@ if (uClutterMode > 0.5) {
     mix(texelFetch(uClutterGround, ci + ivec2(0, 1), 0).r, texelFetch(uClutterGround, ci + ivec2(1, 1), 0).r, ct.x),
     ct.y);
   float crise = cwp.y - cg;
+  vClutterRiseVal = crise;
   bool cStreet = cStructure < 0.5;
   bool cFlatten = uClutterMode < 1.5 || uClutterMode > 2.5;
   if (cFlatten && cStreet && abs(crise) < uClutterRise) cClutterDy = -crise;
@@ -107,7 +110,9 @@ const FRAGMENT_PARS = `
 uniform sampler2D uClutterMask;
 uniform vec2 uClutterField;
 uniform float uClutterMode;
+uniform float uClutterRise;
 varying vec3 vClutterWorldPos;
+varying float vClutterRiseVal;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
@@ -115,6 +120,7 @@ varying float vClutterOpenFlat;
 
 /**
  * Hidden: sharp fragment-stage structure mask lookup so the cut follows building footprints exactly.
+ * Only ground-level road clutter (< uClutterRise) is discarded; building walls and roofs are preserved.
  * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base;
  * and any triangle with a vertex flattened in the open goes whole, so nothing tents up from the road.
  */
@@ -124,7 +130,7 @@ if (uClutterMode > 2.5) {
 } else if (uClutterMode > 1.5) {
   vec2 fUv = clamp(vClutterWorldPos.xz / uClutterField.x + 0.5, 0.0, 1.0);
   float fStructure = texture2D(uClutterMask, fUv).r * 255.0;
-  if (fStructure < 0.5) discard;
+  if (fStructure < 0.5 && vClutterRiseVal < uClutterRise) discard;
 }
 `;
 

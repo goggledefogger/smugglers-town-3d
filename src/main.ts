@@ -278,22 +278,25 @@ function setViewMode(mode: ViewMode): void {
 
   terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
 
-  // In arcade/textured modes, buildingMeshView is the primary visible structure geometry.
-  // In photoreal and masked-tiles modes, 3D tiles provide the authentic photogrammetry buildings.
-  buildingMeshView.visible = !hasTiles;
+  // In arcade and textured modes, buildingMeshView is the primary visible structure geometry.
+  // In masked-tiles mode, buildingMeshView provides the solid color-mapped substrate
+  // so building walls are never see-through or hollow ("at worst a color-mapped object, not see through").
+  // In photoreal (Real 3D) mode, raw 3D tiles are shown alone.
+  buildingMeshView.visible = mode !== 'photoreal';
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
-  if (mode === 'game3d' || mode === 'masked-tiles') {
+  if (mode === 'game3d') {
     buildingMeshView.setMode('arcade');
-  } else if (mode === 'game3d-textured' || mode === 'game3d-hybrid') {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('hybrid');
-    if (satTex) {
-      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-    }
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
+    if (satTex) {
+      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+    }
+  } else {
+    // Both 'game3d-textured' and 'masked-tiles' use hybrid textured buildings
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('hybrid');
     if (satTex) {
       buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
     }

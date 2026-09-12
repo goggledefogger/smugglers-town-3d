@@ -78,25 +78,36 @@ if (uHasTexture > 0.5) {
     float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
     float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.32 * groundPlinth);
 
-    // Base wall color is drawn directly from the genuine satellite photography
-    vec3 baseWall = sat.rgb * faceLight * verticalAO;
+    // Instance masonry tone (warm sandstone/limestone/stucco/terracotta from building color palette)
+    #ifdef USE_INSTANCING_COLOR
+      vec3 instTone = vColor.rgb;
+    #else
+      vec3 instTone = vec3(0.68, 0.65, 0.60);
+    #endif
+
+    // Blend genuine satellite imagery with warm, vibrant building masonry tone
+    // so walls are NEVER a hollow black void, but a rich, warm, color-mapped facade
+    vec3 wallTone = mix(instTone, sat.rgb, 0.5);
+    wallTone = max(wallTone, instTone * 0.7);
+
+    vec3 baseWall = wallTone * faceLight * verticalAO;
 
     if (uTextureStyle < 0.5) {
       // Planar mode: Authentic satellite texture draped with natural ambient occlusion
-      diffuseColor.rgb = max(baseWall, vec3(0.10, 0.12, 0.15));
+      diffuseColor.rgb = baseWall;
     } else {
       // Hybrid mode: Real satellite imagery modulated with subtle architectural floor relief
       // Architectural story height ~3.5m
       float storyFrac = fract(vWorldPos.y / 3.5);
       float isFloorBand = step(storyFrac, 0.18);
 
-      // Subtle horizontal facade frieze derived from building's own satellite tone
-      vec3 floorBandColor = baseWall * 0.82;
-      vec3 facadeColor = mix(baseWall, floorBandColor, isFloorBand * 0.45);
+      // Subtle horizontal facade frieze derived from building's own tone
+      vec3 floorBandColor = baseWall * 0.86;
+      vec3 facadeColor = mix(baseWall, floorBandColor, isFloorBand * 0.35);
 
-      // Deep foundation contact at terrain
-      vec3 plinthTone = mix(facadeColor, vec3(0.12, 0.14, 0.16), groundPlinth * 0.7);
-      diffuseColor.rgb = max(plinthTone, vec3(0.08, 0.10, 0.12));
+      // Solid concrete/slate foundation plinth contact at terrain
+      vec3 plinthTone = mix(facadeColor, instTone * 0.45, groundPlinth * 0.55);
+      diffuseColor.rgb = plinthTone;
     }
   }
 }
@@ -127,16 +138,22 @@ export class BuildingMeshView {
     this.uSatelliteMap = { value: this.dummyTex };
 
     this.buildingMat = new MeshStandardMaterial({
-      color: 0x323a48,
+      color: 0xffffff,
       roughness: 0.65,
       metalness: 0.15,
-      flatShading: true
+      flatShading: true,
+      polygonOffset: true,
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: 2
     });
 
     this.deckMat = new MeshStandardMaterial({
       color: BUILDING_COLORS.deck,
       roughness: 0.8,
-      metalness: 0.05
+      metalness: 0.05,
+      polygonOffset: true,
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: 2
     });
 
     this.hookMaterial(this.buildingMat, 'building-mesh-view');
