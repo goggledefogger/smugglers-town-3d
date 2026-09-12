@@ -27,7 +27,9 @@ const _color = new Color();
 const VERTEX_PARS_BUILDING = `
 uniform float uHasTexture;
 varying vec3 vWorldPos;
+varying vec3 vBuildingNormal;
 varying float vIsRoof;
+varying float vLocalNormY;
 `;
 
 const VERTEX_BODY_BUILDING = `
@@ -40,6 +42,8 @@ vec4 bWorldPos = vec4( transformed, 1.0 );
 #endif
 vWorldPos = (modelMatrix * bWorldPos).xyz;
 vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
+vBuildingNormal = normal;
+vLocalNormY = position.y + 0.5;
 `;
 
 const FRAGMENT_PARS_BUILDING = `
@@ -48,7 +52,9 @@ uniform float uMapSize;
 uniform float uHasTexture;
 uniform float uTextureStyle;
 varying vec3 vWorldPos;
+varying vec3 vBuildingNormal;
 varying float vIsRoof;
+varying float vLocalNormY;
 `;
 
 const FRAGMENT_BODY_BUILDING = `
@@ -59,18 +65,60 @@ if (uHasTexture > 0.5) {
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
   if (vIsRoof > 0.5) {
+    // Rooftop: Pristine satellite aerial imagery with realistic rooftop structures
     diffuseColor.rgb = sat.rgb;
   } else if (uTextureStyle < 0.5) {
     // Pure top-down planar stretch: edge pixels stretched down straight box walls
     // Baseline minimum brightness so shadowed faces don't crush to pitch black
     diffuseColor.rgb = max(sat.rgb * 0.88, vec3(0.12, 0.14, 0.18));
   } else {
-    // Hybrid facade: rooftop satellite + architectural window/floor grid
-    float floorLine = step(0.12, fract(vWorldPos.y / 3.5));
-    float windowCol = step(0.25, fract(length(vWorldPos.xz) / 2.8));
-    float grid = 0.70 + 0.30 * (floorLine * windowCol);
-    vec3 facadeBase = max(sat.rgb * 0.85, vec3(0.15, 0.17, 0.22));
-    diffuseColor.rgb = facadeBase * grid;
+    // Rich architectural facade with axis-aligned windows, floor bands, glass reflections, and ground foundation plinth
+    // 1. Determine wall horizontal coordinate aligned to facade normal
+    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
+    float wallV = vWorldPos.y;
+
+    // 2. Story heights and window bays
+    // Standard commercial/residential story is ~3.5m high
+    float storyHeight = 3.5;
+    float storyCoord = wallV / storyHeight;
+    float storyFrac = fract(storyCoord);
+
+    // Floor spandrel / slab divider (bottom 20% of each story is structural frieze)
+    float isFloorSlab = step(storyFrac, 0.20);
+
+    // Window bays: 2.5m spacing with 0.6m masonry piers between glass
+    float baySpacing = 2.5;
+    float bayCoord = wallU / baySpacing;
+    float bayFrac = fract(bayCoord);
+    float isMullion = step(bayFrac, 0.24);
+
+    // Window glass pane region: between floor slabs and between mullions
+    float isWindow = (1.0 - isFloorSlab) * (1.0 - isMullion);
+
+    // 3. Ground-level foundation plinth (lowest part of building where it enters the earth)
+    // Darker, heavier masonry/concrete base that visually anchors the building into the slope
+    float isPlinth = step(vLocalNormY, 0.07);
+
+    // 4. Color synthesis:
+    // Base wall masonry tone derived from building's satellite aerial color
+    vec3 aerialTone = max(sat.rgb, vec3(0.20, 0.22, 0.26));
+    vec3 wallMasonry = aerialTone * 0.92;
+    vec3 floorTrim = wallMasonry * 0.78;
+    vec3 plinthColor = vec3(0.14, 0.16, 0.19); // solid concrete/slate foundation base
+
+    // Architectural reflective glass: dark tinted core + sky gradient reflection + subtle floor-to-floor variation
+    float windowVar = fract(sin(floor(storyCoord) * 12.9898 + floor(bayCoord) * 78.233) * 43758.5453);
+    vec3 glassColor = vec3(0.10, 0.15, 0.22) + vec3(0.04, 0.05, 0.07) * (1.0 - storyFrac);
+    if (windowVar > 0.65) {
+      // Subtle warm interior ambient light in some windows
+      glassColor += vec3(0.06, 0.05, 0.03);
+    }
+
+    vec3 facadeColor = mix(wallMasonry, floorTrim, isFloorSlab);
+    facadeColor = mix(facadeColor, glassColor, isWindow);
+    facadeColor = mix(facadeColor, plinthColor, isPlinth);
+
+    diffuseColor.rgb = facadeColor;
   }
 }
 `;
@@ -161,9 +209,25 @@ export class BuildingMeshView {
     this.group.visible = v;
   }
 
+  private lastColliders: readonly BuildingCollider[] = [];
+  private lastDeckGrid?: Float32Array;
+  private lastGrid?: Grid;
+  private lastSampleGround?: (x: number, z: number) => number;
+
+  /**
+   * Refresh building heights when the terrain heightfield refines in the background.
+   */
+  refreshHeights(sampleGround: (x: number, z: number) => number): void {
+    this.lastSampleGround = sampleGround;
+    if (this.lastColliders.length > 0) {
+      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround);
+    }
+  }
+
   /**
    * Rebuild instances from the exact active colliders and deck grid.
-   * If sampleGround is provided, each building box is firmly anchored into the terrain.
+   * If sampleGround is provided, each building box is firmly anchored into the terrain
+   * with multi-point footprint sampling so buildings never hover on steep hills.
    */
   update(
     colliders: readonly BuildingCollider[],
@@ -171,6 +235,11 @@ export class BuildingMeshView {
     grid?: Grid,
     sampleGround?: (x: number, z: number) => number
   ): void {
+    this.lastColliders = colliders;
+    this.lastDeckGrid = deckGrid;
+    this.lastGrid = grid;
+    this.lastSampleGround = sampleGround;
+
     this.dispose();
 
     // 1. Build building boxes
@@ -187,19 +256,36 @@ export class BuildingMeshView {
 
         let minY = b.min.y;
         if (sampleGround) {
-          const groundY = sampleGround(cx, cz);
-          // Firmly embed ground-anchored building bases into ground so buildings never hover,
-          // but preserve elevated floating overhead obstacles (bridge spans, high canopies)
-          if (b.min.y <= groundY + 1.5) {
-            minY = Math.min(minY, groundY - 1.5);
+          // Multi-point footprint sampling (4 corners, 4 perimeter midpoints, 1 center)
+          // to account for steep slopes across large building footprints
+          const g00 = sampleGround(b.min.x, b.min.z);
+          const g10 = sampleGround(b.max.x, b.min.z);
+          const g01 = sampleGround(b.min.x, b.max.z);
+          const g11 = sampleGround(b.max.x, b.max.z);
+          const gMidX0 = sampleGround(cx, b.min.z);
+          const gMidX1 = sampleGround(cx, b.max.z);
+          const gMidZ0 = sampleGround(b.min.x, cz);
+          const gMidZ1 = sampleGround(b.max.x, cz);
+          const gCenter = sampleGround(cx, cz);
+
+          const minGround = Math.min(g00, g10, g01, g11, gMidX0, gMidX1, gMidZ0, gMidZ1, gCenter);
+          const maxGround = Math.max(g00, g10, g01, g11, gMidX0, gMidX1, gMidZ0, gMidZ1, gCenter);
+
+          if (b.kind === 'prop') {
+            // Props (scattered rocks, obstacles) embed firmly into the local ground
+            minY = Math.min(b.min.y, minGround - 0.8);
+          } else if (b.min.y <= maxGround + 3.0) {
+            // Ground-rooted building: firmly embed foundation at least 2.5m below the lowest
+            // downhill terrain point across the entire footprint, completely eliminating hover
+            minY = Math.min(b.min.y, minGround - 2.5);
           }
         }
         const maxY = b.max.y;
 
         const sx = Math.max(0.2, b.max.x - b.min.x);
-        const sy = Math.max(0.2, maxY - minY);
+        const sy = Math.max(0.5, maxY - minY);
         const sz = Math.max(0.2, b.max.z - b.min.z);
-        const cy = (minY + maxY) / 2;
+        const cy = minY + sy / 2;
 
         _pos.set(cx, cy, cz);
         _scale.set(sx, sy, sz);

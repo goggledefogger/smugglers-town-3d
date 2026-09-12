@@ -225,7 +225,7 @@ export class TerrainMesh {
     return this._gridTexture;
   }
 
-  setMode(mode: 'photoreal' | 'game3d' | 'game3d-planar' | 'game3d-hybrid'): void {
+  setMode(mode: 'photoreal' | 'masked-tiles' | 'game3d' | 'game3d-textured' | 'game3d-planar' | 'game3d-hybrid'): void {
     this._mode = mode;
     const isArcadeGrid = mode === 'game3d';
     if (this._mesh) {

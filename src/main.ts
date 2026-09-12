@@ -167,7 +167,7 @@ if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
   (window as any).__terrainMesh = terrainMesh;
 }
-export type ViewMode = 'photoreal' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -230,11 +230,13 @@ function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
   if (viewMode === 'game3d') {
-    viewModeText.textContent = 'VIEW: GAME 3D (ARCADE)';
+    viewModeText.textContent = 'VIEW: ARCADE 3D';
+  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
+    viewModeText.textContent = 'VIEW: TEXTURED 3D';
   } else if (viewMode === 'game3d-planar') {
     viewModeText.textContent = 'VIEW: TEXTURED (PLANAR)';
-  } else if (viewMode === 'game3d-hybrid') {
-    viewModeText.textContent = 'VIEW: TEXTURED (HYBRID)';
+  } else if (viewMode === 'masked-tiles') {
+    viewModeText.textContent = 'VIEW: MASKED 3D TILES';
   } else {
     viewModeText.textContent = 'VIEW: REAL 3D';
   }
@@ -242,43 +244,61 @@ function updateViewModeUi(): void {
 
 function setViewMode(mode: ViewMode): void {
   viewMode = mode;
-  const isPhotoreal = mode === 'photoreal';
-  if (tiles) tiles.group.visible = isPhotoreal;
-  const showGround = mode === 'photoreal' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
-  if (groundStreamer) groundStreamer.group.visible = showGround;
-  terrainMesh.setMode(mode);
-  buildingMeshView.visible = !isPhotoreal;
+  const isRawPhotoreal = mode === 'photoreal';
+  const isMaskedTiles = mode === 'masked-tiles';
+  const hasTiles = isRawPhotoreal || isMaskedTiles;
+
+  if (tiles) tiles.group.visible = hasTiles;
+  if (clutterFilter && isMaskedTiles) {
+    clutterFilter.mode = 'swept';
+    clutterMode = 'swept';
+    updateClutterUi();
+  }
+
+  const showGround = hasTiles || mode === 'game3d-textured' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
+  if (groundStreamer) {
+    groundStreamer.group.visible = showGround;
+    if (hasTiles) {
+      groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
+    }
+  }
+
+  terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
+
+  // In arcade/textured modes, buildingMeshView is the primary visible structure geometry.
+  // In photoreal and masked-tiles modes, 3D tiles provide the authentic photogrammetry buildings.
+  buildingMeshView.visible = !hasTiles;
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
-  if (mode === 'game3d') {
+  if (mode === 'game3d' || mode === 'masked-tiles') {
     buildingMeshView.setMode('arcade');
+  } else if (mode === 'game3d-textured' || mode === 'game3d-hybrid') {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('hybrid');
+    if (satTex) {
+      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+    }
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
     if (satTex) {
       buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
     }
-  } else if (mode === 'game3d-hybrid') {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('hybrid');
-    if (satTex) {
-      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-    }
   }
 
-  renderer.setLightRig(isPhotoreal && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  renderer.setLightRig(hasTiles && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
 function toggleViewMode(): void {
-  if (viewMode === 'photoreal') {
-    setViewMode('game3d');
-  } else if (viewMode === 'game3d') {
-    setViewMode('game3d-planar');
-  } else if (viewMode === 'game3d-planar') {
-    setViewMode('game3d-hybrid');
-  } else {
+  if (viewMode === 'game3d') {
+    setViewMode('game3d-textured');
+  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid' || viewMode === 'game3d-planar') {
+    setViewMode('masked-tiles');
+  } else if (viewMode === 'masked-tiles') {
     setViewMode('photoreal');
+  } else {
+    setViewMode('game3d');
   }
 }
 
@@ -648,7 +668,7 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(groundStreamer.group);
           }
           if (tiles) {
-            tiles.group.visible = viewMode === 'photoreal';
+            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles';
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
@@ -740,7 +760,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(groundStreamer.group);
     }
     if (tiles) {
-      tiles.group.visible = viewMode === 'photoreal';
+      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles';
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
@@ -1141,6 +1161,7 @@ function frame(now: number): void {
         }
         terrainMesh.refresh(world.terrainProvider.heightfield);
         clutterFilter?.groundChanged(world.terrainProvider.heightfield);
+        buildingMeshView.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
         if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;
       }

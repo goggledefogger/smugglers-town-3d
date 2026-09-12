@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Vector3 } from 'three';
+import { Vector3, Matrix4, Quaternion } from 'three';
 import { BuildingMeshView } from '../src/render/BuildingMeshView.ts';
 import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
@@ -76,6 +76,46 @@ describe('BuildingMeshView', () => {
     // Setting texture and mapSize works safely without error
     view.setTexture(null, 5600);
   });
+
+  it('firmly anchors building foundations into steep hillside slopes across entire footprint', () => {
+    const view = new BuildingMeshView();
+    // 40m x 40m building on a steep San Francisco hill
+    const mockColliders: BuildingCollider[] = [
+      {
+        min: new Vector3(0, 40, 0),
+        max: new Vector3(40, 65, 40)
+      }
+    ];
+
+    // Sloped terrain: uphill x=0 is 50m, center x=20 is 40m, downhill x=40 is 30m
+    const slopeGround = (x: number, _z: number) => 50 - (x / 40) * 20;
+
+    view.update(mockColliders, undefined, undefined, slopeGround);
+
+    const instMesh = (view as any).buildingMesh as any;
+    expect(instMesh).toBeDefined();
+
+    const mat = new Matrix4();
+    instMesh.getMatrixAt(0, mat);
+    const pos = new Vector3();
+    const quat = new Quaternion();
+    const scale = new Vector3();
+    mat.decompose(pos, quat, scale);
+
+    const bottomY = pos.y - scale.y / 2;
+    // Downhill ground is 30m, so foundation must penetrate at least to 30 - 2.5 = 27.5m
+    expect(bottomY).toBeLessThanOrEqual(27.5);
+    expect(pos.y + scale.y / 2).toBe(65); // Top height preserved
+
+    // Refreshing heights with refined terrain updates instances
+    const refinedSlopeGround = (x: number, _z: number) => 48 - (x / 40) * 22; // downhill is 26m
+    view.refreshHeights(refinedSlopeGround);
+    const refinedMesh = (view as any).buildingMesh as any;
+    refinedMesh.getMatrixAt(0, mat);
+    mat.decompose(pos, quat, scale);
+    const refinedBottomY = pos.y - scale.y / 2;
+    expect(refinedBottomY).toBeLessThanOrEqual(23.5); // 26 - 2.5
+  });
 });
 
 describe('ViewMode input bindings', () => {
@@ -102,7 +142,13 @@ describe('TerrainMesh visual modes', () => {
     tm.setMode('game3d');
     expect(mesh.material).not.toBe(initialMat);
 
-    // Textured modes use the photoreal terrain surface for satellite ground
+    // Textured and masked modes use the photoreal terrain surface for satellite ground
+    tm.setMode('game3d-textured');
+    expect(mesh.material).toBe(initialMat);
+
+    tm.setMode('masked-tiles');
+    expect(mesh.material).toBe(initialMat);
+
     tm.setMode('game3d-planar');
     expect(mesh.material).toBe(initialMat);
 
