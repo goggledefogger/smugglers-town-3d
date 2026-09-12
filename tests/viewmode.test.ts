@@ -71,6 +71,9 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('hybrid');
     expect(view.getTextureStyle()).toBe('hybrid');
 
+    view.setTextureStyle('projected');
+    expect(view.getTextureStyle()).toBe('projected');
+
     view.setTextureStyle('planar');
     expect(view.getTextureStyle()).toBe('planar');
 
@@ -151,6 +154,9 @@ describe('TerrainMesh visual modes', () => {
     expect(mesh.material).toBe(initialMat);
 
     tm.setMode('masked-tiles');
+    expect(mesh.material).toBe(initialMat);
+
+    tm.setMode('projected-3d');
     expect(mesh.material).toBe(initialMat);
 
     tm.setMode('game3d-planar');

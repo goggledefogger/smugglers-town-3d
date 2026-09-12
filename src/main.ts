@@ -168,7 +168,7 @@ if (typeof window !== 'undefined') {
   (window as any).__terrainMesh = terrainMesh;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -241,6 +241,8 @@ function updateViewModeUi(): void {
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
   if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
+  } else if (viewMode === 'projected-3d') {
+    viewModeText.textContent = 'VIEW: PROJECTED 3D';
   } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
     viewModeText.textContent = 'VIEW: TEXTURED 3D';
   } else if (viewMode === 'game3d-planar') {
@@ -270,7 +272,7 @@ function setViewMode(mode: ViewMode): void {
     updateClutterUi();
   }
 
-  const showGround = hasTiles || mode === 'game3d-textured' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
+  const showGround = hasTiles || mode === 'projected-3d' || mode === 'game3d-textured' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
   if (groundStreamer) {
     groundStreamer.group.visible = showGround;
     if (hasTiles) {
@@ -293,6 +295,12 @@ function setViewMode(mode: ViewMode): void {
     if (satTex) {
       buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
     }
+  } else if (mode === 'projected-3d') {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('projected');
+    if (satTex) {
+      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+    }
   } else {
     // 'game3d-textured' uses hybrid textured buildings
     buildingMeshView.setMode('textured');
@@ -310,6 +318,8 @@ function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
+    setViewMode('projected-3d');
+  } else if (viewMode === 'projected-3d') {
     setViewMode('game3d-textured');
   } else if (viewMode === 'game3d-textured') {
     setViewMode('game3d-planar');

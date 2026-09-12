@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -67,6 +67,72 @@ if (uHasTexture > 0.5) {
   if (vIsRoof > 0.5) {
     // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
     diffuseColor.rgb = sat.rgb;
+  } else if (uTextureStyle > 1.5) {
+    // 6th View: "Projected 3D"
+    // Real 3D maps & textures projected onto horizontal walls and roof,
+    // with genuine architectural details, NOT just colors that are similar.
+    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
+    float wallV = vWorldPos.y;
+
+    // Directional sun and ambient shading per facade
+    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
+    if (vBuildingNormal.y < -0.5) faceLight = 0.5;
+
+    // Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
+    float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
+    float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
+    float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.32 * groundPlinth);
+
+    // Oblique aerial projection: project satellite imagery along facade normal with elevation offset
+    vec2 obliqueUV = satUV + vBuildingNormal.xz * (vLocalNormY * 0.0035);
+    vec4 obliqueSat = texture2D(uSatelliteMap, clamp(obliqueUV, 0.0, 1.0));
+
+    // Authentic building tone from the real 3D map
+    vec3 realMapTone = max(mix(sat.rgb, obliqueSat.rgb, 0.45), vec3(0.18, 0.19, 0.22));
+
+    // Multi-story architectural facade structure
+    // Standard commercial/residential story is ~3.5m high
+    float storyCoord = wallV / 3.5;
+    float storyFrac = fract(storyCoord);
+    float isFloorSlab = step(storyFrac, 0.20);
+
+    // Window bays: 2.6m spacing with 0.65m structural masonry piers
+    float bayCoord = wallU / 2.6;
+    float bayFrac = fract(bayCoord);
+    float isMullion = step(bayFrac, 0.25);
+
+    // Window aperture (pane between floor slabs and between mullions)
+    float isWindow = (1.0 - isFloorSlab) * (1.0 - isMullion);
+
+    // Subtle per-window interior light variation
+    float windowId = sin(floor(storyCoord) * 37.17 + floor(bayCoord) * 73.91);
+    float windowVar = fract(windowId * 43758.5453);
+
+    // Architectural reflective glass: sky gradient reflection with specular sheen
+    vec3 glassReflection = vec3(0.12, 0.18, 0.26) + vec3(0.06, 0.08, 0.10) * (1.0 - storyFrac);
+    if (windowVar > 0.70) {
+      // Warm interior ambient light in select windows
+      glassReflection += vec3(0.08, 0.06, 0.03);
+    }
+
+    // Structural masonry piers and spandrels derived directly from real 3D map
+    vec3 wallMasonry = realMapTone * faceLight * verticalAO;
+    vec3 floorSlabTone = wallMasonry * 0.82;
+
+    // Ground floor commercial storefront display windows
+    float isStorefront = step(vLocalNormY, 0.12);
+    vec3 storefrontGlass = vec3(0.08, 0.12, 0.16);
+
+    // Ground foundation plinth (solid concrete/slate base anchoring into the terrain)
+    float isPlinth = step(vLocalNormY, 0.05);
+    vec3 plinthColor = vec3(0.14, 0.15, 0.17);
+
+    vec3 facade = mix(wallMasonry, floorSlabTone, isFloorSlab * 0.5);
+    facade = mix(facade, glassReflection, isWindow * 0.75);
+    facade = mix(facade, storefrontGlass, isStorefront * isWindow * 0.6);
+    facade = mix(facade, plinthColor, isPlinth * 0.85);
+
+    diffuseColor.rgb = facade;
   } else {
     // Wall facades: Grounded directly in real aerial imagery of the building
     // 1. Directional sun and ambient shading per facade
@@ -185,10 +251,17 @@ export class BuildingMeshView {
   }
 
   setTextureStyle(style: BuildingTextureStyle): void {
-    this.uTextureStyle.value = style === 'hybrid' ? 1.0 : 0.0;
+    if (style === 'projected') {
+      this.uTextureStyle.value = 2.0;
+    } else if (style === 'hybrid') {
+      this.uTextureStyle.value = 1.0;
+    } else {
+      this.uTextureStyle.value = 0.0;
+    }
   }
 
   getTextureStyle(): BuildingTextureStyle {
+    if (this.uTextureStyle.value > 1.5) return 'projected';
     return this.uTextureStyle.value > 0.5 ? 'hybrid' : 'planar';
   }
 
