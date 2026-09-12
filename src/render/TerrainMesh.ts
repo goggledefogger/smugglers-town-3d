@@ -178,12 +178,13 @@ export class TerrainMesh {
   private _texture: CanvasTexture | null = null;
   private _sandTexture: CanvasTexture | null = null;
   private _gridTexture: CanvasTexture | null = null;
+  private _sourceTexture: CanvasTexture | null = null;
   private _photorealMat: Material | null = null;
   private _game3dMat: MeshStandardMaterial | null = null;
   private readonly _uCover = { value: new DataTexture(new Uint8Array(1), 1, 1, RedFormat, UnsignedByteType) };
   private readonly _uCoverCell = { value: 0 };
   private readonly _uCoverN = { value: 1 };
-  private _mode: 'photoreal' | 'game3d' = 'photoreal';
+  private _mode: 'photoreal' | 'game3d' | 'game3d-planar' | 'game3d-hybrid' = 'photoreal';
   private _sourceCanvas: HTMLCanvasElement | null = null;
   private _workingCanvas: HTMLCanvasElement | null = null;
   private _lastNeutralizedGeneration = -1;
@@ -200,6 +201,22 @@ export class TerrainMesh {
     return this._texture;
   }
 
+  /** Pristine source satellite texture with un-neutralized building rooftops intact. */
+  get sourceTexture(): CanvasTexture | null {
+    if (!this._sourceTexture && this._sourceCanvas) {
+      const tex = new CanvasTexture(this._sourceCanvas);
+      tex.colorSpace = SRGBColorSpace;
+      tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+      tex.minFilter = LinearMipmapLinearFilter;
+      tex.magFilter = LinearFilter;
+      tex.generateMipmaps = true;
+      tex.anisotropy = 4;
+      tex.needsUpdate = true;
+      this._sourceTexture = tex;
+    }
+    return this._sourceTexture ?? this._texture;
+  }
+
   get sandTexture(): CanvasTexture | null {
     return this._sandTexture;
   }
@@ -208,15 +225,16 @@ export class TerrainMesh {
     return this._gridTexture;
   }
 
-  setMode(mode: 'photoreal' | 'game3d'): void {
+  setMode(mode: 'photoreal' | 'game3d' | 'game3d-planar' | 'game3d-hybrid'): void {
     this._mode = mode;
+    const isArcadeGrid = mode === 'game3d';
     if (this._mesh) {
-      this._mesh.material = (mode === 'game3d' && this._game3dMat)
+      this._mesh.material = (isArcadeGrid && this._game3dMat)
         ? this._game3dMat
         : (this._photorealMat ?? this._mesh.material);
     }
-    // If switching back to photoreal and we have pending un-neutralized colliders, paint now
-    if (mode === 'photoreal' && this._pendingColliders && this._pendingGeneration !== this._lastNeutralizedGeneration) {
+    // If switching to a mode showing satellite ground and we have pending un-neutralized colliders, paint now
+    if (mode !== 'game3d' && this._pendingColliders && this._pendingGeneration !== this._lastNeutralizedGeneration) {
       this.neutralizeBuildingFootprints(
         this._pendingColliders,
         this._pendingMapSize,
@@ -487,6 +505,10 @@ export class TerrainMesh {
     if (this._gridTexture) {
       this._gridTexture.dispose();
       this._gridTexture = null;
+    }
+    if (this._sourceTexture) {
+      this._sourceTexture.dispose();
+      this._sourceTexture = null;
     }
     this._photorealMat = null;
     this._game3dMat = null;

@@ -163,7 +163,12 @@ let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
-let viewMode: 'photoreal' | 'game3d' = 'photoreal';
+if (typeof window !== 'undefined') {
+  (window as any).__buildingMeshView = buildingMeshView;
+  (window as any).__terrainMesh = terrainMesh;
+}
+export type ViewMode = 'photoreal' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // swept by default: flattens road clutter while keeping kerbside building facades
@@ -223,28 +228,58 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
 
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
+  viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
   if (viewMode === 'game3d') {
-    viewModeBtn.classList.add('active');
-    viewModeText.textContent = 'VIEW: GAME 3D (1:1)';
+    viewModeText.textContent = 'VIEW: GAME 3D (ARCADE)';
+  } else if (viewMode === 'game3d-planar') {
+    viewModeText.textContent = 'VIEW: TEXTURED (PLANAR)';
+  } else if (viewMode === 'game3d-hybrid') {
+    viewModeText.textContent = 'VIEW: TEXTURED (HYBRID)';
   } else {
-    viewModeBtn.classList.remove('active');
     viewModeText.textContent = 'VIEW: REAL 3D';
   }
 }
 
-function setViewMode(mode: 'photoreal' | 'game3d'): void {
+function setViewMode(mode: ViewMode): void {
   viewMode = mode;
-  const isGame3d = mode === 'game3d';
-  if (tiles) tiles.group.visible = !isGame3d;
-  if (groundStreamer) groundStreamer.group.visible = !isGame3d;
+  const isPhotoreal = mode === 'photoreal';
+  if (tiles) tiles.group.visible = isPhotoreal;
+  const showGround = mode === 'photoreal' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
+  if (groundStreamer) groundStreamer.group.visible = showGround;
   terrainMesh.setMode(mode);
-  buildingMeshView.visible = isGame3d;
-  renderer.setLightRig(!isGame3d && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  buildingMeshView.visible = !isPhotoreal;
+
+  const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
+  if (mode === 'game3d') {
+    buildingMeshView.setMode('arcade');
+  } else if (mode === 'game3d-planar') {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('planar');
+    if (satTex) {
+      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+    }
+  } else if (mode === 'game3d-hybrid') {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('hybrid');
+    if (satTex) {
+      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+    }
+  }
+
+  renderer.setLightRig(isPhotoreal && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
 function toggleViewMode(): void {
-  setViewMode(viewMode === 'photoreal' ? 'game3d' : 'photoreal');
+  if (viewMode === 'photoreal') {
+    setViewMode('game3d');
+  } else if (viewMode === 'game3d') {
+    setViewMode('game3d-planar');
+  } else if (viewMode === 'game3d-planar') {
+    setViewMode('game3d-hybrid');
+  } else {
+    setViewMode('photoreal');
+  }
 }
 
 viewModeBtn?.addEventListener('click', () => {
@@ -326,6 +361,10 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
     tiles?.activeGrid,
     (x, z) => world.terrainProvider.heightfield.sample(x, z)
   );
+  const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
+  if (satTex) {
+    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+  }
   // the repaint re-uploads a 3840² satellite texture with mipmaps, a 50-150 ms
   // stall, for ground the tiles mostly cover: once at match start, then rarely
   const now = performance.now();
@@ -392,6 +431,10 @@ function swapTerrainMesh(terrain: TerrainProvider): void {
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
   groundShade.setBase(terrain.satelliteCanvas, config.world.mapHalf * 2);
   terrainMesh.setMode(viewMode);
+  const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
+  if (satTex) {
+    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+  }
   renderer.setLightRig(viewMode === 'photoreal' && terrain.isReal ? 'photo' : 'arcade');
   renderer.scene.add(mesh);
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
@@ -605,7 +648,7 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(groundStreamer.group);
           }
           if (tiles) {
-            tiles.group.visible = viewMode !== 'game3d';
+            tiles.group.visible = viewMode === 'photoreal';
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
@@ -697,7 +740,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(groundStreamer.group);
     }
     if (tiles) {
-      tiles.group.visible = viewMode !== 'game3d';
+      tiles.group.visible = viewMode === 'photoreal';
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);

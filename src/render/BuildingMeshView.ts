@@ -7,18 +7,73 @@
  */
 import {
   Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3,
-  Quaternion, Color, LineSegments
+  Quaternion, Color, LineSegments, DataTexture, RGBAFormat, UnsignedByteType,
+  type Texture, type WebGLProgramParametersWithUniforms
 } from 'three';
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import type { Grid } from '../services/tiles/tileColliders.ts';
 import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
+export type BuildingMeshMode = 'arcade' | 'textured';
+export type BuildingTextureStyle = 'planar' | 'hybrid';
+
 const _mat = new Matrix4();
 const _pos = new Vector3();
 const _scale = new Vector3();
 const _quat = new Quaternion();
 const _color = new Color();
+
+const VERTEX_PARS_BUILDING = `
+uniform float uHasTexture;
+varying vec3 vWorldPos;
+varying float vIsRoof;
+`;
+
+const VERTEX_BODY_BUILDING = `
+vec4 bWorldPos = vec4( transformed, 1.0 );
+#ifdef USE_BATCHING
+  bWorldPos = batchingMatrix * bWorldPos;
+#endif
+#ifdef USE_INSTANCING
+  bWorldPos = instanceMatrix * bWorldPos;
+#endif
+vWorldPos = (modelMatrix * bWorldPos).xyz;
+vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
+`;
+
+const FRAGMENT_PARS_BUILDING = `
+uniform sampler2D uSatelliteMap;
+uniform float uMapSize;
+uniform float uHasTexture;
+uniform float uTextureStyle;
+varying vec3 vWorldPos;
+varying float vIsRoof;
+`;
+
+const FRAGMENT_BODY_BUILDING = `
+if (uHasTexture > 0.5) {
+  vec2 satUV = vec2(
+    vWorldPos.x / uMapSize + 0.5,
+    0.5 - vWorldPos.z / uMapSize
+  );
+  vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
+  if (vIsRoof > 0.5) {
+    diffuseColor.rgb = sat.rgb;
+  } else if (uTextureStyle < 0.5) {
+    // Pure top-down planar stretch: edge pixels stretched down straight box walls
+    // Baseline minimum brightness so shadowed faces don't crush to pitch black
+    diffuseColor.rgb = max(sat.rgb * 0.88, vec3(0.12, 0.14, 0.18));
+  } else {
+    // Hybrid facade: rooftop satellite + architectural window/floor grid
+    float floorLine = step(0.12, fract(vWorldPos.y / 3.5));
+    float windowCol = step(0.25, fract(length(vWorldPos.xz) / 2.8));
+    float grid = 0.70 + 0.30 * (floorLine * windowCol);
+    vec3 facadeBase = max(sat.rgb * 0.85, vec3(0.15, 0.17, 0.22));
+    diffuseColor.rgb = facadeBase * grid;
+  }
+}
+`;
 
 export class BuildingMeshView {
   readonly group = new Group();
@@ -27,22 +82,75 @@ export class BuildingMeshView {
   private wireframeMesh: LineSegments | null = null;
   private readonly boxGeo = new BoxGeometry(1, 1, 1);
 
-  // Modern arcade architectural materials
-  private readonly buildingMat = new MeshStandardMaterial({
-    color: 0x323a48,
-    roughness: 0.65,
-    metalness: 0.15,
-    flatShading: true
-  });
+  // Material uniforms for texture projection
+  private readonly uHasTexture = { value: 0.0 };
+  private readonly uTextureStyle = { value: 0.0 }; // 0 = planar, 1 = hybrid
+  private readonly uMapSize = { value: 5600.0 };
+  private readonly dummyTex: DataTexture;
+  private readonly uSatelliteMap: { value: Texture };
 
-  private readonly deckMat = new MeshStandardMaterial({
-    color: BUILDING_COLORS.deck,
-    roughness: 0.8,
-    metalness: 0.05
-  });
+  // Modern arcade architectural materials
+  private readonly buildingMat: MeshStandardMaterial;
+  private readonly deckMat: MeshStandardMaterial;
 
   constructor() {
     this.group.visible = false;
+    this.dummyTex = new DataTexture(new Uint8Array([100, 110, 120, 255]), 1, 1, RGBAFormat, UnsignedByteType);
+    this.dummyTex.needsUpdate = true;
+    this.uSatelliteMap = { value: this.dummyTex };
+
+    this.buildingMat = new MeshStandardMaterial({
+      color: 0x323a48,
+      roughness: 0.65,
+      metalness: 0.15,
+      flatShading: true
+    });
+
+    this.deckMat = new MeshStandardMaterial({
+      color: BUILDING_COLORS.deck,
+      roughness: 0.8,
+      metalness: 0.05
+    });
+
+    this.hookMaterial(this.buildingMat, 'building-mesh-view');
+    this.hookMaterial(this.deckMat, 'deck-mesh-view');
+  }
+
+  private hookMaterial(mat: MeshStandardMaterial, cacheKey: string): void {
+    mat.customProgramCacheKey = () => cacheKey;
+    mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
+      shader.uniforms.uHasTexture = this.uHasTexture;
+      shader.uniforms.uTextureStyle = this.uTextureStyle;
+      shader.uniforms.uSatelliteMap = this.uSatelliteMap;
+      shader.uniforms.uMapSize = this.uMapSize;
+
+      shader.vertexShader = VERTEX_PARS_BUILDING + shader.vertexShader
+        .replace('#include <project_vertex>', '#include <project_vertex>\n' + VERTEX_BODY_BUILDING);
+
+      shader.fragmentShader = FRAGMENT_PARS_BUILDING + shader.fragmentShader
+        .replace('#include <color_fragment>', '#include <color_fragment>\n' + FRAGMENT_BODY_BUILDING);
+    };
+  }
+
+  setMode(mode: BuildingMeshMode): void {
+    this.uHasTexture.value = mode === 'textured' ? 1.0 : 0.0;
+  }
+
+  getMode(): BuildingMeshMode {
+    return this.uHasTexture.value > 0.5 ? 'textured' : 'arcade';
+  }
+
+  setTextureStyle(style: BuildingTextureStyle): void {
+    this.uTextureStyle.value = style === 'hybrid' ? 1.0 : 0.0;
+  }
+
+  getTextureStyle(): BuildingTextureStyle {
+    return this.uTextureStyle.value > 0.5 ? 'hybrid' : 'planar';
+  }
+
+  setTexture(tex: Texture | null, mapSize: number): void {
+    this.uSatelliteMap.value = tex ?? this.dummyTex;
+    this.uMapSize.value = mapSize;
   }
 
   get visible(): boolean {

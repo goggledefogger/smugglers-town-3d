@@ -55,6 +55,27 @@ describe('BuildingMeshView', () => {
     view.clear();
     expect(view.group.children.length).toBe(0);
   });
+
+  it('supports switching between arcade and textured modes and styles', () => {
+    const view = new BuildingMeshView();
+    expect(view.getMode()).toBe('arcade');
+    expect(view.getTextureStyle()).toBe('planar');
+
+    view.setMode('textured');
+    expect(view.getMode()).toBe('textured');
+
+    view.setTextureStyle('hybrid');
+    expect(view.getTextureStyle()).toBe('hybrid');
+
+    view.setTextureStyle('planar');
+    expect(view.getTextureStyle()).toBe('planar');
+
+    view.setMode('arcade');
+    expect(view.getMode()).toBe('arcade');
+
+    // Setting texture and mapSize works safely without error
+    view.setTexture(null, 5600);
+  });
 });
 
 describe('ViewMode input bindings', () => {
@@ -69,7 +90,7 @@ describe('ViewMode input bindings', () => {
 });
 
 describe('TerrainMesh visual modes', () => {
-  it('switches between photoreal and game3d modes seamlessly', () => {
+  it('switches between photoreal, game3d, and textured modes seamlessly', () => {
     const tm = new TerrainMesh();
     const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
     const terrain = createDesertTerrain(hf);
@@ -80,6 +101,13 @@ describe('TerrainMesh visual modes', () => {
 
     tm.setMode('game3d');
     expect(mesh.material).not.toBe(initialMat);
+
+    // Textured modes use the photoreal terrain surface for satellite ground
+    tm.setMode('game3d-planar');
+    expect(mesh.material).toBe(initialMat);
+
+    tm.setMode('game3d-hybrid');
+    expect(mesh.material).toBe(initialMat);
 
     tm.setMode('photoreal');
     expect(mesh.material).toBe(initialMat);
