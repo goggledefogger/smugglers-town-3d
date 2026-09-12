@@ -599,6 +599,7 @@ async function openOnline(type: number): Promise<void> {
           groundStreamer = newGround ?? null;
           if (groundStreamer) {
             groundStreamer.onPatch = m => { patchDetailGrain(m.material as Material); renderer.warm(m); onGroundPatch(m); };
+            groundStreamer.onPatchEvicted = (x, z) => groundShade.removePatch(x, z);
             groundStreamer.onCoverageChanged = (cells, n, cell) => terrainMesh.setPatchCoverage(cells, n, cell);
             groundStreamer.group.visible = viewMode !== 'game3d';
             renderer.scene.add(groundStreamer.group);
@@ -690,6 +691,7 @@ relocateBarEl.onSearch = async (q, key) => {
     groundStreamer = newGround ?? null;
     if (groundStreamer) {
       groundStreamer.onPatch = m => { patchDetailGrain(m.material as Material); renderer.warm(m); onGroundPatch(m); };
+      groundStreamer.onPatchEvicted = (x, z) => groundShade.removePatch(x, z);
       groundStreamer.onCoverageChanged = (cells, n, cell) => terrainMesh.setPatchCoverage(cells, n, cell);
       groundStreamer.group.visible = viewMode !== 'game3d';
       renderer.scene.add(groundStreamer.group);

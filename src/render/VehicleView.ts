@@ -9,7 +9,7 @@
  */
 import {
   Group, Mesh, PlaneGeometry, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
-  Quaternion, Euler, Vector3, Color, type Material, type Texture
+  Quaternion, Euler, Vector3, Color, Texture, type Material
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
@@ -19,6 +19,7 @@ export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
+const UNIT_Y = new Vector3(0, 1, 0);
 /**
  * Shadow footprint: the body's outline, a little past the tyres. A round soft
  * blob centred under the body is the drop-shadow cue the eye reads as "this
@@ -38,6 +39,10 @@ let shadowTex: Texture | null = null;
  */
 function contactShadowTexture(): Texture {
   if (shadowTex) return shadowTex;
+  if (typeof document === 'undefined') {
+    shadowTex = new Texture();
+    return shadowTex;
+  }
   const n = 128;
   const c = document.createElement('canvas');
   c.width = c.height = n;
@@ -78,7 +83,9 @@ export class VehicleView {
   private readonly healthBar: Sprite;
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
+  private readonly shadowRoot = new Group();
   private readonly shadow: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  private readonly _shadowQuat = new Quaternion();
   private readonly team: number;
   private lastDamage = -1;
   private pitch = 0;
@@ -121,8 +128,8 @@ export class VehicleView {
 
     // contact shadow under the car: always on so the car sits on the ground
     // instead of floating over it, thinning with height so a gap between car
-    // and shadow reads as "airborne". Lives in carRoot so it turns and tilts
-    // with the body.
+    // and shadow reads as "airborne". Lives in shadowRoot under group so its
+    // vertical translation is strictly world-up and unaffected by body rollover.
     this.shadow = new Mesh(
       new PlaneGeometry(SHADOW_W, SHADOW_L),
       new MeshBasicMaterial({
@@ -131,10 +138,15 @@ export class VehicleView {
       })
     );
     this.shadow.rotation.x = -Math.PI / 2;
-    this.carRoot.add(this.shadow);
+    this.shadowRoot.add(this.shadow);
+    this.group.add(this.shadowRoot);
 
     // health bar sprite above the vehicle
-    this.barCanvas = document.createElement('canvas');
+    this.barCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : ({
+      width: 64,
+      height: 8,
+      getContext: () => ({ clearRect: () => {}, fillRect: () => {} })
+    } as unknown as HTMLCanvasElement);
     this.barCanvas.width = 64;
     this.barCanvas.height = 8;
     this.barTexture = new CanvasTexture(this.barCanvas);
@@ -161,7 +173,8 @@ export class VehicleView {
     const damage = this.actor.body.damage;
     if (damage === this.lastDamage) return;
     this.lastDamage = damage;
-    const ctx = this.barCanvas.getContext('2d')!;
+    const ctx = this.barCanvas.getContext?.('2d');
+    if (!ctx) return;
     ctx.clearRect(0, 0, 64, 8);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 64, 8);
@@ -222,7 +235,13 @@ export class VehicleView {
     const reach = MathUtils.clamp(this.group.position.y - body.groundY - body.cfg.groundClearance, 0, 0.6);
     for (const w of this.car.wheels) w.spin.parent!.position.y = w.r - reach;
 
-    this.shadow.position.y = body.groundY - this.group.position.y + body.cfg.groundClearance + 0.06;
+    // Contact shadow stays pinned to the ground surface at (x, z), tracking
+    // vehicle heading and terrain slope, unaffected by body pitch/roll or jumps
+    this.shadowRoot.position.set(0, body.groundY - this.group.position.y + 0.06, 0);
+    const yaw = Math.atan2(f.x, -f.z);
+    this._shadowQuat.setFromAxisAngle(UNIT_Y, -yaw).multiply(this._tilt);
+    this.shadowRoot.quaternion.copy(this._shadowQuat);
+
     this.shadow.material.opacity = SHADOW_ALPHA * MathUtils.clamp(1 - height * 0.12, 0.25, 1);
     // a gap opens between car and shadow as it lifts; the shadow also spreads,
     // which is what the eye uses to read height

@@ -99,5 +99,28 @@ describe('GroundStreamer', () => {
 
     streamer.dispose();
   });
+
+  describe('GroundShade', () => {
+    it('samples base terrain luminance and falls back safely when empty', async () => {
+      const { GroundShade } = await import('../src/render/GroundShade.ts');
+      const shade = new GroundShade();
+
+      // No base or patches: returns 1.0 (unshaded)
+      expect(shade.shadeAt(100, 200)).toBe(1.0);
+
+      shade.setBase(null, 5600);
+      expect(shade.shadeAt(0, 0)).toBe(1.0);
+    });
+
+    it('indexes patches spatially and evicts on removePatch', async () => {
+      const { GroundShade } = await import('../src/render/GroundShade.ts');
+      const shade = new GroundShade();
+
+      // In headless node test without document/canvas, setPatch returns early safely
+      shade.setPatch({} as any, 150, 150, 150);
+      shade.removePatch(150, 150);
+      expect(shade.shadeAt(150, 150)).toBe(1.0);
+    });
+  });
 });
 

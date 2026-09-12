@@ -56,6 +56,8 @@ export class GroundStreamer {
   underTiles = false;
   /** Called with each patch mesh just before it is added; the renderer hangs its shader patches and warm-up here. */
   onPatch: ((mesh: Mesh) => void) | null = null;
+  /** Called when a patch is evicted from the streaming radius or cleared. */
+  onPatchEvicted: ((centerX: number, centerZ: number) => void) | null = null;
   /**
    * Which grid cells hold a patch right now, for the base terrain to cut out
    * under them: n*n, cell (col, row) at (row + n/2) * n + col + n/2. Fires
@@ -115,6 +117,7 @@ export class GroundStreamer {
       const mat = p.mesh.material as MeshBasicMaterial;
       mat.map?.dispose();
       mat.dispose();
+      this.onPatchEvicted?.(p.centerWx, p.centerWz);
     }
     this.patches.clear();
     this.inFlightKeys.clear();
@@ -135,6 +138,7 @@ export class GroundStreamer {
       const mat = p.mesh.material as MeshBasicMaterial;
       mat.map?.dispose();
       mat.dispose();
+      this.onPatchEvicted?.(p.centerWx, p.centerWz);
     }
     this.patches.clear();
     this.inFlightKeys.clear();
@@ -190,6 +194,7 @@ export class GroundStreamer {
         mat.dispose();
         this.patches.delete(key);
         this.setCovered(p.col, p.row, 0);
+        this.onPatchEvicted?.(p.centerWx, p.centerWz);
       }
     }
 
