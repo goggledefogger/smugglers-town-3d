@@ -315,6 +315,13 @@ async function loadTileGlb(
     map.minFilter = LinearMipmapLinearFilter;
     map.magFilter = LinearFilter;
   });
+  // a photo is already display-referred: running it through the scene's filmic
+  // curve again crushed the facades and darkened every street; show it as shot
+  root.traverse(obj => {
+    const mesh = obj as Mesh;
+    if (!mesh.isMesh) return;
+    for (const m of Array.isArray(mesh.material) ? mesh.material : [mesh.material]) m.toneMapped = false;
+  });
   return root;
 }
 

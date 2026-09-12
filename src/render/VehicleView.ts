@@ -8,8 +8,8 @@
  * under the wheels to make hills read as hills.
  */
 import {
-  Group, Mesh, CircleGeometry, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
-  Quaternion, Euler, Vector3, type Material
+  Group, Mesh, PlaneGeometry, MeshBasicMaterial, Sprite, SpriteMaterial, CanvasTexture, MathUtils,
+  Quaternion, Euler, Vector3, Color, Texture, type Material
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
@@ -19,6 +19,54 @@ export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;
 const TRACK = 1.9;
 const MAX_TILT = 0.6;
+const UNIT_Y = new Vector3(0, 1, 0);
+/**
+ * Shadow footprint: the body's outline, a little past the tyres. A round soft
+ * blob centred under the body is the drop-shadow cue the eye reads as "this
+ * is hovering over a circle"; contact is a flat, near-uniform patch the shape
+ * of the car, darkest where the tyres meet the ground.
+ */
+const SHADOW_W = TRACK + 0.9;
+const SHADOW_L = WHEELBASE + 1.9;
+const SHADOW_ALPHA = 0.5;
+
+let shadowTex: Texture | null = null;
+/**
+ * The contact shadow, painted once and shared. A photo tile already has its
+ * sun baked in, so a real shadow map would fight it; this is the ambient
+ * occlusion every car has under it in any light: a rounded rectangle of the
+ * body with a short edge, plus a darker pad under each tyre.
+ */
+function contactShadowTexture(): Texture {
+  if (shadowTex) return shadowTex;
+  if (typeof document === 'undefined') {
+    shadowTex = new Texture();
+    return shadowTex;
+  }
+  const n = 128;
+  const c = document.createElement('canvas');
+  c.width = c.height = n;
+  const ctx = c.getContext('2d')!;
+  const inset = 14, r = 18;
+  // texture x spans SHADOW_W, y spans SHADOW_L
+  ctx.shadowColor = 'rgba(0,0,0,1)';
+  ctx.shadowBlur = 12;
+  ctx.fillStyle = 'rgba(0,0,0,0.9)';
+  ctx.beginPath();
+  ctx.roundRect(inset, inset, n - 2 * inset, n - 2 * inset, r);
+  ctx.fill();
+  ctx.fill();
+  ctx.shadowBlur = 8;
+  ctx.fillStyle = 'rgba(0,0,0,1)';
+  const px = (TRACK / 2 / SHADOW_W) * n, pz = (WHEELBASE / 2 / SHADOW_L) * n;
+  for (const sx of [-1, 1]) for (const sz of [-1, 1]) {
+    ctx.beginPath();
+    ctx.ellipse(n / 2 + sx * px, n / 2 + sz * pz, 9, 13, 0, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  shadowTex = new CanvasTexture(c);
+  return shadowTex;
+}
 
 /** A rendered (interpolated) pose; what the camera and pickups follow. */
 export interface Pose {
@@ -35,7 +83,9 @@ export class VehicleView {
   private readonly healthBar: Sprite;
   private readonly barCanvas: HTMLCanvasElement;
   private readonly barTexture: CanvasTexture;
-  private readonly shadow: Mesh<CircleGeometry, MeshBasicMaterial>;
+  private readonly shadowRoot = new Group();
+  private readonly shadow: Mesh<PlaneGeometry, MeshBasicMaterial>;
+  private readonly _shadowQuat = new Quaternion();
   private readonly team: number;
   private lastDamage = -1;
   private pitch = 0;
@@ -45,28 +95,58 @@ export class VehicleView {
   private readonly _fwd = new Vector3();
   private readonly _right = new Vector3();
 
+  /** Body materials and their designed colours, scaled by the photo ground's brightness. */
+  private readonly tinted: { m: Material & { color: Color }; base: Color }[] = [];
+  private shade = 1;
+
   constructor(
     readonly actor: VehicleActor,
-    private readonly ground: () => Heightfield
+    private readonly ground: () => Heightfield,
+    /** Brightness of the photo ground under (x, z), 1 where there is none; see GroundShade. */
+    private readonly groundShade: (x: number, z: number) => number = () => 1
   ) {
     this.car = buildVehicle(actor.body.stats, actor.team === 0 ? TEAM_COLORS[0] : TEAM_COLORS[1]);
+    this.car.root.traverse(obj => {
+      if (!(obj instanceof Mesh)) return;
+      for (const m of Array.isArray(obj.material) ? obj.material : [obj.material]) {
+        const c = (m as Material & { color?: Color; emissive?: Color }).color;
+        const e = (m as Material & { emissive?: Color }).emissive;
+        // lights keep their own glow; everything else takes the ground's light
+        if (c && !(e && (e.r > 0.2 || e.g > 0.2 || e.b > 0.2)) && !this.tinted.some(t => t.m === m)) {
+          this.tinted.push({ m: m as Material & { color: Color }, base: c.clone() });
+        }
+      }
+    });
+    // the model's origin is its ground contact; the body's is groundClearance
+    // above the ground. Without this the whole car rode a metre in the air,
+    // which nothing gave away until it had a shadow. carRoot itself sits at
+    // the contact point so the cosmetic tilt rolls about the ground, not a
+    // point above the roof
+    this.carRoot.position.y = -actor.body.cfg.groundClearance;
     this.carRoot.add(this.car.root);
     this.group.add(this.carRoot);
 
-    // blob shadow on the ground under the car: invisible while planted, fades
-    // in with height so a gap between car and shadow reads as "airborne"
+    // contact shadow under the car: always on so the car sits on the ground
+    // instead of floating over it, thinning with height so a gap between car
+    // and shadow reads as "airborne". Lives in shadowRoot under group so its
+    // vertical translation is strictly world-up and unaffected by body rollover.
     this.shadow = new Mesh(
-      new CircleGeometry(2.4, 20),
+      new PlaneGeometry(SHADOW_W, SHADOW_L),
       new MeshBasicMaterial({
-        color: 0x000000, transparent: true, opacity: 0, depthWrite: false,
-        polygonOffset: true, polygonOffsetFactor: -4
+        map: contactShadowTexture(), color: 0x000000, transparent: true, opacity: SHADOW_ALPHA,
+        depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4
       })
     );
     this.shadow.rotation.x = -Math.PI / 2;
-    this.group.add(this.shadow);
+    this.shadowRoot.add(this.shadow);
+    this.group.add(this.shadowRoot);
 
     // health bar sprite above the vehicle
-    this.barCanvas = document.createElement('canvas');
+    this.barCanvas = typeof document !== 'undefined' ? document.createElement('canvas') : ({
+      width: 64,
+      height: 8,
+      getContext: () => ({ clearRect: () => {}, fillRect: () => {} })
+    } as unknown as HTMLCanvasElement);
     this.barCanvas.width = 64;
     this.barCanvas.height = 8;
     this.barTexture = new CanvasTexture(this.barCanvas);
@@ -93,7 +173,8 @@ export class VehicleView {
     const damage = this.actor.body.damage;
     if (damage === this.lastDamage) return;
     this.lastDamage = damage;
-    const ctx = this.barCanvas.getContext('2d')!;
+    const ctx = this.barCanvas.getContext?.('2d');
+    if (!ctx) return;
     ctx.clearRect(0, 0, 64, 8);
     ctx.fillStyle = '#000';
     ctx.fillRect(0, 0, 64, 8);
@@ -141,9 +222,30 @@ export class VehicleView {
     for (const p of this.car.frontPivots) p.rotation.y = body.steer * 0.45;
     this.car.tail.emissiveIntensity = body.brake > 0 ? 3 : 0.6;
 
-    this.shadow.position.y = body.groundY - this.group.position.y + 0.15;
-    this.shadow.material.opacity = MathUtils.clamp(height * 0.15, 0, 0.45);
-    const s = MathUtils.clamp(1 - height * 0.02, 0.5, 1);
+    // ease into the photographed shadow the car is driving through
+    const target = this.groundShade(x, z);
+    if (Math.abs(target - this.shade) > 0.005) {
+      this.shade += (target - this.shade) * (1 - Math.exp(-dt * 6));
+      for (const t of this.tinted) t.m.color.copy(t.base).multiplyScalar(this.shade);
+    }
+
+    // the suspension lets the body ride above its clearance while it settles
+    // (that smoothing is what keeps the camera calm); the wheels reach down
+    // to the ground it is settling toward, so the tyres stay planted
+    const reach = MathUtils.clamp(this.group.position.y - body.groundY - body.cfg.groundClearance, 0, 0.6);
+    for (const w of this.car.wheels) w.spin.parent!.position.y = w.r - reach;
+
+    // Contact shadow stays pinned to the ground surface at (x, z), tracking
+    // vehicle heading and terrain slope, unaffected by body pitch/roll or jumps
+    this.shadowRoot.position.set(0, body.groundY - this.group.position.y + 0.06, 0);
+    const yaw = Math.atan2(f.x, -f.z);
+    this._shadowQuat.setFromAxisAngle(UNIT_Y, -yaw).multiply(this._tilt);
+    this.shadowRoot.quaternion.copy(this._shadowQuat);
+
+    this.shadow.material.opacity = SHADOW_ALPHA * MathUtils.clamp(1 - height * 0.12, 0.25, 1);
+    // a gap opens between car and shadow as it lifts; the shadow also spreads,
+    // which is what the eye uses to read height
+    const s = MathUtils.clamp(1 + height * 0.08, 1, 1.6);
     this.shadow.scale.set(s, s, 1);
     this.updateHealthBar();
   }

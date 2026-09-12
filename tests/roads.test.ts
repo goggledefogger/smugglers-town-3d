@@ -1,5 +1,4 @@
-import { describe, it, expect } from 'vitest';
-import { rasterizeRoads } from '../src/services/osm/roads.ts';
+import { rasterizeRoads, isDrivableWay } from '../src/services/osm/roads.ts';
 import {
   collidersFromRasters, groundField, type TileRaster
 } from '../src/services/tiles/tileColliders.ts';
@@ -126,5 +125,45 @@ describe('collidersFromRasters with road mask', () => {
     expect(gfWithoutRoads[crestRoadCell]).toBeLessThan(15);
     // With road mask, the driving heightfield stays on the road surface (24 m - 3x3 smoothing)
     expect(gfWithRoads[crestRoadCell]).toBeGreaterThan(23);
+  });
+});
+
+describe('isDrivableWay', () => {
+  it('accepts standard vehicular highway classes', () => {
+    expect(isDrivableWay({ highway: 'primary' })).toBe(true);
+    expect(isDrivableWay({ highway: 'residential' })).toBe(true);
+    expect(isDrivableWay({ highway: 'service' })).toBe(true);
+    expect(isDrivableWay({ highway: 'unclassified' })).toBe(true);
+  });
+
+  it('accepts cycleways and multi-use paved greenways (like Willamette Greenway)', () => {
+    expect(isDrivableWay({ highway: 'cycleway' })).toBe(true);
+    expect(isDrivableWay({
+      highway: 'path',
+      bicycle: 'designated',
+      name: 'Willamette Greenway'
+    })).toBe(true);
+    expect(isDrivableWay({
+      highway: 'path',
+      surface: 'asphalt'
+    })).toBe(true);
+    expect(isDrivableWay({
+      highway: 'path',
+      bicycle: 'yes'
+    })).toBe(true);
+    expect(isDrivableWay({
+      highway: 'pedestrian'
+    })).toBe(true);
+  });
+
+  it('rejects pedestrian sidewalks, steps, and indoor passages', () => {
+    expect(isDrivableWay({ highway: 'footway' })).toBe(false);
+    expect(isDrivableWay({ highway: 'steps' })).toBe(false);
+    expect(isDrivableWay({ highway: 'path', informal: 'yes', surface: 'unpaved' })).toBe(false);
+    expect(isDrivableWay({ highway: 'primary', indoor: 'yes' })).toBe(false);
+    expect(isDrivableWay({ highway: 'service', tunnel: 'building_passage' })).toBe(false);
+    expect(isDrivableWay({ highway: 'pedestrian', area: 'yes' })).toBe(false);
+    expect(isDrivableWay(undefined)).toBe(false);
+    expect(isDrivableWay({})).toBe(false);
   });
 });

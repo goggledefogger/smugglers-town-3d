@@ -106,4 +106,41 @@ describe('Driving Experiment Modes (Road Clearance & Building Collider Fidelity)
       expect(expandedCount).toBeGreaterThan(standardCount);
     });
   });
+
+  describe('Floating Overhead Colliders', () => {
+    it('elevates box min.y when ground clearance is confirmed, opening headroom for vehicles', () => {
+      const n = 20;
+      const cell = 10;
+      const half = (n * cell) / 2;
+      const grid = { cell, half, n };
+
+      const top = new Float32Array(n * n).fill(0);
+      const low = new Float32Array(n * n).fill(0);
+      // Overhead canopy / thick structure (3x3 cells: widthX=3, widthZ=3 > narrowSpan 2)
+      for (let j = 9; j <= 11; j++) {
+        for (let i = 9; i <= 11; i++) {
+          const c = j * n + i;
+          top[c] = 18;
+          low[c] = 8;
+        }
+      }
+
+      // Geometry mask only active at bits corresponding to 7.5m - 18.0m (clear from 0 to 7.5m)
+      const mask = new Uint32Array(n * n);
+      for (let j = 9; j <= 11; j++) {
+        for (let i = 9; i <= 11; i++) {
+          mask[j * n + i] = (1 << 6) | (1 << 7) | (1 << 8); // geometry at 9.0m - 13.5m
+        }
+      }
+
+      const rasters: (TileRaster | null)[] = [{ i0: 0, j0: 0, w: n, h: n, top, low, mask, y0: 0 }];
+      const terrainTop = new Float32Array(n * n).fill(0);
+
+      const boxes = collidersFromRasters(rasters, grid, terrainTop, 1);
+      expect(boxes.length).toBeGreaterThan(0);
+      const b = boxes[0]!;
+      // Box floor should be elevated with min.y >= 4.0m above ground level (ground = 0)
+      expect(b.min.y).toBeGreaterThanOrEqual(4.0);
+    });
+  });
 });

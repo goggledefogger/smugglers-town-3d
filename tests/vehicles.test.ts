@@ -240,4 +240,52 @@ describe('TOWN Procedural Graffiti Renderers Suite (16 Styles)', () => {
     expect(ctx.calls).toContain('fillText:TOWN');
     expect(ctx.calls).toContain('stroke');
   });
+
+  describe('VehicleView Contact Shadow Invariants', () => {
+    it('pins contact shadow to ground surface even when airborne, pitched, or inverted', async () => {
+      const { VehicleView } = await import('../src/render/VehicleView.ts');
+      const { Heightfield } = await import('../src/core/heightfield.ts');
+      const { Vector3, Quaternion } = await import('three');
+
+      const hf = new Heightfield(160, 16, new Float32Array(17 * 17).fill(5.0));
+      const actor = {
+        team: 0,
+        body: {
+          stats: VEHICLE_TYPES[0]!,
+          cfg: { groundClearance: 0.8 },
+          pos: new Vector3(10, 25, -20), // 20m airborne (groundY is 5)
+          prevPos: new Vector3(10, 25, -20),
+          quat: new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI), // upside down roll!
+          prevQuat: new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), Math.PI),
+          vel: new Vector3(0, 0, 0),
+          damage: 0,
+          groundY: 5.0,
+          steer: 0,
+          brake: 0
+        }
+      } as unknown as import('../src/app/Game.ts').VehicleActor;
+
+      const view = new VehicleView(actor, () => hf);
+      view.sync(1 / 60, 1);
+      view.group.updateMatrixWorld(true);
+
+      const shadowWorld = new Vector3();
+      // Find the shadow mesh
+      let shadowMesh: any = null;
+      view.group.traverse(obj => {
+        if ((obj as any).isMesh && (obj as any).geometry?.type === 'PlaneGeometry') {
+          shadowMesh = obj;
+        }
+      });
+      expect(shadowMesh).not.toBeNull();
+      shadowMesh.getWorldPosition(shadowWorld);
+
+      // Shadow world Y must stay on the ground surface at groundY + 0.06 (5.06m),
+      // and NOT flip into the sky (which would be 25 + 20 = 45m)!
+      expect(shadowWorld.y).toBeCloseTo(5.06, 1);
+      // Horizontal position stays directly under the vehicle (X=10, Z=-20)
+      expect(shadowWorld.x).toBeCloseTo(10, 1);
+      expect(shadowWorld.z).toBeCloseTo(-20, 1);
+    });
+  });
 });

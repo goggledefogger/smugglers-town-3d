@@ -38,9 +38,8 @@ describe('TerrainMesh continuous underlay', () => {
     expect(tm.mesh).toBe(mesh);
     expect(mesh.material).toBeDefined();
 
-    // updateCutout is a safe no-op for backward compatibility
-    tm.updateCutout([]);
-    tm.updateCutout([{ minX: -500, maxX: 500, minZ: -500, maxZ: 500 }]);
+    // the patch coverage cutout accepts any grid and survives dispose
+    tm.setPatchCoverage(new Uint8Array(4 * 4), 4, 300);
     tm.dispose();
     expect(tm.mesh).toBeNull();
   });

@@ -34,17 +34,33 @@ const HIGHWAY_WIDTH_M: Record<string, number> = {
   residential: 12,
   unclassified: 12,
   living_street: 10,
-  service: 8
+  service: 8,
+  cycleway: 5,
+  pedestrian: 6,
+  path: 5,
+  track: 5
 };
 
 const NON_DRIVABLE_HIGHWAYS = new Set([
-  'footway', 'path', 'steps', 'pedestrian', 'cycleway', 'track', 'bridleway', 'corridor', 'platform'
+  'footway', 'steps', 'bridleway', 'corridor', 'platform'
 ]);
 
-function isDrivableWay(tags?: Record<string, string>): boolean {
+export function isDrivableWay(tags?: Record<string, string>): boolean {
   if (!tags) return false;
   const h = tags['highway'];
-  if (!h || NON_DRIVABLE_HIGHWAYS.has(h)) return false;
+  if (!h) return false;
+  if (tags['indoor'] === 'yes' || tags['tunnel'] === 'building_passage') return false;
+  if (h === 'cycleway') return true;
+  if (h === 'pedestrian') return tags['area'] !== 'yes';
+  if (h === 'path' || h === 'track') {
+    // Only paved multi-use or designated bicycle paths (e.g. river greenways, park loops)
+    const bike = tags['bicycle'];
+    const motor = tags['motor_vehicle'] ?? tags['vehicle'];
+    const surface = tags['surface'] ?? '';
+    const isPaved = /^(asphalt|paved|concrete|sett|cobblestone)/.test(surface);
+    return bike === 'designated' || bike === 'yes' || motor === 'yes' || isPaved;
+  }
+  if (NON_DRIVABLE_HIGHWAYS.has(h)) return false;
   return true;
 }
 
@@ -94,9 +110,9 @@ export async function fetchRoadPolylines(
   const cosLat = Math.max(0.0001, Math.cos((lat * Math.PI) / 180));
   const dLon = (halfM / (111_320 * cosLat)) * 1.05;
   const bbox = `${(lat - dLat).toFixed(6)},${(lon - dLon).toFixed(6)},${(lat + dLat).toFixed(6)},${(lon + dLon).toFixed(6)}`;
-  // Query only drivable roadway classes; exclude footways, paths, stairs and tracks so
-  // walkways do not punch holes through building atriums, courtyards and lobbies
-  const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service)"](${bbox});out geom tags;`;
+  // Query drivable roadway and designated multi-use path classes; pure footways, stairs,
+  // and indoor passages are filtered out by isDrivableWay so they do not punch holes through building atriums
+  const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|cycleway|pedestrian|path|track)"](${bbox});out geom tags;`;
 
   let data: OverpassResponse | null = null;
   const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 10000);

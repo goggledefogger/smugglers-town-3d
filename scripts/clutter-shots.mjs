@@ -11,6 +11,7 @@
 //   LAT=36.1147 LON=-115.1728 node scripts/clutter-shots.mjs vegas
 //   TP=300,-200 ...    metres east,south of the centre to snap from (default 0,0)
 //   DRIVE=1 ...        also hold W for 20 s in hidden and swept and print frame stats
+//   DPR=2 ...          Retina-sized backbuffer, for GPU-bound comparisons
 // Needs the dev server on :5173 and .sm-key.txt (see the browser-verification notes).
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -24,7 +25,8 @@ const [TX, TZ] = (process.env.TP ?? '0,0').split(',').map(Number);
 const key = readFileSync('.sm-key.txt', 'utf8').trim();
 
 const b = await chromium.launch({ channel: 'chrome', headless: false });
-const page = await b.newPage({ viewport: { width: 1280, height: 800 } });
+// DPR=2 approximates a Retina laptop (the game caps its own pixel ratio at 1.5)
+const page = await b.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
 const errs = [];
 page.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 
@@ -32,6 +34,8 @@ await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
 await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
+// a deep link relocates into the garage backdrop; START ENGINE spawns the match
+await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });
 await page.waitForTimeout(6000);
 
@@ -78,9 +82,13 @@ if (process.env.DRIVE) {
     await page.keyboard.up('KeyW');
     const r = await page.evaluate(() => {
       window.__fsOn = false;
-      const a = window.__fs.slice(5).sort((x, y) => x - y);
+      const raw = window.__fs.slice(5);
+      const a = raw.slice().sort((x, y) => x - y);
       const q = p => a[Math.floor(a.length * p)].toFixed(1);
-      return { p50: q(0.5), p99: q(0.99), max: a[a.length - 1].toFixed(1), over25: a.filter(x => x > 25).length };
+      let t = 0;
+      const hitches = [];
+      for (const d of raw) { t += d; if (d > 25) hitches.push(`${(t / 1000).toFixed(1)}s:${d.toFixed(0)}ms`); }
+      return { p50: q(0.5), p99: q(0.99), max: a[a.length - 1].toFixed(1), over25: a.filter(x => x > 25).length, hitches: hitches.slice(0, 8).join(' ') };
     });
     console.log(`frames[${label}]`, JSON.stringify(r));
   };

@@ -26,8 +26,9 @@ import { Vector3 } from 'three';
 
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
-import { PMREMGenerator } from 'three';
-import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { PMREMGenerator, type Texture, type Material, type Mesh, type PlaneGeometry } from 'three';
+import { patchDetailGrain } from './render/DetailGrain.ts';
+import { GroundShade } from './render/GroundShade.ts';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
 import type { TerrainProvider } from './core/terrain/TerrainProvider.ts';
@@ -135,13 +136,16 @@ let onlineFlow: OnlineFlow | null = null;
 
 // ---- renderer + views ----
 const renderer = new GameRenderer({ canvas });
-// studio reflections for car paint, glass and chrome only (scene lighting is untouched)
+// the painted sky as reflections for car paint, glass and chrome only (scene
+// lighting is untouched): the car mirrors the same sky the scene shows, so it
+// reads as parked under it rather than lit in a studio
 {
   const pmrem = new PMREMGenerator(renderer.renderer);
-  setVehicleEnvMap(pmrem.fromScene(new RoomEnvironment(), 0.04).texture);
+  setVehicleEnvMap(pmrem.fromEquirectangular(renderer.scene.background as Texture).texture);
   pmrem.dispose();
 }
 const terrainMesh = new TerrainMesh();
+const groundShade = new GroundShade();
 renderer.scene.add(terrainMesh.build(desertTerrain, renderer.maxAnisotropy));
 const propScatter = new PropScatter(renderer.scene);
 const pickups = new Pickups(renderer.scene, () => renderer.camera, () => world.terrainProvider.heightfield);
@@ -235,6 +239,7 @@ function setViewMode(mode: 'photoreal' | 'game3d'): void {
   if (groundStreamer) groundStreamer.group.visible = !isGame3d;
   terrainMesh.setMode(mode);
   buildingMeshView.visible = isGame3d;
+  renderer.setLightRig(!isGame3d && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
@@ -337,7 +342,10 @@ function rebuildViews(): void {
   }
   vehicleViews.length = 0;
   for (const actor of world.vehicles) {
-    const view = new VehicleView(actor, () => world.terrainProvider.heightfield);
+    const view = new VehicleView(
+      actor, () => world.terrainProvider.heightfield,
+      (x, z) => viewMode === 'photoreal' ? groundShade.shadeAt(x, z) : 1
+    );
     vehicleViews.push(view);
     renderer.scene.add(view.group);
   }
@@ -371,11 +379,20 @@ function clearTiles(): void {
   buildingMeshView.clear();
 }
 
+/** A streamed satellite patch landed: let the cars read its shadows. */
+function onGroundPatch(m: Mesh): void {
+  const img = (m.material as Material & { map?: { image?: CanvasImageSource } }).map?.image;
+  const size = (m.geometry as PlaneGeometry).parameters.width;
+  if (img && size) groundShade.setPatch(img, m.position.x, m.position.z, size);
+}
+
 function swapTerrainMesh(terrain: TerrainProvider): void {
   const old = terrainMesh.mesh;
   if (old) renderer.scene.remove(old);
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
+  groundShade.setBase(terrain.satelliteCanvas, config.world.mapHalf * 2);
   terrainMesh.setMode(viewMode);
+  renderer.setLightRig(viewMode === 'photoreal' && terrain.isReal ? 'photo' : 'arcade');
   renderer.scene.add(mesh);
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }
@@ -581,6 +598,9 @@ async function openOnline(type: number): Promise<void> {
           tiles = newTiles;
           groundStreamer = newGround ?? null;
           if (groundStreamer) {
+            groundStreamer.onPatch = m => { patchDetailGrain(m.material as Material); renderer.warm(m); onGroundPatch(m); };
+            groundStreamer.onPatchEvicted = (x, z) => groundShade.removePatch(x, z);
+            groundStreamer.onCoverageChanged = (cells, n, cell) => terrainMesh.setPatchCoverage(cells, n, cell);
             groundStreamer.group.visible = viewMode !== 'game3d';
             renderer.scene.add(groundStreamer.group);
           }
@@ -670,6 +690,9 @@ relocateBarEl.onSearch = async (q, key) => {
     tiles = newTiles;
     groundStreamer = newGround ?? null;
     if (groundStreamer) {
+      groundStreamer.onPatch = m => { patchDetailGrain(m.material as Material); renderer.warm(m); onGroundPatch(m); };
+      groundStreamer.onPatchEvicted = (x, z) => groundShade.removePatch(x, z);
+      groundStreamer.onCoverageChanged = (cells, n, cell) => terrainMesh.setPatchCoverage(cells, n, cell);
       groundStreamer.group.visible = viewMode !== 'game3d';
       renderer.scene.add(groundStreamer.group);
     }

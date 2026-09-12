@@ -27,7 +27,7 @@ export function createVehiclePalette(stats: VehicleStats, teamColor: number): Ve
     clearcoat: 0.45,
     clearcoatRoughness: 0.4,
     envMap,
-    envMapIntensity: 0.22
+    envMapIntensity: 0.5
   };
 
   const paint = new MeshPhysicalMaterial({ color: teamColor, ...paintOpts });

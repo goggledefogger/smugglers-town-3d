@@ -11,7 +11,7 @@ import {
   Group, Mesh, CylinderGeometry, BoxGeometry, TorusGeometry, CircleGeometry,
   PlaneGeometry, MeshStandardMaterial, MeshBasicMaterial, PointLight,
   CanvasTexture, DoubleSide, NormalBlending, AdditiveBlending,
-  type Camera, type Material
+  type Camera, type Material, type Object3D
 } from 'three';
 import { vehicleEnvMap } from './vehicleMeshes.ts';
 
@@ -234,7 +234,32 @@ export class SmokingToilet {
   }
 
   /** Advance smoke plume simulation and fire flicker each frame. */
+  private shown = true;
+
+  /**
+   * Show or hide the toilet without touching the scene's light count. three
+   * bakes the number of visible point lights into every shader's cache key, so
+   * hiding this group (two lights) forced every material in the scene, tiles
+   * included, to compile a fresh program on its next draw: a 35 ms stall on
+   * each pickup and delivery. The lights stay visible at zero intensity.
+   */
+  setShown(on: boolean): void {
+    if (on === this.shown) return;
+    this.shown = on;
+    const hide = (o: Object3D): void => {
+      for (const c of o.children) {
+        if ((c as PointLight).isLight) continue;
+        c.visible = on;
+        hide(c);
+      }
+    };
+    hide(this.group);
+    this.goldLight.intensity = on ? 2.2 : 0;
+    if (!on) this.fireLight.intensity = 0;
+  }
+
   update(dt: number, timeS: number, camera?: Camera | null, carried = false): void {
+    if (!this.shown) return;
     // 1. Animated fire flicker
     this.fireLight.intensity = 3.2 + Math.sin(timeS * 14.5) * 0.6 + Math.cos(timeS * 22.3) * 0.4;
 

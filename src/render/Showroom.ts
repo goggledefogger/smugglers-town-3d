@@ -46,7 +46,8 @@ export class Showroom {
     this.body.snapPrev();
     this.view.sync(dt, 1);
     const camAng = this.angle * 0.35 + 0.6;
-    const y = this.body.pos.y;
+    // frame the mesh, whose ground contact is a clearance below the body origin
+    const y = this.body.pos.y - this.body.cfg.groundClearance;
     this.camera.position.set(Math.sin(camAng) * 8.5, y + 2.8, Math.cos(camAng) * 8.5);
     this.camera.lookAt(0, y + 0.8, 0);
     // shift the frustum so the car sits right of center, clear of the panel
