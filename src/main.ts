@@ -168,7 +168,7 @@ if (typeof window !== 'undefined') {
   (window as any).__terrainMesh = terrainMesh;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -229,9 +229,11 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   };
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
+  streamer.group.traverse(o => o.layers.set(1));
   streamer.onTileLoaded = g => {
     clutterFilter?.patch(g);
     renderer.warm(g);
+    g.traverse(o => o.layers.set(1));
   };
   updateClutterUi();
 }
@@ -241,8 +243,10 @@ function updateViewModeUi(): void {
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
   if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
-  } else if (viewMode === 'projected-3d') {
-    viewModeText.textContent = 'VIEW: PROJECTED 3D';
+  } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
+    viewModeText.textContent = 'VIEW: PROJECTED (3D TILES)';
+  } else if (viewMode === 'projected-2d-maps') {
+    viewModeText.textContent = 'VIEW: PROJECTED (2D MAPS)';
   } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
     viewModeText.textContent = 'VIEW: TEXTURED 3D';
   } else if (viewMode === 'game3d-planar') {
@@ -258,11 +262,26 @@ function setViewMode(mode: ViewMode): void {
   viewMode = mode;
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
-  const hasTiles = isRawPhotoreal || isMaskedTiles;
+  const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
+  const isProjected2dMaps = mode === 'projected-2d-maps';
+  const hasTiles = isRawPhotoreal || isMaskedTiles || isProjected3dTiles;
 
-  if (tiles) tiles.group.visible = hasTiles;
+  if (tiles) {
+    tiles.group.visible = hasTiles;
+    if (isProjected3dTiles) {
+      tiles.group.traverse(o => o.layers.set(1));
+    }
+  }
+  renderer.setProjecting3dTiles(isProjected3dTiles);
+
+  if (isRawPhotoreal || isMaskedTiles) {
+    renderer.camera.layers.enable(1);
+  } else {
+    renderer.camera.layers.disable(1);
+  }
+
   if (clutterFilter) {
-    if (isMaskedTiles) {
+    if (isMaskedTiles || isProjected3dTiles) {
       clutterFilter.mode = 'swept';
       clutterMode = 'swept';
     } else if (isRawPhotoreal) {
@@ -272,42 +291,42 @@ function setViewMode(mode: ViewMode): void {
     updateClutterUi();
   }
 
-  const showGround = hasTiles || mode === 'projected-3d' || mode === 'game3d-textured' || mode === 'game3d-planar' || mode === 'game3d-hybrid';
   if (groundStreamer) {
-    groundStreamer.group.visible = showGround;
-    if (hasTiles) {
+    groundStreamer.group.visible = true;
+    if (isRawPhotoreal || isMaskedTiles) {
       groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
+    } else {
+      groundStreamer.underTiles = true;
     }
   }
 
   terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
 
-  // In arcade and textured modes, buildingMeshView is the primary visible structure geometry.
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
-  buildingMeshView.visible = !hasTiles;
+  // In all other modes, buildingMeshView provides the physical solid collision geometry.
+  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles);
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
+  if (satTex) {
+    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
+  }
+
   if (mode === 'game3d') {
     buildingMeshView.setMode('arcade');
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
-    if (satTex) {
-      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-    }
-  } else if (mode === 'projected-3d') {
+  } else if (isProjected3dTiles) {
     buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('projected');
-    if (satTex) {
-      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-    }
+    buildingMeshView.setTextureStyle('projected-3d');
+    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
+  } else if (isProjected2dMaps) {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('projected-2d');
   } else {
     // 'game3d-textured' uses hybrid textured buildings
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('hybrid');
-    if (satTex) {
-      buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-    }
   }
 
   renderer.setLightRig(hasTiles && world.terrainProvider.isReal ? 'photo' : 'arcade');
@@ -318,10 +337,12 @@ function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
-    setViewMode('projected-3d');
-  } else if (viewMode === 'projected-3d') {
+    setViewMode('projected-3d-tiles');
+  } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
+    setViewMode('projected-2d-maps');
+  } else if (viewMode === 'projected-2d-maps') {
     setViewMode('game3d-textured');
-  } else if (viewMode === 'game3d-textured') {
+  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
     setViewMode('game3d-planar');
   } else if (viewMode === 'game3d-planar') {
     setViewMode('game3d');
@@ -1225,6 +1246,9 @@ function frame(now: number): void {
       if (tiles) tiles.update(renderer.camera.position, now);
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
+  }
+  if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
+    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   }
   renderer.render();
   requestAnimationFrame(frame);

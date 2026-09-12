@@ -64,70 +64,80 @@ try {
   await page.screenshot({ path: `${SCRATCH}/02_masked_3d_tiles.png` });
   copyFileSync(`${SCRATCH}/02_masked_3d_tiles.png`, `${ARTIFACT_DIR}/02_masked_3d_tiles.png`);
 
-  // 3. Cycle to PROJECTED 3D (The 6th mode!)
-  console.log('[playwright] Pressing KeyV to switch to PROJECTED 3D...');
+  // 3. Cycle to PROJECTED (3D TILES)
+  console.log('[playwright] Pressing KeyV to switch to PROJECTED (3D TILES)...');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(1500);
   const mode3 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
   console.log(`[playwright] Mode 3: ${mode3}`);
-  await page.screenshot({ path: `${SCRATCH}/03_projected_3d.png` });
-  copyFileSync(`${SCRATCH}/03_projected_3d.png`, `${ARTIFACT_DIR}/03_projected_3d.png`);
+  await page.screenshot({ path: `${SCRATCH}/03_projected_3d_tiles.png` });
+  copyFileSync(`${SCRATCH}/03_projected_3d_tiles.png`, `${ARTIFACT_DIR}/03_projected_3d_tiles.png`);
 
-  // Drive forward up the street in PROJECTED 3D to inspect building facades and ground contact
-  console.log('[playwright] Driving forward in PROJECTED 3D...');
+  // Drive forward up the street in PROJECTED (3D TILES) to inspect building walls with photogrammetry textures
+  console.log('[playwright] Driving forward in PROJECTED (3D TILES)...');
   await page.keyboard.down('KeyW');
   await page.waitForTimeout(1500);
   await page.keyboard.up('KeyW');
-  await page.screenshot({ path: `${SCRATCH}/03_projected_3d_driving.png` });
-  copyFileSync(`${SCRATCH}/03_projected_3d_driving.png`, `${ARTIFACT_DIR}/03_projected_3d_driving.png`);
+  await page.screenshot({ path: `${SCRATCH}/03_projected_3d_tiles_driving.png` });
+  copyFileSync(`${SCRATCH}/03_projected_3d_tiles_driving.png`, `${ARTIFACT_DIR}/03_projected_3d_tiles_driving.png`);
 
-  // 4. Cycle to TEXTURED 3D (Hybrid)
-  console.log('[playwright] Pressing KeyV to switch to Textured 3D (Hybrid)...');
+  // 4. Cycle to PROJECTED (2D MAPS)
+  console.log('[playwright] Pressing KeyV to switch to PROJECTED (2D MAPS)...');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(1000);
   const mode4 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
   console.log(`[playwright] Mode 4: ${mode4}`);
-  await page.screenshot({ path: `${SCRATCH}/04_textured_3d_hybrid.png` });
-  copyFileSync(`${SCRATCH}/04_textured_3d_hybrid.png`, `${ARTIFACT_DIR}/04_textured_3d_hybrid.png`);
+  await page.screenshot({ path: `${SCRATCH}/04_projected_2d_maps.png` });
+  copyFileSync(`${SCRATCH}/04_projected_2d_maps.png`, `${ARTIFACT_DIR}/04_projected_2d_maps.png`);
 
-  // 5. Cycle to TEXTURED (PLANAR)
-  console.log('[playwright] Pressing KeyV to switch to Textured (Planar)...');
+  // 5. Cycle to TEXTURED 3D (Hybrid)
+  console.log('[playwright] Pressing KeyV to switch to Textured 3D (Hybrid)...');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(1000);
   const mode5 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
   console.log(`[playwright] Mode 5: ${mode5}`);
-  await page.screenshot({ path: `${SCRATCH}/05_textured_3d_planar.png` });
-  copyFileSync(`${SCRATCH}/05_textured_3d_planar.png`, `${ARTIFACT_DIR}/05_textured_3d_planar.png`);
+  await page.screenshot({ path: `${SCRATCH}/05_textured_3d_hybrid.png` });
+  copyFileSync(`${SCRATCH}/05_textured_3d_hybrid.png`, `${ARTIFACT_DIR}/05_textured_3d_hybrid.png`);
 
-  // 6. Cycle to ARCADE 3D
-  console.log('[playwright] Pressing KeyV to switch to Arcade 3D...');
+  // 6. Cycle to TEXTURED (PLANAR)
+  console.log('[playwright] Pressing KeyV to switch to Textured (Planar)...');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(1000);
   const mode6 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
   console.log(`[playwright] Mode 6: ${mode6}`);
-  await page.screenshot({ path: `${SCRATCH}/06_arcade_3d.png` });
-  copyFileSync(`${SCRATCH}/06_arcade_3d.png`, `${ARTIFACT_DIR}/06_arcade_3d.png`);
+  await page.screenshot({ path: `${SCRATCH}/06_textured_3d_planar.png` });
+  copyFileSync(`${SCRATCH}/06_textured_3d_planar.png`, `${ARTIFACT_DIR}/06_textured_3d_planar.png`);
 
-  // 7. Cycle back to REAL 3D
+  // 7. Cycle to ARCADE 3D
+  console.log('[playwright] Pressing KeyV to switch to Arcade 3D...');
+  await page.keyboard.press('KeyV');
+  await page.waitForTimeout(1000);
+  const mode7 = await page.$eval('#view-mode-text', el => el.textContent?.trim());
+  console.log(`[playwright] Mode 7: ${mode7}`);
+  await page.screenshot({ path: `${SCRATCH}/07_arcade_3d.png` });
+  copyFileSync(`${SCRATCH}/07_arcade_3d.png`, `${ARTIFACT_DIR}/07_arcade_3d.png`);
+
+  // 8. Cycle back to REAL 3D
   console.log('[playwright] Pressing KeyV to return to Real 3D...');
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(1000);
   const modeFinal = await page.$eval('#view-mode-text', el => el.textContent?.trim());
   console.log(`[playwright] Final Mode: ${modeFinal}`);
 
-  console.log('\n--- 6-MODE SPECTRUM VERIFICATION SUMMARY ---');
+  console.log('\n--- 7-MODE SPECTRUM VERIFICATION SUMMARY ---');
   console.log(`Mode 1: ${mode1}`);
   console.log(`Mode 2: ${mode2}`);
   console.log(`Mode 3: ${mode3}`);
   console.log(`Mode 4: ${mode4}`);
   console.log(`Mode 5: ${mode5}`);
   console.log(`Mode 6: ${mode6}`);
+  console.log(`Mode 7: ${mode7}`);
   console.log(`Cycle Return: ${modeFinal}`);
 
   if (consoleErrors.length > 0) {
     console.warn('\nPage logged errors:', consoleErrors);
   } else {
-    console.log('\nZero console/page errors detected across all 6 modes!');
+    console.log('\nZero console/page errors detected across all 7 modes!');
   }
 } catch (err) {
   console.error('Playwright verification failed:', err);

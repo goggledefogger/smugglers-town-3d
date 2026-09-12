@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Vector3, Matrix4, Quaternion } from 'three';
+import { Vector3, Matrix4, Quaternion, Vector2 } from 'three';
 import { BuildingMeshView } from '../src/render/BuildingMeshView.ts';
 import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
@@ -71,6 +71,12 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('hybrid');
     expect(view.getTextureStyle()).toBe('hybrid');
 
+    view.setTextureStyle('projected-2d');
+    expect(view.getTextureStyle()).toBe('projected-2d');
+
+    view.setTextureStyle('projected-3d');
+    expect(view.getTextureStyle()).toBe('projected-3d');
+
     view.setTextureStyle('projected');
     expect(view.getTextureStyle()).toBe('projected');
 
@@ -82,6 +88,7 @@ describe('BuildingMeshView', () => {
 
     // Setting texture and mapSize works safely without error
     view.setTexture(null, 5600);
+    view.setTilesTexture(null, new Vector2(1920, 1080));
   });
 
   it('firmly anchors building foundations into steep hillside slopes across entire footprint', () => {

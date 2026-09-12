@@ -4,9 +4,10 @@
  * scene by the view modules.
  */
 import {
-  WebGLRenderer, Scene, PerspectiveCamera, Fog, Vector3,
+  WebGLRenderer, Scene, PerspectiveCamera, Fog, Vector3, Vector2,
   DirectionalLight, AmbientLight, HemisphereLight,
-  SRGBColorSpace, ACESFilmicToneMapping,
+  SRGBColorSpace, ACESFilmicToneMapping, WebGLRenderTarget,
+  RGBAFormat, UnsignedByteType, LinearFilter,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { makeSkyTexture, SKY_HORIZON, SKY_MID_LIGHT } from './skyTexture.ts';
@@ -53,6 +54,10 @@ export class GameRenderer {
   private readonly sun: DirectionalLight;
   private readonly ambient: AmbientLight;
   private readonly hemi: HemisphereLight;
+  private tilesTarget: WebGLRenderTarget | null = null;
+  private readonly tilesCamera = new PerspectiveCamera();
+  private isProjecting3dTiles = false;
+  private readonly _res = new Vector2();
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -101,10 +106,13 @@ export class GameRenderer {
 
     this.sun = new DirectionalLight(LIGHTING_COLORS.sun, 1.4);
     this.sun.position.copy(SUN_POS);
+    this.sun.layers.enable(1);
     this.scene.add(this.sun);
     this.ambient = new AmbientLight(LIGHTING_COLORS.ambient, 0.6);
+    this.ambient.layers.enable(1);
     this.scene.add(this.ambient);
     this.hemi = new HemisphereLight(SKY_MID_LIGHT, LIGHTING_COLORS.groundBounce, 0.5);
+    this.hemi.layers.enable(1);
     this.scene.add(this.hemi);
     this.setLightRig('arcade');
 
@@ -140,6 +148,9 @@ export class GameRenderer {
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this.baseRatio * this.scale);
     this.renderer.setSize(width, height);
+    if (this.tilesTarget) {
+      this.tilesTarget.setSize(Math.round(width * this.pixelRatio), Math.round(height * this.pixelRatio));
+    }
     this.deps.onResize?.(width, height);
   }
 
@@ -175,6 +186,11 @@ export class GameRenderer {
     this.scale = Math.max(this.minScale, this.tiers[tier]!);
     this.lastAdjustMs = nowMs;
     this.renderer.setPixelRatio(this.baseRatio * this.scale);
+    if (this.tilesTarget) {
+      const w = this.renderer.domElement.width || 1280;
+      const h = this.renderer.domElement.height || 720;
+      this.tilesTarget.setSize(w, h);
+    }
     log.debug('render scale', {
       tier,
       pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
@@ -186,7 +202,54 @@ export class GameRenderer {
     return this.baseRatio * this.scale;
   }
 
+  setProjecting3dTiles(enabled: boolean): void {
+    this.isProjecting3dTiles = enabled;
+    if (enabled) {
+      const w = Math.round(this.renderer.domElement.width || 1280);
+      const h = Math.round(this.renderer.domElement.height || 720);
+      if (!this.tilesTarget) {
+        this.tilesTarget = new WebGLRenderTarget(w, h, {
+          minFilter: LinearFilter,
+          magFilter: LinearFilter,
+          format: RGBAFormat,
+          type: UnsignedByteType,
+          depthBuffer: true,
+        });
+      } else {
+        this.tilesTarget.setSize(w, h);
+      }
+    }
+  }
+
+  getTilesTexture(): Texture | null {
+    return this.tilesTarget?.texture ?? null;
+  }
+
+  getResolution(out?: Vector2): Vector2 {
+    const res = out ?? this._res;
+    const w = this.renderer.domElement.width || 1280;
+    const h = this.renderer.domElement.height || 720;
+    return res.set(w, h);
+  }
+
   render(): void {
+    if (this.isProjecting3dTiles && this.tilesTarget) {
+      // 1. Offscreen pass: render 3D tiles (layer 1) with transparent background
+      const prevBg = this.scene.background;
+      this.scene.background = null;
+      this.tilesCamera.copy(this.camera);
+      this.tilesCamera.layers.set(1);
+
+      this.renderer.setRenderTarget(this.tilesTarget);
+      this.renderer.setClearColor(0x000000, 0.0);
+      this.renderer.clear();
+      this.renderer.render(this.scene, this.tilesCamera);
+      this.renderer.setRenderTarget(null);
+      this.scene.background = prevBg;
+
+      // 2. Main scene camera only renders layer 0 (so tiles aren't drawn directly over the boxes)
+      this.camera.layers.disable(1);
+    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -236,6 +299,7 @@ export class GameRenderer {
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.handleResize);
     }
+    this.tilesTarget?.dispose();
     this.renderer.dispose();
   }
 }

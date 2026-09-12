@@ -6,7 +6,7 @@
  * zero drive-through-wall mismatch.
  */
 import {
-  Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3,
+  Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3, Vector2,
   Quaternion, Color, LineSegments, DataTexture, RGBAFormat, UnsignedByteType,
   type Texture, type WebGLProgramParametersWithUniforms
 } from 'three';
@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -48,6 +48,8 @@ vLocalNormY = position.y + 0.5;
 
 const FRAGMENT_PARS_BUILDING = `
 uniform sampler2D uSatelliteMap;
+uniform sampler2D uTilesMap;
+uniform vec2 uResolution;
 uniform float uMapSize;
 uniform float uHasTexture;
 uniform float uTextureStyle;
@@ -64,13 +66,37 @@ if (uHasTexture > 0.5) {
     0.5 - vWorldPos.z / uMapSize
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
-  if (vIsRoof > 0.5) {
+
+  if (uTextureStyle > 2.5) {
+    // Mode: "Projected (3D Tiles)"
+    // Real Google 3D photogrammetry tiles' textures projected directly onto 3D building objects!
+    // Verticals and roofs sample the real map imagery from the offscreen 3D tiles buffer.
+    vec2 screenUV = gl_FragCoord.xy / uResolution;
+    vec4 tileSample = texture2D(uTilesMap, screenUV);
+
+    if (tileSample.a > 0.08) {
+      // Authentic photogrammetric texture of this building from the 3D map
+      diffuseColor.rgb = tileSample.rgb;
+    } else if (vIsRoof > 0.5) {
+      // Rooftop: Pristine satellite aerial imagery from 3D map
+      diffuseColor.rgb = sat.rgb;
+    } else {
+      // Solid foundation plinth / edge fallback so walls are never hollow or transparent
+      float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
+      vec3 plinthColor = vec3(0.14, 0.15, 0.17);
+      #ifdef USE_INSTANCING_COLOR
+        vec3 instTone = vColor.rgb;
+      #else
+        vec3 instTone = vec3(0.68, 0.65, 0.60);
+      #endif
+      diffuseColor.rgb = mix(instTone * 0.75, plinthColor, groundPlinth);
+    }
+  } else if (vIsRoof > 0.5) {
     // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
     diffuseColor.rgb = sat.rgb;
   } else if (uTextureStyle > 1.5) {
-    // 6th View: "Projected 3D"
-    // Real 3D maps & textures projected onto horizontal walls and roof,
-    // with genuine architectural details, NOT just colors that are similar.
+    // Mode: "Projected (2D Maps)"
+    // High-resolution 2D aerial map projection with architectural facade structure
     float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
     float wallV = vWorldPos.y;
 
@@ -188,10 +214,12 @@ export class BuildingMeshView {
 
   // Material uniforms for texture projection
   private readonly uHasTexture = { value: 0.0 };
-  private readonly uTextureStyle = { value: 0.0 }; // 0 = planar, 1 = hybrid
+  private readonly uTextureStyle = { value: 0.0 }; // 0 = planar, 1 = hybrid, 2 = projected-2d, 3 = projected-3d
   private readonly uMapSize = { value: 5600.0 };
+  private readonly uResolution = { value: new Vector2(1280, 720) };
   private readonly dummyTex: DataTexture;
   private readonly uSatelliteMap: { value: Texture };
+  private readonly uTilesMap: { value: Texture };
 
   // Modern arcade architectural materials
   private readonly buildingMat: MeshStandardMaterial;
@@ -202,6 +230,7 @@ export class BuildingMeshView {
     this.dummyTex = new DataTexture(new Uint8Array([100, 110, 120, 255]), 1, 1, RGBAFormat, UnsignedByteType);
     this.dummyTex.needsUpdate = true;
     this.uSatelliteMap = { value: this.dummyTex };
+    this.uTilesMap = { value: this.dummyTex };
 
     this.buildingMat = new MeshStandardMaterial({
       color: 0xffffff,
@@ -232,6 +261,8 @@ export class BuildingMeshView {
       shader.uniforms.uHasTexture = this.uHasTexture;
       shader.uniforms.uTextureStyle = this.uTextureStyle;
       shader.uniforms.uSatelliteMap = this.uSatelliteMap;
+      shader.uniforms.uTilesMap = this.uTilesMap;
+      shader.uniforms.uResolution = this.uResolution;
       shader.uniforms.uMapSize = this.uMapSize;
 
       shader.vertexShader = VERTEX_PARS_BUILDING + shader.vertexShader
@@ -250,8 +281,13 @@ export class BuildingMeshView {
     return this.uHasTexture.value > 0.5 ? 'textured' : 'arcade';
   }
 
+  private _style: BuildingTextureStyle = 'planar';
+
   setTextureStyle(style: BuildingTextureStyle): void {
-    if (style === 'projected') {
+    this._style = style;
+    if (style === 'projected-3d') {
+      this.uTextureStyle.value = 3.0;
+    } else if (style === 'projected-2d' || style === 'projected') {
       this.uTextureStyle.value = 2.0;
     } else if (style === 'hybrid') {
       this.uTextureStyle.value = 1.0;
@@ -261,13 +297,19 @@ export class BuildingMeshView {
   }
 
   getTextureStyle(): BuildingTextureStyle {
-    if (this.uTextureStyle.value > 1.5) return 'projected';
-    return this.uTextureStyle.value > 0.5 ? 'hybrid' : 'planar';
+    return this._style;
   }
 
   setTexture(tex: Texture | null, mapSize: number): void {
     this.uSatelliteMap.value = tex ?? this.dummyTex;
     this.uMapSize.value = mapSize;
+  }
+
+  setTilesTexture(tex: Texture | null, resolution?: Vector2): void {
+    this.uTilesMap.value = tex ?? this.dummyTex;
+    if (resolution) {
+      this.uResolution.value.copy(resolution);
+    }
   }
 
   get visible(): boolean {
