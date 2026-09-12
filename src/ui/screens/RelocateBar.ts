@@ -35,6 +35,7 @@ export class RelocateBar extends LitElement {
     }
 
     :host([hidden]) { display:none; }
+    :host([busy]) { display: none !important; }
 
     /* Featured on the garage/menu screen only: pulled to the middle of the
        viewport and scaled up so the call to action reads as the main event.
@@ -185,6 +186,7 @@ export class RelocateBar extends LitElement {
       return;
     }
     if (q && this.onSearch) {
+      this.busy = true;
       this.onSearch(q, key);
       // leave the panel open: the loader overlay covers it while the async
       // relocate runs, and on success main.ts hides the bar outright (refresh

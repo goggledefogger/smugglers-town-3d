@@ -250,8 +250,8 @@ function setViewMode(mode: ViewMode): void {
 
   if (tiles) tiles.group.visible = hasTiles;
   if (clutterFilter && isMaskedTiles) {
-    clutterFilter.mode = 'swept';
-    clutterMode = 'swept';
+    clutterFilter.mode = 'hidden';
+    clutterMode = 'hidden';
     updateClutterUi();
   }
 
@@ -483,8 +483,15 @@ log.info('boot', {
 prepareTerrain(desertTerrain);
 minimapEl.setTerrain(desertTerrain.heightfield, config.world.mapHalf);
 hudEl.hidden = true;
-relocateBarEl.hidden = false;
-relocateBarEl.featured = true;
+const hasPendingLocation = typeof window !== 'undefined' && (
+  window.location.search.includes('scenario=') ||
+  window.location.search.includes('lat=')
+);
+relocateBarEl.hidden = hasPendingLocation;
+relocateBarEl.featured = !hasPendingLocation;
+if (hasPendingLocation) {
+  relocateBarEl.busy = true;
+}
 pickups.setVisible(false);
 
 // ---- input ----
@@ -652,6 +659,7 @@ async function openOnline(type: number): Promise<void> {
           );
         }
         if (!apiKey) throw new Error('no-maps-key');
+        relocateBarEl.busy = true;
         loaderEl.hidden = false;
         try {
           const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocateTo(
@@ -677,6 +685,7 @@ async function openOnline(type: number): Promise<void> {
           return terrain;
         } finally {
           loaderEl.hidden = true;
+          relocateBarEl.busy = false;
         }
       },
       makeHostGame: (seed, terrain, seats) => {
@@ -1039,11 +1048,14 @@ if (urlParams) {
   if (targetCoords) {
     const activeKey = urlKey || localStorage.getItem('gmap_key') || '';
     if (activeKey) {
+      relocateBarEl.busy = true;
+      relocateBarEl.hidden = true;
+      relocateBarEl.featured = false;
       setTimeout(() => {
         // a deep link relocates into the garage backdrop — START ENGINE (or a
         // game already in progress) plays from there; no forced match start
         relocateBarEl.onSearch?.(targetCoords, activeKey);
-      }, 400);
+      }, 50);
     } else {
       setTimeout(() => {
         relocateBarEl.setQuery(targetCoords);

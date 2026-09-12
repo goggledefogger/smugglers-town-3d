@@ -72,14 +72,6 @@ try {
   await page.screenshot({ path: `${SCRATCH}/03_spectrum_textured_3d.png` });
   copyFileSync(`${SCRATCH}/03_spectrum_textured_3d.png`, `${ARTIFACT_DIR}/03_spectrum_textured_3d.png`);
 
-  // Drive forward up Russian Hill slope to inspect building ground contact
-  console.log('[playwright] Driving forward with KeyW for 2.5s to inspect hillside building contact...');
-  await page.keyboard.down('KeyW');
-  await page.waitForTimeout(2500);
-  await page.keyboard.up('KeyW');
-  await page.screenshot({ path: `${SCRATCH}/03_spectrum_textured_3d_driving.png` });
-  copyFileSync(`${SCRATCH}/03_spectrum_textured_3d_driving.png`, `${ARTIFACT_DIR}/03_spectrum_textured_3d_driving.png`);
-
   // 4. Cycle to MASKED 3D TILES
   console.log('[playwright] Pressing KeyV to switch to Masked 3D Tiles (Hybrid Photoreal Buildings + Flat Satellite Roads)...');
   await page.keyboard.press('KeyV');
@@ -88,6 +80,20 @@ try {
   console.log(`[playwright] Mode 4: ${mode4}`);
   await page.screenshot({ path: `${SCRATCH}/04_spectrum_masked_3d_tiles.png` });
   copyFileSync(`${SCRATCH}/04_spectrum_masked_3d_tiles.png`, `${ARTIFACT_DIR}/04_spectrum_masked_3d_tiles.png`);
+
+  // Switch back to Textured 3D and drive forward up Russian Hill slope to inspect building ground contact
+  console.log('[playwright] Switching back to Textured 3D and driving forward to inspect hillside building contact...');
+  await page.keyboard.press('KeyV'); // to REAL 3D
+  await page.waitForTimeout(500);
+  await page.keyboard.press('KeyV'); // to ARCADE 3D
+  await page.waitForTimeout(500);
+  await page.keyboard.press('KeyV'); // to TEXTURED 3D
+  await page.waitForTimeout(500);
+  await page.keyboard.down('KeyW');
+  await page.waitForTimeout(2000);
+  await page.keyboard.up('KeyW');
+  await page.screenshot({ path: `${SCRATCH}/03_spectrum_textured_3d_driving.png` });
+  copyFileSync(`${SCRATCH}/03_spectrum_textured_3d_driving.png`, `${ARTIFACT_DIR}/03_spectrum_textured_3d_driving.png`);
 
   // 5. Cycle back to REAL 3D
   console.log('[playwright] Pressing KeyV to return to Real 3D...');
