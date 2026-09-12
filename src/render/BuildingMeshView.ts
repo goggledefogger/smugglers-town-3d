@@ -270,7 +270,7 @@ export class BuildingMeshView {
           if (b.kind === 'prop') {
             // Props (scattered rocks, obstacles) embed firmly into the local ground
             minY = Math.min(b.min.y, minGround - 0.8);
-          } else if (b.min.y <= maxGround + 3.0) {
+          } else {
             // Ground-rooted building: firmly embed foundation at least 2.5m below the lowest
             // downhill terrain point across the entire footprint, completely eliminating hover
             minY = Math.min(b.min.y, minGround - 2.5);

@@ -166,6 +166,7 @@ renderer.scene.add(buildingMeshView.group);
 if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
   (window as any).__terrainMesh = terrainMesh;
+  (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
 export type ViewMode = 'photoreal' | 'masked-tiles' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
@@ -202,6 +203,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
+  (window as any).__clutterFilter = clutterFilter;
   if (viewMode === 'masked-tiles') {
     clutterFilter.mode = 'hidden';
     clutterMode = 'hidden';
@@ -259,8 +261,8 @@ function setViewMode(mode: ViewMode): void {
   if (tiles) tiles.group.visible = hasTiles;
   if (clutterFilter) {
     if (isMaskedTiles) {
-      clutterFilter.mode = 'hidden';
-      clutterMode = 'hidden';
+      clutterFilter.mode = 'swept';
+      clutterMode = 'swept';
     } else if (isRawPhotoreal) {
       clutterFilter.mode = 'off';
       clutterMode = 'off';
@@ -279,10 +281,8 @@ function setViewMode(mode: ViewMode): void {
   terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
 
   // In arcade and textured modes, buildingMeshView is the primary visible structure geometry.
-  // In masked-tiles mode, buildingMeshView provides the solid color-mapped substrate
-  // so building walls are never see-through or hollow ("at worst a color-mapped object, not see through").
-  // In photoreal (Real 3D) mode, raw 3D tiles are shown alone.
-  buildingMeshView.visible = mode !== 'photoreal';
+  // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
+  buildingMeshView.visible = !hasTiles;
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (mode === 'game3d') {
@@ -294,7 +294,7 @@ function setViewMode(mode: ViewMode): void {
       buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
     }
   } else {
-    // Both 'game3d-textured' and 'masked-tiles' use hybrid textured buildings
+    // 'game3d-textured' uses hybrid textured buildings
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('hybrid');
     if (satTex) {
@@ -307,14 +307,16 @@ function setViewMode(mode: ViewMode): void {
 }
 
 function toggleViewMode(): void {
-  if (viewMode === 'game3d') {
-    setViewMode('game3d-textured');
-  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid' || viewMode === 'game3d-planar') {
+  if (viewMode === 'photoreal') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
-    setViewMode('photoreal');
-  } else {
+    setViewMode('game3d-textured');
+  } else if (viewMode === 'game3d-textured') {
+    setViewMode('game3d-planar');
+  } else if (viewMode === 'game3d-planar') {
     setViewMode('game3d');
+  } else {
+    setViewMode('photoreal');
   }
 }
 

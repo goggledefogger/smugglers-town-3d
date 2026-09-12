@@ -85,12 +85,9 @@ if (uClutterMode > 0.5) {
   float crise = cwp.y - cg;
   vClutterRiseVal = crise;
   bool cStreet = cStructure < 0.5;
-  bool cFlatten = uClutterMode < 1.5 || uClutterMode > 2.5;
+  bool cFlatten = uClutterMode > 0.5;
   if (cFlatten && cStreet && abs(crise) < uClutterRise) cClutterDy = -crise;
-  if (cStreet && abs(crise) < uClutterRise * (cStructure > 0.0 ? 1.0 : uClutterTall)) vClutterFlat = 1.0;
-  // flattened with no structure in reach: a triangle from here up to a tree or
-  // a sign is a dark tent over the road, not the base of a wall
-  if (cFlatten && cStreet && cStructure <= 0.0 && abs(crise) < uClutterRise * uClutterTall) vClutterOpenFlat = 1.0;
+  if (cStreet && abs(crise) < uClutterRise) vClutterFlat = 1.0;
 }
 `;
 
@@ -126,11 +123,9 @@ varying float vClutterOpenFlat;
  */
 const FRAGMENT_CUT = `
 if (uClutterMode > 2.5) {
-  if (vClutterFlat > 0.999 || vClutterOpenFlat > 0.0) discard;
+  if (vClutterFlat > 0.999) discard;
 } else if (uClutterMode > 1.5) {
-  vec2 fUv = clamp(vClutterWorldPos.xz / uClutterField.x + 0.5, 0.0, 1.0);
-  float fStructure = texture2D(uClutterMask, fUv).r * 255.0;
-  if (fStructure < 0.5 && vClutterRiseVal < uClutterRise) discard;
+  if (vClutterFlat > 0.999) discard;
 }
 `;
 
