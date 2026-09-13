@@ -170,7 +170,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -244,7 +244,9 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
-  if (viewMode === 'game3d') {
+  if (viewMode === 'best-3d') {
+    viewModeText.textContent = 'VIEW: BEST 3D';
+  } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
   } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     viewModeText.textContent = 'VIEW: PROJECTED (3D TILES)';
@@ -265,6 +267,7 @@ function setViewMode(mode: ViewMode): void {
   viewMode = mode;
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
+  const isBest3d = mode === 'best-3d';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
   const isProjected2dMaps = mode === 'projected-2d-maps';
   const hasTiles = isRawPhotoreal || isMaskedTiles || isProjected3dTiles;
@@ -306,7 +309,7 @@ function setViewMode(mode: ViewMode): void {
   terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
 
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
-  // In all other modes, buildingMeshView provides the physical solid collision geometry.
+  // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
   buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles);
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
@@ -319,6 +322,9 @@ function setViewMode(mode: ViewMode): void {
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
+  } else if (isBest3d) {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('best-3d');
   } else if (isProjected3dTiles) {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('projected-3d');
@@ -340,6 +346,8 @@ function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
+    setViewMode('best-3d');
+  } else if (viewMode === 'best-3d') {
     setViewMode('projected-3d-tiles');
   } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     setViewMode('projected-2d-maps');

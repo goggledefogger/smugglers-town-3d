@@ -80,6 +80,9 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('projected');
     expect(view.getTextureStyle()).toBe('projected');
 
+    view.setTextureStyle('best-3d');
+    expect(view.getTextureStyle()).toBe('best-3d');
+
     view.setTextureStyle('planar');
     expect(view.getTextureStyle()).toBe('planar');
 
