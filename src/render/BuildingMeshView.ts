@@ -67,36 +67,12 @@ if (uHasTexture > 0.5) {
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
 
-  if (uTextureStyle > 2.5) {
-    // Mode: "Projected (3D Tiles)"
-    // Real Google 3D photogrammetry tiles' textures projected directly onto 3D building objects!
-    // Verticals and roofs sample the real map imagery from the offscreen 3D tiles buffer.
-    vec2 screenUV = gl_FragCoord.xy / uResolution;
-    vec4 tileSample = texture2D(uTilesMap, screenUV);
-
-    if (tileSample.a > 0.08) {
-      // Authentic photogrammetric texture of this building from the 3D map
-      diffuseColor.rgb = tileSample.rgb;
-    } else if (vIsRoof > 0.5) {
-      // Rooftop: Pristine satellite aerial imagery from 3D map
-      diffuseColor.rgb = sat.rgb;
-    } else {
-      // Solid foundation plinth / edge fallback so walls are never hollow or transparent
-      float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
-      vec3 plinthColor = vec3(0.14, 0.15, 0.17);
-      #ifdef USE_INSTANCING_COLOR
-        vec3 instTone = vColor.rgb;
-      #else
-        vec3 instTone = vec3(0.68, 0.65, 0.60);
-      #endif
-      diffuseColor.rgb = mix(instTone * 0.75, plinthColor, groundPlinth);
-    }
-  } else if (vIsRoof > 0.5) {
+  if (vIsRoof > 0.5) {
     // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
     diffuseColor.rgb = sat.rgb;
   } else if (uTextureStyle > 1.5) {
-    // Mode: "Projected (2D Maps)"
-    // High-resolution 2D aerial map projection with architectural facade structure
+    // Projected Modes (both 2D maps and 3D tiles fallback):
+    // High-resolution architectural facade structure derived from aerial maps
     float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
     float wallV = vWorldPos.y;
 
@@ -205,6 +181,16 @@ if (uHasTexture > 0.5) {
 }
 `;
 
+const FRAGMENT_OPAQUE_BUILDING = `
+if (uHasTexture > 0.5 && uTextureStyle > 2.5) {
+  vec2 screenUV = gl_FragCoord.xy / uResolution;
+  vec4 tileSample = texture2D(uTilesMap, screenUV);
+  if (tileSample.a > 0.08) {
+    gl_FragColor.rgb = tileSample.rgb;
+  }
+}
+`;
+
 export class BuildingMeshView {
   readonly group = new Group();
   private buildingMesh: InstancedMesh | null = null;
@@ -269,7 +255,8 @@ export class BuildingMeshView {
         .replace('#include <project_vertex>', '#include <project_vertex>\n' + VERTEX_BODY_BUILDING);
 
       shader.fragmentShader = FRAGMENT_PARS_BUILDING + shader.fragmentShader
-        .replace('#include <color_fragment>', '#include <color_fragment>\n' + FRAGMENT_BODY_BUILDING);
+        .replace('#include <color_fragment>', '#include <color_fragment>\n' + FRAGMENT_BODY_BUILDING)
+        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n' + FRAGMENT_OPAQUE_BUILDING);
     };
   }
 

@@ -166,6 +166,7 @@ renderer.scene.add(buildingMeshView.group);
 if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
   (window as any).__terrainMesh = terrainMesh;
+  (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
 export type ViewMode = 'photoreal' | 'masked-tiles' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';

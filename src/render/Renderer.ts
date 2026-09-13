@@ -55,7 +55,6 @@ export class GameRenderer {
   private readonly ambient: AmbientLight;
   private readonly hemi: HemisphereLight;
   private tilesTarget: WebGLRenderTarget | null = null;
-  private readonly tilesCamera = new PerspectiveCamera();
   private isProjecting3dTiles = false;
   private readonly _res = new Vector2();
 
@@ -237,18 +236,30 @@ export class GameRenderer {
       // 1. Offscreen pass: render 3D tiles (layer 1) with transparent background
       const prevBg = this.scene.background;
       this.scene.background = null;
-      this.tilesCamera.copy(this.camera);
-      this.tilesCamera.layers.set(1);
+
+      // Ensure clutter filter is off during offscreen pass so building facades are never clipped
+      const clutterFilter = (window as any).__clutterFilter;
+      const prevClutterMode = clutterFilter?.mode;
+      if (clutterFilter) {
+        clutterFilter.mode = 'off';
+      }
+
+      // Use this.camera directly so aspect, FOV, and projection matrix are 100% identical
+      this.camera.layers.set(1);
 
       this.renderer.setRenderTarget(this.tilesTarget);
       this.renderer.setClearColor(0x000000, 0.0);
       this.renderer.clear();
-      this.renderer.render(this.scene, this.tilesCamera);
+      this.renderer.render(this.scene, this.camera);
       this.renderer.setRenderTarget(null);
       this.scene.background = prevBg;
 
+      if (clutterFilter && prevClutterMode !== undefined) {
+        clutterFilter.mode = prevClutterMode;
+      }
+
       // 2. Main scene camera only renders layer 0 (so tiles aren't drawn directly over the boxes)
-      this.camera.layers.disable(1);
+      this.camera.layers.set(0);
     }
     this.renderer.render(this.scene, this.camera);
   }
