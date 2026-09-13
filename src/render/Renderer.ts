@@ -102,6 +102,7 @@ export class GameRenderer {
       62, width / height, 0.5, 8000
     );
     this.camera.position.set(0, 20, 30);
+    this.camera.layers.enable(1);
 
     this.sun = new DirectionalLight(LIGHTING_COLORS.sun, 1.4);
     this.sun.position.copy(SUN_POS);
@@ -217,6 +218,8 @@ export class GameRenderer {
       } else {
         this.tilesTarget.setSize(w, h);
       }
+    } else {
+      this.camera.layers.enable(1);
     }
   }
 
@@ -260,6 +263,8 @@ export class GameRenderer {
 
       // 2. Main scene camera only renders layer 0 (so tiles aren't drawn directly over the boxes)
       this.camera.layers.set(0);
+      this.renderer.render(this.scene, this.camera);
+      return;
     }
     this.renderer.render(this.scene, this.camera);
   }

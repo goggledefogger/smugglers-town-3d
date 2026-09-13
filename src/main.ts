@@ -163,6 +163,7 @@ let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
+buildingMeshView.visible = false;
 if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
   (window as any).__terrainMesh = terrainMesh;
@@ -237,6 +238,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     g.traverse(o => o.layers.set(1));
   };
   updateClutterUi();
+  setViewMode(viewMode);
 }
 
 function updateViewModeUi(): void {
@@ -355,6 +357,7 @@ function toggleViewMode(): void {
 viewModeBtn?.addEventListener('click', () => {
   toggleViewMode();
 });
+setViewMode(viewMode);
 
 const audioBtn = document.getElementById('audio-btn') as HTMLButtonElement | null;
 const audioIcon = document.getElementById('audio-icon') as HTMLSpanElement | null;
