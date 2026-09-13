@@ -72,74 +72,29 @@ if (uHasTexture > 0.5) {
     diffuseColor.rgb = sat.rgb;
   } else if (uTextureStyle > 3.5) {
     // BEST 3D Mode:
-    // Real aerial photography mapped with perspective-correct oblique facade projection,
-    // authentic building materials from the real map, and crisp architectural fenestration.
-    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
-    float wallV = vWorldPos.y;
-
-    // Directional sun and ambient shading per facade
-    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.95 : 0.85;
-    if (vBuildingNormal.x > 0.5) faceLight = 1.0;
+    // Authentic building masonry tone with natural directional sun and ambient occlusion.
+    // The authentic 3D photogrammetry imagery (with vertical walls, windows, brick, etc.)
+    // is projected directly from uTilesMap in FRAGMENT_OPAQUE_BUILDING.
+    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
+    if (vBuildingNormal.x > 0.5) faceLight = 0.98;
     if (vBuildingNormal.y < -0.5) faceLight = 0.5;
 
     // Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
-    float eaveShadow = smoothstep(0.90, 1.0, vLocalNormY);
-    float groundPlinth = smoothstep(0.10, 0.0, vLocalNormY);
-    float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.35 * groundPlinth);
+    float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
+    float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
+    float verticalAO = (1.0 - 0.20 * eaveShadow) * (1.0 - 0.30 * groundPlinth);
 
-    // Oblique aerial projection: project real satellite imagery along facade normal with elevation offset
-    vec2 obliqueUV = satUV + vBuildingNormal.xz * (vLocalNormY * 0.0036);
-    vec4 obliqueSat = texture2D(uSatelliteMap, clamp(obliqueUV, 0.0, 1.0));
-
-    // Extract authentic real map masonry tone
-    vec3 realMapTone = mix(sat.rgb, obliqueSat.rgb, 0.65);
     #ifdef USE_INSTANCING_COLOR
-      realMapTone = mix(vColor.rgb, realMapTone, 0.60);
+      vec3 instTone = vColor.rgb;
+    #else
+      vec3 instTone = vec3(0.68, 0.65, 0.60);
     #endif
-    realMapTone = max(realMapTone, vec3(0.15, 0.16, 0.18));
 
-    // High-fidelity architectural fenestration:
-    // Floor slabs every ~3.4m
-    float storyCoord = wallV / 3.4;
-    float storyFrac = fract(storyCoord);
-    float isFloorSlab = step(storyFrac, 0.20);
-
-    // Window bays: ~2.5m spacing with structural masonry piers
-    float bayCoord = wallU / 2.5;
-    float bayFrac = fract(bayCoord);
-    float isMullion = step(bayFrac, 0.22);
-
-    // Window aperture
-    float isWindow = (1.0 - isFloorSlab) * (1.0 - isMullion);
-
-    // Subtle per-window variation
-    float windowId = sin(floor(storyCoord) * 41.17 + floor(bayCoord) * 83.91);
-    float windowVar = fract(windowId * 43758.5453);
-
-    // Reflective architectural glazing: sky gradient reflection with specular sheen
-    vec3 glassColor = vec3(0.09, 0.15, 0.24) + vec3(0.07, 0.09, 0.12) * (1.0 - storyFrac);
-    if (windowVar > 0.70) {
-      glassColor += vec3(0.07, 0.05, 0.02);
-    }
-
-    // Structural masonry piers and spandrels derived directly from the real map
-    vec3 wallMasonry = realMapTone * faceLight * verticalAO;
-    vec3 floorSlabTone = wallMasonry * 0.84;
-
-    // Ground floor commercial storefront display windows
-    float isStorefront = step(vLocalNormY, 0.12);
-    vec3 storefrontGlass = vec3(0.06, 0.09, 0.13);
-
-    // Ground foundation plinth (solid concrete/slate base anchoring into the terrain)
-    float isPlinth = step(vLocalNormY, 0.05);
-    vec3 plinthColor = vec3(0.13, 0.14, 0.16);
-
-    vec3 facade = mix(wallMasonry, floorSlabTone, isFloorSlab * 0.5);
-    facade = mix(facade, glassColor, isWindow * 0.75);
-    facade = mix(facade, storefrontGlass, isStorefront * isWindow * 0.65);
-    facade = mix(facade, plinthColor, isPlinth * 0.88);
-
-    diffuseColor.rgb = facade;
+    // Authentic building tone matching the building's color palette:
+    vec3 baseWall = instTone * faceLight * verticalAO;
+    float isPlinth = step(vLocalNormY, 0.04);
+    vec3 plinthTone = baseWall * 0.70;
+    diffuseColor.rgb = mix(baseWall, plinthTone, isPlinth);
   } else if (uTextureStyle > 1.5) {
     // Projected Modes (both 2D maps and 3D tiles fallback):
     // High-resolution architectural facade structure derived from aerial maps
@@ -252,14 +207,49 @@ if (uHasTexture > 0.5) {
 `;
 
 const FRAGMENT_OPAQUE_BUILDING = `
-if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 3.5) {
+if (uHasTexture > 0.5 && uTextureStyle > 2.5) {
   vec2 screenUV = gl_FragCoord.xy / uResolution;
   vec4 tileSample = texture2D(uTilesMap, screenUV);
-  if (tileSample.a > 0.08) {
+  if (tileSample.a > 0.04) {
     gl_FragColor.rgb = tileSample.rgb;
   }
 }
 `;
+
+/**
+ * Anchors a collider firmly into the ground across its entire footprint,
+ * ensuring physics collision boxes and visual geometry reach down below the lowest
+ * downhill terrain point (multi-point footprint sampling) so vehicles can never drive
+ * underneath buildings on steep hillsides or uneven ground.
+ */
+export function anchorCollider(
+  b: BuildingCollider,
+  sampleGround?: (x: number, z: number) => number
+): BuildingCollider {
+  if (!sampleGround) return b;
+  const cx = (b.min.x + b.max.x) / 2;
+  const cz = (b.min.z + b.max.z) / 2;
+
+  const g00 = sampleGround(b.min.x, b.min.z);
+  const g10 = sampleGround(b.max.x, b.min.z);
+  const g01 = sampleGround(b.min.x, b.max.z);
+  const g11 = sampleGround(b.max.x, b.max.z);
+  const gMidX0 = sampleGround(cx, b.min.z);
+  const gMidX1 = sampleGround(cx, b.max.z);
+  const gMidZ0 = sampleGround(b.min.x, cz);
+  const gMidZ1 = sampleGround(b.max.x, cz);
+  const gCenter = sampleGround(cx, cz);
+
+  const minGround = Math.min(g00, g10, g01, g11, gMidX0, gMidX1, gMidZ0, gMidZ1, gCenter);
+  const drop = b.kind === 'prop' ? 0.8 : 2.5;
+  const minY = Math.min(b.min.y, minGround - drop);
+  if (minY === b.min.y) return b;
+  return {
+    ...b,
+    min: new Vector3(b.min.x, minY, b.min.z),
+    max: new Vector3(b.max.x, b.max.y, b.max.z)
+  };
+}
 
 export class BuildingMeshView {
   readonly group = new Group();
@@ -420,36 +410,11 @@ export class BuildingMeshView {
       mesh.receiveShadow = true;
 
       for (let i = 0; i < count; i++) {
-        const b = colliders[i]!;
+        const raw = colliders[i]!;
+        const b = anchorCollider(raw, sampleGround);
         const cx = (b.min.x + b.max.x) / 2;
         const cz = (b.min.z + b.max.z) / 2;
-
-        let minY = b.min.y;
-        if (sampleGround) {
-          // Multi-point footprint sampling (4 corners, 4 perimeter midpoints, 1 center)
-          // to account for steep slopes across large building footprints
-          const g00 = sampleGround(b.min.x, b.min.z);
-          const g10 = sampleGround(b.max.x, b.min.z);
-          const g01 = sampleGround(b.min.x, b.max.z);
-          const g11 = sampleGround(b.max.x, b.max.z);
-          const gMidX0 = sampleGround(cx, b.min.z);
-          const gMidX1 = sampleGround(cx, b.max.z);
-          const gMidZ0 = sampleGround(b.min.x, cz);
-          const gMidZ1 = sampleGround(b.max.x, cz);
-          const gCenter = sampleGround(cx, cz);
-
-          const minGround = Math.min(g00, g10, g01, g11, gMidX0, gMidX1, gMidZ0, gMidZ1, gCenter);
-          const maxGround = Math.max(g00, g10, g01, g11, gMidX0, gMidX1, gMidZ0, gMidZ1, gCenter);
-
-          if (b.kind === 'prop') {
-            // Props (scattered rocks, obstacles) embed firmly into the local ground
-            minY = Math.min(b.min.y, minGround - 0.8);
-          } else {
-            // Ground-rooted building: firmly embed foundation at least 2.5m below the lowest
-            // downhill terrain point across the entire footprint, completely eliminating hover
-            minY = Math.min(b.min.y, minGround - 2.5);
-          }
-        }
+        const minY = b.min.y;
         const maxY = b.max.y;
 
         const sx = Math.max(0.2, b.max.x - b.min.x);

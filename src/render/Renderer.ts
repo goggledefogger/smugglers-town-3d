@@ -87,8 +87,8 @@ export class GameRenderer {
     const height = typeof window !== 'undefined' ? window.innerHeight : 800;
 
     this.renderer = new WebGLRenderer({ canvas: deps.canvas, antialias: true, powerPreference: 'high-performance' });
-    this.renderer.setSize(width, height);
     this.renderer.setPixelRatio(this.baseRatio * this.scale);
+    this.renderer.setSize(width, height);
     // sRGB output + ACES filmic so satellite textures read as real daylight
     // instead of washed-out flat Lambert
     this.renderer.outputColorSpace = SRGBColorSpace;
@@ -214,6 +214,7 @@ export class GameRenderer {
           format: RGBAFormat,
           type: UnsignedByteType,
           depthBuffer: true,
+          generateMipmaps: false,
         });
       } else {
         this.tilesTarget.setSize(w, h);
@@ -248,6 +249,9 @@ export class GameRenderer {
       }
 
       // Use this.camera directly so aspect, FOV, and projection matrix are 100% identical
+      const tiles = (window as any).__tiles;
+      const prevTilesVisible = tiles?.group?.visible ?? true;
+      if (tiles) tiles.group.visible = true;
       this.camera.layers.set(1);
 
       this.renderer.setRenderTarget(this.tilesTarget);
@@ -261,9 +265,12 @@ export class GameRenderer {
         clutterFilter.mode = prevClutterMode;
       }
 
-      // 2. Main scene camera only renders layer 0 (so tiles aren't drawn directly over the boxes)
+      // 2. Main scene camera only renders layer 0 and tiles group is EXPLICITLY HIDDEN
+      // so zero raw photogrammetry tiles can ever be drawn directly to the screen
+      if (tiles) tiles.group.visible = false;
       this.camera.layers.set(0);
       this.renderer.render(this.scene, this.camera);
+      if (tiles) tiles.group.visible = prevTilesVisible;
       return;
     }
     this.renderer.render(this.scene, this.camera);

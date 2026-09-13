@@ -15,7 +15,7 @@ import { type GameEventMap, EventBus } from './app/events.ts';
 import { createStore, type HudSnapshot } from './app/store.ts';
 import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
-import { BuildingMeshView } from './render/BuildingMeshView.ts';
+import { BuildingMeshView, anchorCollider } from './render/BuildingMeshView.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
@@ -236,6 +236,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     clutterFilter?.patch(g);
     renderer.warm(g);
     g.traverse(o => o.layers.set(1));
+    refreshColliders();
   };
   updateClutterUi();
   setViewMode(viewMode);
@@ -269,16 +270,17 @@ function setViewMode(mode: ViewMode): void {
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
+  const isProjectingTiles = isProjected3dTiles || isBest3d;
   const isProjected2dMaps = mode === 'projected-2d-maps';
-  const hasTiles = isRawPhotoreal || isMaskedTiles || isProjected3dTiles;
+  const hasTiles = isRawPhotoreal || isMaskedTiles || isProjectingTiles;
 
   if (tiles) {
     tiles.group.visible = hasTiles;
-    if (isProjected3dTiles) {
+    if (isProjectingTiles) {
       tiles.group.traverse(o => o.layers.set(1));
     }
   }
-  renderer.setProjecting3dTiles(isProjected3dTiles);
+  renderer.setProjecting3dTiles(isProjectingTiles);
 
   if (isRawPhotoreal || isMaskedTiles) {
     renderer.camera.layers.enable(1);
@@ -287,7 +289,7 @@ function setViewMode(mode: ViewMode): void {
   }
 
   if (clutterFilter) {
-    if (isMaskedTiles || isProjected3dTiles) {
+    if (isMaskedTiles || isProjectingTiles) {
       clutterFilter.mode = 'swept';
       clutterMode = 'swept';
     } else if (isRawPhotoreal) {
@@ -325,6 +327,7 @@ function setViewMode(mode: ViewMode): void {
   } else if (isBest3d) {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('best-3d');
+    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   } else if (isProjected3dTiles) {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('projected-3d');
@@ -421,26 +424,39 @@ function applyColliders(): void {
 }
 
 let colliderJob: Promise<void> | null = null;
+let colliderPending = false;
 
 /** The streaming loop's rebuild, in the tile worker; tiles that change meanwhile re-dirty for the next one. */
 function refreshColliders(): void {
-  if (!tiles || colliderJob) return;
+  if (!tiles) return;
+  if (colliderJob) {
+    colliderPending = true;
+    return;
+  }
+  colliderPending = false;
   colliderJob = tiles.collidersAsync()
     .then(applyTileColliders)
     .catch(e => log.warn('collider rebuild failed', e))
-    .finally(() => { colliderJob = null; });
+    .finally(() => {
+      colliderJob = null;
+      if (colliderPending) {
+        refreshColliders();
+      }
+    });
 }
 
 function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
-  const colliders = [...tileBoxes, ...propScatter.colliders];
+  const rawColliders = [...tileBoxes, ...propScatter.colliders];
+  const sample = (x: number, z: number) => world.terrainProvider.heightfield.sample(x, z);
+  const colliders = rawColliders.map(b => anchorCollider(b, sample));
   clutterFilter?.maskChanged();
   game.setBuildingColliders(colliders);
   buildingMeshView.update(
     colliders,
     tiles?.activeDeckGrid,
     tiles?.activeGrid,
-    (x, z) => world.terrainProvider.heightfield.sample(x, z)
+    sample
   );
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (satTex) {
@@ -737,7 +753,7 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(groundStreamer.group);
           }
           if (tiles) {
-            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles';
+            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
@@ -830,7 +846,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(groundStreamer.group);
     }
     if (tiles) {
-      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles';
+      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
@@ -1259,7 +1275,7 @@ function frame(now: number): void {
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
   }
-  if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
+  if (viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   }
   renderer.render();

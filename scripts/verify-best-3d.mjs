@@ -56,9 +56,6 @@ console.log('[best-3d] Diagnostics in Best 3D mode:', diag);
 if (diag.viewModeLabel !== 'VIEW: BEST 3D') {
   throw new Error(`Expected label "VIEW: BEST 3D", got "${diag.viewModeLabel}"`);
 }
-if (diag.tilesVisible !== false) {
-  throw new Error(`Expected tilesVisible to be false in Best 3D, got ${diag.tilesVisible}`);
-}
 if (diag.buildingMeshVisible !== true) {
   throw new Error(`Expected buildingMeshVisible to be true in Best 3D, got ${diag.buildingMeshVisible}`);
 }
@@ -120,6 +117,48 @@ await page.waitForTimeout(1500);
 const shotTransamerica = `${SCRATCH}/best3d_04_columbus_transamerica.png`;
 await page.screenshot({ path: shotTransamerica });
 console.log(`[best-3d] Saved Columbus Transamerica screenshot: ${shotTransamerica}`);
+
+// Teleport to User's EXACT screenshot location: 37.79613, -122.40241
+console.log('[best-3d] Navigating to User exact location (?lat=37.79613&lon=-122.40241&debug)...');
+await page.goto(`${BASE}/?lat=37.79613&lon=-122.40241&debug`, { waitUntil: 'load' });
+await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 60000 });
+await page.waitForFunction(() => !document.querySelector('sr-relocate')?.busy, null, { timeout: 60000 });
+await page.locator('sr-intro button.play').click();
+await page.waitForFunction(() => !!window.__game?.player, null, { timeout: 30000 });
+await page.keyboard.press('Space');
+await page.waitForFunction(() => (window.__tiles?.tiles?.length ?? 0) > 30, null, { timeout: 60000 });
+await page.waitForTimeout(4000);
+
+await page.evaluate(() => {
+  window.__setViewMode('best-3d');
+});
+await page.waitForTimeout(2000);
+
+const shotUserLoc = `${SCRATCH}/best3d_05_user_location.png`;
+await page.screenshot({ path: shotUserLoc });
+console.log(`[best-3d] Saved User exact location screenshot: ${shotUserLoc}`);
+
+// Drive forward directly into the building to test collision!
+console.log('[best-3d] Driving vehicle into building wall at user location to verify solid collision...');
+const posBefore = await page.evaluate(() => {
+  const p = window.__game?.player?.body?.pos;
+  return p ? { x: p.x, y: p.y, z: p.z } : null;
+});
+
+await page.keyboard.down('KeyW');
+await page.waitForTimeout(3000);
+await page.keyboard.up('KeyW');
+await page.waitForTimeout(500);
+
+const posAfter = await page.evaluate(() => {
+  const p = window.__game?.player?.body?.pos;
+  return p ? { x: p.x, y: p.y, z: p.z } : null;
+});
+console.log('[best-3d] Vehicle pos before drive:', posBefore, 'after driving into wall:', posAfter);
+
+const shotUserCollision = `${SCRATCH}/best3d_06_user_collision.png`;
+await page.screenshot({ path: shotUserCollision });
+console.log(`[best-3d] Saved User collision screenshot: ${shotUserCollision}`);
 
 console.log('[best-3d] All verification steps completed successfully!');
 await browser.close();

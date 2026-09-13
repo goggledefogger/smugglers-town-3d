@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Vector3, Matrix4, Quaternion, Vector2 } from 'three';
-import { BuildingMeshView } from '../src/render/BuildingMeshView.ts';
+import { BuildingMeshView, anchorCollider } from '../src/render/BuildingMeshView.ts';
 import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
 import { createDesertTerrain } from '../src/core/terrain/ProceduralTerrain.ts';
@@ -132,6 +132,30 @@ describe('BuildingMeshView', () => {
     mat.decompose(pos, quat, scale);
     const refinedBottomY = pos.y - scale.y / 2;
     expect(refinedBottomY).toBeLessThanOrEqual(23.5); // 26 - 2.5
+  });
+
+  it('anchorCollider extends building bounds 2.5m into terrain across uneven footprint', () => {
+    const box: BuildingCollider = {
+      min: new Vector3(10, 45, 10),
+      max: new Vector3(30, 80, 30),
+      kind: 'building'
+    };
+    const slopeGround = (x: number, _z: number) => 50 - (x / 40) * 20;
+    const anchored = anchorCollider(box, slopeGround);
+    // At x=30, ground is 50 - (30/40)*20 = 35. Anchored min.y should be <= 35 - 2.5 = 32.5
+    expect(anchored.min.y).toBeLessThanOrEqual(32.5);
+    expect(anchored.max.y).toBe(80);
+    expect(anchored.min.x).toBe(10);
+    expect(anchored.max.x).toBe(30);
+
+    const propBox: BuildingCollider = {
+      min: new Vector3(10, 45, 10),
+      max: new Vector3(12, 48, 12),
+      kind: 'prop'
+    };
+    const anchoredProp = anchorCollider(propBox, slopeGround);
+    // Prop drop is 0.8m
+    expect(anchoredProp.min.y).toBeLessThanOrEqual(45 - 0.8);
   });
 });
 

@@ -498,9 +498,9 @@ export class VehicleBody {
     for (const s of this.stats.collider.spheres) {
       const c = this._sphere.set(s.x, s.y, s.z).applyQuaternion(this.quat).add(this.pos);
       for (const b of buildings) {
-        // If the obstacle does not rise above the driving surface under the vehicle,
-        // it is the roadway/deck beneath the wheels, not a wall blocking travel.
-        if (b.max.y <= this.groundY + 0.5) continue;
+        // If the obstacle is completely below the driving surface under the vehicle,
+        // it is beneath the wheels, not an obstacle blocking travel.
+        if (b.max.y <= this.groundY - 0.2) continue;
         if (!sphereVsAabb(c.x, c.y, c.z, s.r, b.min, b.max, hit)) continue;
         const push = hit.push + 0.05;
         this.pos.x += hit.nx * push;

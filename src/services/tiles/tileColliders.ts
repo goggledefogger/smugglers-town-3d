@@ -1145,8 +1145,6 @@ export function collidersFromRasters(
     // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
     if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
-    // An object can only be a building if it also rises above the underlying DEM terrain.
-    // This prevents morphological opening from shaving off isolated natural buttes, hills, and knolls.
     const terr = terrainTop[c];
     if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
     if (isDeck[c] || isRamp[c]) return false;
