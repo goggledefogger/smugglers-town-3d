@@ -23,6 +23,7 @@ export interface ColliderResult {
   readonly boxes: { min: { x: number; y: number; z: number }; max: { x: number; y: number; z: number } }[];
   readonly deckGrid: Float32Array;
   readonly structureGrid: Uint8Array;
+  readonly topGrid: Float32Array;
 }
 
 const ctx = self as unknown as {
@@ -34,9 +35,10 @@ ctx.onmessage = e => {
   const { rasters, grid, terrainTop, reliefBoost, roadMask, thresholds } = e.data;
   const deckGrid = new Float32Array(grid.n * grid.n);
   const structureGrid = new Uint8Array(grid.n * grid.n);
+  const topGrid = new Float32Array(grid.n * grid.n);
   const roads: RoadGrid | null = roadMask ? { cell: grid.cell, half: grid.half, n: grid.n, mask: roadMask } : null;
   const activeThresholds = thresholds ?? DEFAULT_COLLIDER_THRESHOLDS;
-  const boxes = collidersFromRasters(rasters, grid, terrainTop, reliefBoost, deckGrid, activeThresholds, structureGrid, roads)
+  const boxes = collidersFromRasters(rasters, grid, terrainTop, reliefBoost, deckGrid, activeThresholds, structureGrid, roads, topGrid)
     .map(b => ({ min: { x: b.min.x, y: b.min.y, z: b.min.z }, max: { x: b.max.x, y: b.max.y, z: b.max.z } }));
-  ctx.postMessage({ boxes, deckGrid, structureGrid }, [deckGrid.buffer, structureGrid.buffer]);
+  ctx.postMessage({ boxes, deckGrid, structureGrid, topGrid }, [deckGrid.buffer, structureGrid.buffer, topGrid.buffer]);
 };

@@ -20,16 +20,26 @@
  *   kerbside facades keep their walls. Street trees come back with them; no
  *   2D mask tells a tree at the kerb from the wall behind it.
  *
+ * Facade snap (Best 3D) rides on the same patch: with `snap` on, a tile
+ * vertex within reach of a collider box moves onto the box's nearest outer
+ * face, so the photogrammetry wall the player sees is the wall the car hits,
+ * and the texture, being on the vertices, never slides with the camera. The
+ * cell -> box map and the box bounds are two more textures. Off structure
+ * cells only snapped facades and flattened road decals survive, so nothing
+ * tall is drawn that the car could drive through.
+ *
  * Every patched material shares the same uniform objects: switching modes is
  * a value write, and both textures wrap the buffers physics owns, so a ground
  * refinement or collider rebuild is a re-upload, never a recompile.
  */
 import {
-  DataTexture, RedFormat, FloatType, UnsignedByteType, NearestFilter, LinearFilter,
+  DataTexture, RedFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter, LinearFilter,
   ClampToEdgeWrapping, Vector2,
   type Object3D, type Mesh, type Material, type WebGLProgramParametersWithUniforms
 } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
+import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
+import type { Grid } from '../services/tiles/tileColliders.ts';
 import { injectDetailGrain } from './DetailGrain.ts';
 
 export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept';
@@ -41,6 +51,13 @@ export const CLUTTER_RISE_M = 2.5;
 /** Swept only: with no structure cell within bilinear reach, tall enough to take buses and RVs too. */
 export const CLUTTER_TALL_M = 6;
 
+/** Facade snap: a tile vertex this far outside a collider face (m) still lands on it. */
+export const SNAP_OUT_M = 4;
+/** Facade snap: street-height geometry (a car at the kerb) only snaps from this close outside (m). */
+export const SNAP_OUT_LOW_M = 4;
+/** Box bounds texture: this many boxes per row, two texels (min, max) each. */
+const BOXES_PER_ROW = 1024;
+
 const VERTEX_PARS = `
 uniform sampler2D uClutterGround;
 uniform sampler2D uClutterMask;
@@ -48,11 +65,102 @@ uniform float uClutterMode;
 uniform vec2 uClutterField;
 uniform float uClutterRise;
 uniform float uClutterTall;
+uniform float uSnap;
+uniform float uSnapIn;
+uniform float uSnapTop;
+uniform sampler2D uSnapIds;
+uniform sampler2D uSnapBoxes;
 varying vec3 vClutterWorldPos;
 varying float vClutterRiseVal;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
+varying float vSnapped;
+flat varying float vSnapFace;
+varying float vSnapFaceS;
+
+// nearest snappable outer face of one box for point p: returns |distance| (1e9 = none)
+float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3 axis, out float plane, out int face) {
+  // signed distance to each face plane, positive = outside the box
+  float dW = bmin.x - p.x, dE = p.x - bmax.x;
+  float dS = bmin.z - p.z, dN = p.z - bmax.z;
+  float dT = p.y - bmax.y;
+  bool inX = p.x > bmin.x - tolOut && p.x < bmax.x + tolOut;
+  bool inZ = p.z > bmin.z - tolOut && p.z < bmax.z + tolOut;
+  bool inY = p.y > bmin.y && p.y < bmax.y + 1.0;
+  float best = 1e9;
+  axis = vec3(0.0); plane = 0.0; face = 0;
+  if (inZ && inY && dW > -tolIn && dW < tolOut && abs(dW) < best) { best = abs(dW); axis = vec3(-1.0, 0.0, 0.0); plane = bmin.x; face = 1; }
+  if (inZ && inY && dE > -tolIn && dE < tolOut && abs(dE) < best) { best = abs(dE); axis = vec3(1.0, 0.0, 0.0); plane = bmax.x; face = 2; }
+  if (inX && inY && dS > -tolIn && dS < tolOut && abs(dS) < best) { best = abs(dS); axis = vec3(0.0, 0.0, -1.0); plane = bmin.z; face = 3; }
+  if (inX && inY && dN > -tolIn && dN < tolOut && abs(dN) < best) { best = abs(dN); axis = vec3(0.0, 0.0, 1.0); plane = bmax.z; face = 4; }
+  if (uSnapTop > 0.5 && inX && inZ && dT > -tolIn && dT < ${SNAP_OUT_M}.0 && abs(dT) < best) { best = abs(dT); axis = vec3(0.0, 1.0, 0.0); plane = bmax.y; face = 5; }
+  return best;
+}
+`;
+
+/**
+ * Facade snap (Best 3D): the vertex's cell and its eight neighbours name
+ * candidate collider boxes (a wall can stand in the cell of the low plaza box
+ * next to it); the vertex moves onto the nearest outer face among them when
+ * it is within reach: one grid cell (uSnapIn) inside, since the box is the
+ * cell-quantized hull and the real wall sits anywhere up to a cell inside its
+ * face, and up to a cell outside for tall geometry, since the road corridor
+ * carves a wall's own cell off its box. Street-height vertices (kerb cars)
+ * only snap from SNAP_OUT_LOW_M outside. The photogrammetry texture rides
+ * along on the vertex, so the wall the car hits is the wall the player sees,
+ * and nothing slides as the camera moves. Geometry that started nearest the
+ * face lands a hair further out, so the real facade wins the depth test over
+ * anything deeper that snapped with it. Snapped vertices skip flattening.
+ */
+const VERTEX_SNAP = `
+vec3 cSnapDelta = vec3(0.0);
+vSnapped = 0.0;
+vSnapFace = -1.0;
+vSnapFaceS = -1.0;
+if (uSnap > 0.5) {
+  vec2 suv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
+  ivec2 sn = textureSize(uSnapIds, 0);
+  ivec2 sc0 = min(ivec2(suv * vec2(sn)), sn - 1);
+  // the road corridor carves a wall's own cell off its box, and the box's 1 m inset adds to
+  // that: tall geometry reaches a cell and a half; kerb-height geometry (parked cars) does not
+  float tolOut = vClutterRiseVal < uClutterRise ? ${SNAP_OUT_LOW_M}.0 : uSnapIn * 1.5;
+  float best = 1e9;
+  vec3 axis = vec3(0.0), bmin = vec3(0.0), bmax = vec3(0.0);
+  float plane = 0.0;
+  int bestId = -1, bestFace = 0;
+  for (int oy = -1; oy <= 1; oy++) {
+    for (int ox = -1; ox <= 1; ox++) {
+      ivec2 sci = clamp(sc0 + ivec2(ox, oy), ivec2(0), sn - 1);
+      int sid = int(texelFetch(uSnapIds, sci, 0).r) - 1;
+      if (sid < 0 || sid == bestId) continue;
+      ivec2 bxy = ivec2((sid - (sid / ${BOXES_PER_ROW}) * ${BOXES_PER_ROW}) * 2, sid / ${BOXES_PER_ROW});
+      vec3 cmin = texelFetch(uSnapBoxes, bxy, 0).xyz;
+      vec3 cmax = texelFetch(uSnapBoxes, bxy + ivec2(1, 0), 0).xyz;
+      vec3 cAxis; float cPlane; int cFace;
+      float d = snapFace(cwp, cmin, cmax, tolOut, uSnapIn, cAxis, cPlane, cFace);
+      // ponytail: the road carve leaves single-cell pillars along the kerb; a wall must not tear
+      // between a pillar 2 m away and its own box 12 m back, so a pillar only wins with nothing else near
+      if (min(cmax.x - cmin.x, cmax.z - cmin.z) < 6.0) d += uSnapIn;
+      if (d < best) { best = d; axis = cAxis; plane = cPlane; bmin = cmin; bmax = cmax; bestId = sid; bestFace = cFace; }
+    }
+  }
+  if (bestId >= 0) {
+    float lift = 0.02 + 0.03 * max(0.0, 1.0 - best / uSnapIn);
+    vec3 a = abs(axis);
+    vec3 target = cwp * (1.0 - a) + a * plane + axis * lift;
+    // nothing past the face's own edges: a vertex beyond the corner folds onto it
+    target.xz = clamp(target.xz, bmin.xz - lift, bmax.xz + lift);
+    cSnapDelta = target - cwp;
+    vSnapped = 1.0;
+    // the key is the plane, not the box: neighbouring boxes share flush faces, and a
+    // facade running along them is one wall
+    vSnapFace = float(bestFace) * 65536.0 + floor(plane * 4.0);
+    vSnapFaceS = vSnapFace;
+    cClutterDy = 0.0;
+    vClutterFlat = 0.0;
+  }
+}
 `;
 
 /**
@@ -99,7 +207,7 @@ if (cClutterDy != 0.0) vNormal = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0
 `;
 
 const VERTEX_PROJECT = `
-mvPosition.xyz += (viewMatrix * vec4(0.0, cClutterDy, 0.0, 0.0)).xyz;
+mvPosition.xyz += (viewMatrix * vec4(cSnapDelta.x, cClutterDy + cSnapDelta.y, cSnapDelta.z, 0.0)).xyz;
 gl_Position = projectionMatrix * mvPosition;
 `;
 
@@ -108,11 +216,15 @@ uniform sampler2D uClutterMask;
 uniform vec2 uClutterField;
 uniform float uClutterMode;
 uniform float uClutterRise;
+uniform float uSnap;
 varying vec3 vClutterWorldPos;
 varying float vClutterRiseVal;
 varying float vClutterStructure;
 varying float vClutterFlat;
 varying float vClutterOpenFlat;
+varying float vSnapped;
+flat varying float vSnapFace;
+varying float vSnapFaceS;
 `;
 
 /**
@@ -127,6 +239,15 @@ if (uClutterMode > 2.5) {
 } else if (uClutterMode > 1.5) {
   if (vClutterFlat > 0.999) discard;
 }
+// snap: a triangle with only some vertices snapped, or with vertices on different faces
+// (a trolley wire strung between two buildings), is a shard stretched across the street,
+// so it goes; outside structure cells only snapped facades and flattened road decals
+// survive, so nothing tall is drawn that the car could drive through
+if (uSnap > 0.5) {
+  if (vSnapped > 0.001 && vSnapped < 0.999) discard;
+  if (vSnapped > 0.999 && abs(vSnapFaceS - vSnapFace) > 0.5) discard;
+  if (vSnapped < 0.999 && vClutterStructure < 0.5 && vClutterFlat < 0.999) discard;
+}
 `;
 
 type Patchable = Material & { _clutterPatched?: boolean };
@@ -134,6 +255,14 @@ type Patchable = Material & { _clutterPatched?: boolean };
 function groundTexture(hf: Heightfield): DataTexture {
   const n = hf.segs + 1;
   const tex = new DataTexture(hf.raw, n, n, RedFormat, FloatType);
+  tex.minFilter = tex.magFilter = NearestFilter;
+  tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+function idTexture(ids: Float32Array, n: number): DataTexture {
+  const tex = new DataTexture(ids, n, n, RedFormat, FloatType);
   tex.minFilter = tex.magFilter = NearestFilter;
   tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
   tex.needsUpdate = true;
@@ -149,6 +278,50 @@ function maskTexture(cells: Uint8Array, n: number): DataTexture {
   return tex;
 }
 
+/**
+ * Cell -> collider index + 1 (0 = none), the box's footprint cells plus a
+ * one-cell ring so a facade standing in the inset gap outside the box still
+ * finds it. Footprint cells win over a neighbour's ring.
+ */
+export function snapIdGrid(boxes: readonly BuildingCollider[], grid: Grid): Float32Array {
+  const { n, cell, half } = grid;
+  const ids = new Float32Array(n * n);
+  const clampI = (v: number) => Math.min(n - 1, Math.max(0, v));
+  const fill = (ring: number, overwrite: boolean) => {
+    for (let k = 0; k < boxes.length; k++) {
+      const b = boxes[k]!;
+      const i0 = clampI(Math.floor((b.min.x + half) / cell) - ring);
+      const i1 = clampI(Math.floor((b.max.x - 1e-3 + half) / cell) + ring);
+      const j0 = clampI(Math.floor((b.min.z + half) / cell) - ring);
+      const j1 = clampI(Math.floor((b.max.z - 1e-3 + half) / cell) + ring);
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const c = j * n + i;
+          if (overwrite || ids[c] === 0) ids[c] = k + 1;
+        }
+      }
+    }
+  };
+  fill(0, true);
+  fill(1, false);
+  return ids;
+}
+
+function snapBoxTexture(boxes: readonly BuildingCollider[]): DataTexture {
+  const rows = Math.max(1, Math.ceil(boxes.length / BOXES_PER_ROW));
+  const data = new Float32Array(BOXES_PER_ROW * 2 * rows * 4);
+  for (let k = 0; k < boxes.length; k++) {
+    const b = boxes[k]!;
+    const o = ((k % BOXES_PER_ROW) * 2 + Math.floor(k / BOXES_PER_ROW) * BOXES_PER_ROW * 2) * 4;
+    data[o] = b.min.x; data[o + 1] = b.min.y; data[o + 2] = b.min.z;
+    data[o + 4] = b.max.x; data[o + 5] = b.max.y; data[o + 6] = b.max.z;
+  }
+  const tex = new DataTexture(data, BOXES_PER_ROW * 2, rows, RGBAFormat, FloatType);
+  tex.minFilter = tex.magFilter = NearestFilter;
+  tex.needsUpdate = true;
+  return tex;
+}
+
 export class TileClutterFilter {
   private readonly uMode = { value: 0 };
   private readonly uGround: { value: DataTexture };
@@ -156,6 +329,11 @@ export class TileClutterFilter {
   private readonly uField: { value: Vector2 };
   private readonly uRise: { value: number };
   private readonly uTall = { value: CLUTTER_TALL_M / CLUTTER_RISE_M };
+  private readonly uSnap = { value: 0 };
+  private readonly uSnapIn = { value: 10 };
+  private readonly uSnapTop = { value: 1 };
+  private readonly uSnapIds: { value: DataTexture };
+  private readonly uSnapBoxes: { value: DataTexture };
 
   /**
    * @param ground the physics heightfield; its buffer is wrapped, call groundChanged() after copyFrom
@@ -169,6 +347,39 @@ export class TileClutterFilter {
     this.uMask = { value: maskTexture(structure, n) };
     this.uField = { value: new Vector2(ground.size, ground.segs) };
     this.uRise = { value: CLUTTER_RISE_M * riseScale };
+    this.uSnapIds = { value: idTexture(new Float32Array(1), 1) };
+    this.uSnapBoxes = { value: snapBoxTexture([]) };
+  }
+
+  /** Snap tile facades onto the collider boxes (Best 3D); off leaves the tiles where they are. */
+  get snap(): boolean {
+    return this.uSnap.value > 0.5;
+  }
+
+  set snap(on: boolean) {
+    this.uSnap.value = on ? 1 : 0;
+  }
+
+  /**
+   * Also pull roof geometry up onto the box top. Off when the boxes are drawn
+   * at their per-cell roof heights: a merged box's top can be 80 m above a low
+   * building's real roof, and a roof lifted there would float over the columns.
+   */
+  get snapRoofs(): boolean {
+    return this.uSnapTop.value > 0.5;
+  }
+
+  set snapRoofs(on: boolean) {
+    this.uSnapTop.value = on ? 1 : 0;
+  }
+
+  /** The colliders were rebuilt: refresh the cell -> box map and box bounds the snap reads. */
+  setSnapBoxes(boxes: readonly BuildingCollider[], grid: Grid): void {
+    this.uSnapIn.value = grid.cell;
+    this.uSnapIds.value.dispose();
+    this.uSnapIds.value = idTexture(snapIdGrid(boxes, grid), grid.n);
+    this.uSnapBoxes.value.dispose();
+    this.uSnapBoxes.value = snapBoxTexture(boxes);
   }
 
   get mode(): ClutterMode {
@@ -234,9 +445,14 @@ export class TileClutterFilter {
     shader.uniforms.uClutterField = this.uField;
     shader.uniforms.uClutterRise = this.uRise;
     shader.uniforms.uClutterTall = this.uTall;
+    shader.uniforms.uSnap = this.uSnap;
+    shader.uniforms.uSnapIn = this.uSnapIn;
+    shader.uniforms.uSnapTop = this.uSnapTop;
+    shader.uniforms.uSnapIds = this.uSnapIds;
+    shader.uniforms.uSnapBoxes = this.uSnapBoxes;
     const lit = shader.vertexShader.includes('#include <normal_pars_vertex>');
     shader.vertexShader = VERTEX_PARS + shader.vertexShader
-      .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERTEX_BODY + (lit ? VERTEX_NORMAL : ''))
+      .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERTEX_BODY + VERTEX_SNAP + (lit ? VERTEX_NORMAL : ''))
       .replace('#include <project_vertex>', '#include <project_vertex>' + VERTEX_PROJECT);
     shader.fragmentShader = FRAGMENT_PARS + shader.fragmentShader
       .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + FRAGMENT_CUT);
@@ -245,5 +461,7 @@ export class TileClutterFilter {
   dispose(): void {
     this.uGround.value.dispose();
     this.uMask.value.dispose();
+    this.uSnapIds.value.dispose();
+    this.uSnapBoxes.value.dispose();
   }
 }

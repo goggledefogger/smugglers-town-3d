@@ -746,7 +746,9 @@ export function collidersFromRasters(
   /** n*n, receives 1 where the cell is a building, deck or ramp (what a render filter must leave alone). */
   outStructureGrid?: Uint8Array,
   /** OSM road-centreline mask on the same grid; road cells are exempt from building classification. */
-  roadMask?: RoadGrid | null
+  roadMask?: RoadGrid | null,
+  /** n*n, receives the photogrammetry top of every building cell (NO_DATA elsewhere): per-cell roof heights for rendering. */
+  outTopGrid?: Float32Array
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1159,6 +1161,11 @@ export function collidersFromRasters(
   if (outStructureGrid) {
     for (let c = 0; c < n * n; c++) {
       outStructureGrid[c] = isBuilding(c) || isDeck[c] || isRamp[c] ? 1 : 0;
+    }
+  }
+  if (outTopGrid) {
+    for (let c = 0; c < n * n; c++) {
+      outTopGrid[c] = isBuilding(c) ? top[c]! : NO_DATA;
     }
   }
 

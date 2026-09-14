@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { Heightfield } from '../src/core/heightfield.ts';
-import { TileClutterFilter, CLUTTER_RISE_M } from '../src/render/TileClutterFilter.ts';
+import { TileClutterFilter, CLUTTER_RISE_M, snapIdGrid } from '../src/render/TileClutterFilter.ts';
+import { Vector3 } from 'three';
+const hfSnap = () => new Heightfield(80, 4, new Float32Array(25).fill(0));
 import { collidersFromRasters } from '../src/services/tiles/tileColliders.ts';
 import { Bindings, HOTKEY_ACTIONS } from '../src/input/bindings.ts';
 
@@ -134,5 +136,45 @@ describe('clutterMode hotkey', () => {
     const table = new Bindings().table('keyboard');
     expect(table.clutterMode.some(b => b.kind === 'key' && b.code === 'KeyF')).toBe(true);
     expect(new Bindings().table('gamepad').clutterMode).toEqual([]);
+  });
+});
+
+describe('facade snap (Best 3D)', () => {
+  const N = 8;
+  const grid = { cell: 10, half: 40, n: N };
+  const box = (x0: number, z0: number, x1: number, z1: number) =>
+    ({ min: new Vector3(x0, 0, z0), max: new Vector3(x1, 20, z1) });
+
+  it('maps footprint cells to the box and a one-cell ring around it', () => {
+    // inset box inside cells i=2..3, j=2 (x -19..-1, z -19..-11)
+    const ids = snapIdGrid([box(-19, -19, -1, -11)], grid);
+    expect(ids[2 * N + 2]).toBe(1);
+    expect(ids[2 * N + 3]).toBe(1);
+    expect(ids[1 * N + 2]).toBe(1); // ring south
+    expect(ids[3 * N + 4]).toBe(1); // ring corner
+    expect(ids[5 * N + 5]).toBe(0);
+    expect(ids[0]).toBe(0);
+  });
+
+  it('a footprint cell beats a neighbour box ring', () => {
+    const ids = snapIdGrid([box(-19, -19, -1, -11), box(1, -19, 19, -11)], grid);
+    expect(ids[2 * N + 3]).toBe(1);
+    expect(ids[2 * N + 4]).toBe(2);
+  });
+
+  it('injects the snap uniforms and vertex patch, off until enabled', () => {
+    const f = new TileClutterFilter(hfSnap(), new Uint8Array(N * N), N);
+    const mat = patchOne(f);
+    const s = litShader();
+    mat.onBeforeCompile(s, {});
+    expect(s.uniforms.uSnap!.value).toBe(0);
+    expect(s.uniforms.uSnapIds).toBeDefined();
+    expect(s.uniforms.uSnapBoxes).toBeDefined();
+    expect(s.vertexShader).toContain('vSnapped = 1.0');
+    expect(s.fragmentShader).toContain('vSnapped < 0.999');
+    f.snap = true;
+    expect(s.uniforms.uSnap!.value).toBe(1);
+    f.setSnapBoxes([box(-19, -19, -1, -11)], grid);
+    expect((s.uniforms.uSnapIds!.value as { image: { width: number } }).image.width).toBe(N);
   });
 });

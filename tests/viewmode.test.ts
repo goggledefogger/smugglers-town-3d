@@ -227,3 +227,31 @@ describe('TileClutterFilter modes for Real 3D vs Masked 3D Tiles', () => {
   });
 });
 
+describe('BuildingMeshView per-cell columns (Best 3D+)', () => {
+  it('splits each box into cell columns at the photogrammetry roof height, clamped to the box', () => {
+    const view = new BuildingMeshView();
+    const grid: Grid = { n: 4, cell: 10, half: 20 };
+    // one box over cells i=1..2, j=1 (inset 1 m), 40 m tall from a merged run
+    const box: BuildingCollider = { min: new Vector3(-9, 0, -9), max: new Vector3(9, 40, -1) };
+    const top = new Float32Array(16).fill(NO_DATA);
+    top[1 * 4 + 1] = 12; // low building in the west cell
+    top[1 * 4 + 2] = 55; // taller than the box: clamped to 40
+    view.update([box], undefined, grid, undefined, top);
+    const cols = (view as any).columnMesh;
+    expect(cols.count).toBe(2);
+    const m = new Matrix4(), p = new Vector3(), s = new Vector3(), q = new Quaternion();
+    cols.getMatrixAt(0, m); m.decompose(p, q, s);
+    expect(s.y).toBe(12);
+    expect(s.x).toBe(9); // -9..0: the box's inset face, not the cell edge
+    cols.getMatrixAt(1, m); m.decompose(p, q, s);
+    expect(s.y).toBe(40);
+    // boxes and columns trade visibility with the toggle
+    expect((view as any).buildingMesh.visible).toBe(true);
+    expect(cols.visible).toBe(false);
+    view.columns = true;
+    expect((view as any).buildingMesh.visible).toBe(false);
+    expect(cols.visible).toBe(true);
+    view.clear();
+  });
+});
+

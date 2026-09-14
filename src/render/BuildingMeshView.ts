@@ -60,6 +60,7 @@ varying float vLocalNormY;
 `;
 
 const FRAGMENT_BODY_BUILDING = `
+vec3 bestFill = vec3(-1.0);
 if (uHasTexture > 0.5) {
   vec2 satUV = vec2(
     vWorldPos.x / uMapSize + 0.5,
@@ -70,32 +71,8 @@ if (uHasTexture > 0.5) {
   if (vIsRoof > 0.5) {
     // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
     diffuseColor.rgb = sat.rgb;
-  } else if (uTextureStyle > 3.5) {
-    // BEST 3D Mode:
-    // Authentic building masonry tone with natural directional sun and ambient occlusion.
-    // The authentic 3D photogrammetry imagery (with vertical walls, windows, brick, etc.)
-    // is projected directly from uTilesMap in FRAGMENT_OPAQUE_BUILDING.
-    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
-    if (vBuildingNormal.x > 0.5) faceLight = 0.98;
-    if (vBuildingNormal.y < -0.5) faceLight = 0.5;
-
-    // Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
-    float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
-    float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
-    float verticalAO = (1.0 - 0.20 * eaveShadow) * (1.0 - 0.30 * groundPlinth);
-
-    #ifdef USE_INSTANCING_COLOR
-      vec3 instTone = vColor.rgb;
-    #else
-      vec3 instTone = vec3(0.68, 0.65, 0.60);
-    #endif
-
-    // Authentic building tone matching the building's color palette:
-    vec3 baseWall = instTone * faceLight * verticalAO;
-    float isPlinth = step(vLocalNormY, 0.04);
-    vec3 plinthTone = baseWall * 0.70;
-    diffuseColor.rgb = mix(baseWall, plinthTone, isPlinth);
-  } else if (uTextureStyle > 1.5) {
+    if (uTextureStyle > 3.5) bestFill = sat.rgb;
+  } else if (uTextureStyle > 1.5 && uTextureStyle < 3.5) {
     // Projected Modes (both 2D maps and 3D tiles fallback):
     // High-resolution architectural facade structure derived from aerial maps
     float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
@@ -185,8 +162,16 @@ if (uHasTexture > 0.5) {
 
     vec3 baseWall = wallTone * faceLight * verticalAO;
 
-    if (uTextureStyle < 0.5) {
-      // Planar mode: Authentic satellite texture draped with natural ambient occlusion
+    if (uTextureStyle > 3.5) {
+      // Best 3D fill behind the snapped tile facades: unlit like the tiles and the ground
+      // around it (the photo light rig turned a lit wall near black), warm concrete tinted
+      // by the satellite roof colour, with the same face shading and eave/plinth occlusion
+      // linear values: 0.2 lands near mid grey once tone mapped and encoded, about the
+      // brightness of a photographed concrete wall
+      bestFill = mix(vec3(0.21, 0.20, 0.19), sat.rgb, 0.35) * faceLight * verticalAO;
+      diffuseColor.rgb = bestFill;
+    } else if (uTextureStyle < 0.5) {
+      // Planar mode: satellite-toned solid wall with natural ambient occlusion
       diffuseColor.rgb = baseWall;
     } else {
       // Hybrid mode: Real satellite imagery modulated with subtle architectural floor relief
@@ -207,7 +192,10 @@ if (uHasTexture > 0.5) {
 `;
 
 const FRAGMENT_OPAQUE_BUILDING = `
-if (uHasTexture > 0.5 && uTextureStyle > 2.5) {
+if (bestFill.r >= 0.0) {
+  gl_FragColor.rgb = bestFill;
+}
+if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 3.5) {
   vec2 screenUV = gl_FragCoord.xy / uResolution;
   vec4 tileSample = texture2D(uTilesMap, screenUV);
   if (tileSample.a > 0.04) {
@@ -370,17 +358,15 @@ export class BuildingMeshView {
   }
 
   private lastColliders: readonly BuildingCollider[] = [];
-  private lastDeckGrid?: Float32Array;
-  private lastGrid?: Grid;
-  private lastSampleGround?: (x: number, z: number) => number;
+  private lastDeckGrid: Float32Array | undefined;
+  private lastGrid: Grid | undefined;
 
   /**
    * Refresh building heights when the terrain heightfield refines in the background.
    */
   refreshHeights(sampleGround: (x: number, z: number) => number): void {
-    this.lastSampleGround = sampleGround;
     if (this.lastColliders.length > 0) {
-      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround);
+      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround, this.lastTopGrid);
     }
   }
 
@@ -393,14 +379,16 @@ export class BuildingMeshView {
     colliders: readonly BuildingCollider[],
     deckGrid?: Float32Array,
     grid?: Grid,
-    sampleGround?: (x: number, z: number) => number
+    sampleGround?: (x: number, z: number) => number,
+    topGrid?: Float32Array
   ): void {
     this.lastColliders = colliders;
     this.lastDeckGrid = deckGrid;
     this.lastGrid = grid;
-    this.lastSampleGround = sampleGround;
+    this.lastTopGrid = topGrid;
 
     this.dispose();
+    if (topGrid && grid) this.buildColumns(colliders, topGrid, grid, sampleGround);
 
     // 1. Build building boxes
     const count = colliders.length;
@@ -442,6 +430,7 @@ export class BuildingMeshView {
       }
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+      mesh.visible = !this._columns;
       this.buildingMesh = mesh;
       this.group.add(mesh);
     }
@@ -479,6 +468,74 @@ export class BuildingMeshView {
     }
   }
 
+  /**
+   * Best 3D+: the same collider volumes cut into one column per grid cell,
+   * each only as tall as the photogrammetry in that cell. A box merged along
+   * a row of cells rises to its tallest member everywhere; the columns give
+   * the low buildings in the run their real roofline while every outer face
+   * stays exactly where the collider's is, so the snapped facades still land.
+   */
+  private buildColumns(
+    colliders: readonly BuildingCollider[],
+    topGrid: Float32Array,
+    grid: Grid,
+    sampleGround?: (x: number, z: number) => number
+  ): void {
+    const { n, cell, half } = grid;
+    const cellIndex = (v: number) => Math.min(n - 1, Math.max(0, Math.floor((v + half) / cell)));
+    const anchored = colliders.map(b => anchorCollider(b, sampleGround));
+    let count = 0;
+    for (const b of anchored) {
+      count += (cellIndex(b.max.x - 1e-3) - cellIndex(b.min.x) + 1) * (cellIndex(b.max.z - 1e-3) - cellIndex(b.min.z) + 1);
+    }
+    if (count === 0) return;
+    const mesh = new InstancedMesh(this.boxGeo, this.buildingMat, count);
+    mesh.castShadow = false;
+    mesh.receiveShadow = true;
+    let k = 0;
+    for (const b of anchored) {
+      const i0 = cellIndex(b.min.x), i1 = cellIndex(b.max.x - 1e-3);
+      const j0 = cellIndex(b.min.z), j1 = cellIndex(b.max.z - 1e-3);
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const x0 = Math.max(b.min.x, -half + i * cell), x1 = Math.min(b.max.x, -half + (i + 1) * cell);
+          const z0 = Math.max(b.min.z, -half + j * cell), z1 = Math.min(b.max.z, -half + (j + 1) * cell);
+          const t = topGrid[j * n + i]!;
+          // a cell with no photogrammetry top of its own (a prop, a carved edge) keeps the box height
+          const top = t !== NO_DATA && t > b.min.y + 0.5 && t <= b.max.y ? t : b.max.y;
+          const sy = Math.max(0.5, top - b.min.y);
+          _pos.set((x0 + x1) / 2, b.min.y + sy / 2, (z0 + z1) / 2);
+          _scale.set(Math.max(0.2, x1 - x0), sy, Math.max(0.2, z1 - z0));
+          _mat.compose(_pos, _quat, _scale);
+          mesh.setMatrixAt(k, _mat);
+          _color.setHex(sy > 40 ? BUILDING_COLORS.tall : sy > 18 ? BUILDING_COLORS.mid : b.kind === 'prop' ? BUILDING_COLORS.propRock : BUILDING_COLORS.low);
+          mesh.setColorAt(k, _color);
+          k++;
+        }
+      }
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.visible = this._columns;
+    this.columnMesh = mesh;
+    this.group.add(mesh);
+  }
+
+  private _columns = false;
+  private columnMesh: InstancedMesh | null = null;
+  private lastTopGrid: Float32Array | undefined;
+
+  /** Draw the colliders as per-cell roof-height columns (Best 3D+) instead of whole boxes. */
+  get columns(): boolean {
+    return this._columns;
+  }
+
+  set columns(on: boolean) {
+    this._columns = on;
+    if (this.buildingMesh) this.buildingMesh.visible = !on;
+    if (this.columnMesh) this.columnMesh.visible = on;
+  }
+
   clear(): void {
     this.dispose();
   }
@@ -488,6 +545,11 @@ export class BuildingMeshView {
       this.group.remove(this.buildingMesh);
       this.buildingMesh.dispose();
       this.buildingMesh = null;
+    }
+    if (this.columnMesh) {
+      this.group.remove(this.columnMesh);
+      this.columnMesh.dispose();
+      this.columnMesh = null;
     }
     if (this.deckMesh) {
       this.group.remove(this.deckMesh);

@@ -406,6 +406,7 @@ export class TileStreamer {
     this.placement = glbPlacement(origin, ecef0, terrain.reliefBoost);
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
     this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
+    this.topGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
     this.structureGrid = new Uint8Array(this.grid.n * this.grid.n);
   }
 
@@ -542,9 +543,15 @@ export class TileStreamer {
   }
 
   private deckGrid: Float32Array;
+  /** Photogrammetry top of every building cell (NO_DATA elsewhere): the per-cell roof heights Best 3D+ draws. */
+  private topGrid: Float32Array;
 
   get activeDeckGrid(): Float32Array {
     return this.deckGrid;
+  }
+
+  get activeTopGrid(): Float32Array {
+    return this.topGrid;
   }
 
   get activeGrid(): Grid {
@@ -570,6 +577,7 @@ export class TileStreamer {
       this.grid = { cell: targetCell, half, n };
       this.terrainTop = sampleTerrain(this.grid, this.terrain.heightfield);
       this.deckGrid = new Float32Array(n * n).fill(NO_DATA);
+      this.topGrid = new Float32Array(n * n).fill(NO_DATA);
       this.structureGrid = new Uint8Array(n * n);
       for (const t of this.tiles) {
         t.raster = rasterizeTile(t.group, this.grid);
@@ -810,7 +818,8 @@ export class TileStreamer {
       this.deckGrid,
       th,
       this.structureGrid,
-      this.roadGrid
+      this.roadGrid,
+      this.topGrid
     );
   }
 
@@ -830,6 +839,7 @@ export class TileStreamer {
       worker.onmessage = (e: MessageEvent<ColliderResult>) => {
         this.deckGrid.set(e.data.deckGrid);
         this.structureGrid.set(e.data.structureGrid);
+        this.topGrid.set(e.data.topGrid);
         resolve(e.data.boxes.map(b => ({
           min: new Vector3(b.min.x, b.min.y, b.min.z),
           max: new Vector3(b.max.x, b.max.y, b.max.z)
