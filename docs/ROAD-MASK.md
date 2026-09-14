@@ -19,20 +19,23 @@ cars off walls. The pipeline does not care how the grid was made.
 `MapsApi.roadsUrl` asks Static Maps for a roadmap with every feature hidden
 except road fills, drawn white on black with per-class stroke weights
 (highway 6 px, arterial 4 px, local 3 px; about 23 / 15 / 11 m at zoom 15
-downtown). `fetchRoadRaster` stitches the same 3×3 grid of 640 px tiles the
-satellite ground uses and thresholds it to a 1-bit raster;
-`rasterizeRoadRaster` samples that raster at each cell centre with a small
-dilation (`roadReachSlackMultiplier` cells).
+downtown). `fetchRoadRasters` stitches two 3×3 grids of 640 px tiles like the
+satellite ground does: zoom 15 for the whole 5.6 km field, and zoom 16 for
+the inner 3.6 km, because Google only draws alleys and service roads at 16
+and closer. Each is thresholded to a 1-bit raster; `rasterizeRoadRaster`
+samples the rasters at each cell centre with a small dilation
+(`roadReachSlackMultiplier` cells), and a cell is road if either layer says so.
 
 - Same API key, same tile pipeline and browser cache as the imagery, Google
   uptime. No new dependency.
 - Road widths are cartographic, not surveyed. Fine for carving corridors;
   not a source of lane counts or one-way direction.
-- Costs Static Maps requests like the satellite fetch does (9 per relocate).
+- Costs Static Maps requests like the satellite fetch does (18 per relocate,
+  browser-cached).
 - Knobs: the style weights in `roadsUrl`, the slack in
   `DEFAULT_COLLIDER_THRESHOLDS`.
 
-### 2. OpenStreetMap ways via Overpass (fallback)
+### 2. OpenStreetMap ways via Overpass (second layer)
 
 `fetchRoadPolylines` queries the Overpass API for drivable `highway` ways in
 the field's bounding box, filters out footways and stairs (`isDrivableWay`),
@@ -44,12 +47,16 @@ per place in the tile cache; failures retry with backoff up to two minutes.
 - Overpass is a free, community-run query service that runs every query on
   demand. The public mirrors go down for hours at a time, sometimes all of
   them at once (2026-09-13 to 14 both default mirrors were out for a whole
-  evening). Five mirrors run by different operators are listed in
+  evening). Four mirrors run by different operators are listed in
   `OVERPASS_ENDPOINTS`; more exist, see the OSM wiki page "Overpass API".
+  Beware regional mirrors (overpass.osm.ch covers Switzerland only and answers
+  any other bbox with zero ways, which reads as "no roads here").
 - Rate limits and a required User-Agent on some mirrors.
 
-Used only when the Google raster fails (no key, canvas unavailable, Static
-Maps error).
+Layered on top of the Google raster whenever it answers: the mask is the
+union of both, because Google omits some alleys and pedestrian passages that
+OSM maps (Financial District alleys, for one). If the Google raster fails
+(no key, canvas unavailable, Static Maps error), OSM is the only layer.
 
 ### 3. OSM vector tiles from a CDN (not implemented)
 
@@ -76,11 +83,12 @@ fetch per place and a client never talks to Overpass directly.
 
 ## Switching or adding a source
 
-`TileStreamer.loadRoads` tries the sources in order and keeps the first
-`RoadGrid`. A new source needs a fetch that returns either polylines (then
-`rasterizeRoads`) or a raster (then `rasterizeRoadRaster`), and a re-rasterize
-branch in `setExperimentMode` for when the grid cell size changes. Everything
-downstream reads `roadGrid.mask` only.
+`TileStreamer.loadRoads` fetches the sources in order and
+`publishRoadGrid` unions whatever has landed into one `RoadGrid`, announcing
+it to the collider pass each time a layer arrives. A new source needs a fetch
+that returns either polylines (then `rasterizeRoads`) or a raster (then
+`rasterizeRoadRaster`) and a line in `publishRoadGrid`. Everything downstream
+reads `roadGrid.mask` only.
 
 To compare sources on the same spot, `scripts/best3d-boxes-probe.mjs` reports
 how many structure cells sit on road cells, and `scripts/best3d-shots.mjs`

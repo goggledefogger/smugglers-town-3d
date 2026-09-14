@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Vector3, Matrix4, Quaternion, Vector2 } from 'three';
+import { Vector3, Matrix4, Quaternion } from 'three';
 import { BuildingMeshView, anchorCollider } from '../src/render/BuildingMeshView.ts';
 import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
@@ -60,38 +60,18 @@ describe('BuildingMeshView', () => {
     expect(view.group.children.length).toBe(0);
   });
 
-  it('supports switching between arcade and textured modes and styles', () => {
+  it('supports switching between arcade and textured modes', () => {
     const view = new BuildingMeshView();
     expect(view.getMode()).toBe('arcade');
-    expect(view.getTextureStyle()).toBe('planar');
 
     view.setMode('textured');
     expect(view.getMode()).toBe('textured');
-
-    view.setTextureStyle('hybrid');
-    expect(view.getTextureStyle()).toBe('hybrid');
-
-    view.setTextureStyle('projected-2d');
-    expect(view.getTextureStyle()).toBe('projected-2d');
-
-    view.setTextureStyle('projected-3d');
-    expect(view.getTextureStyle()).toBe('projected-3d');
-
-    view.setTextureStyle('projected');
-    expect(view.getTextureStyle()).toBe('projected');
-
-    view.setTextureStyle('best-3d');
-    expect(view.getTextureStyle()).toBe('best-3d');
-
-    view.setTextureStyle('planar');
-    expect(view.getTextureStyle()).toBe('planar');
 
     view.setMode('arcade');
     expect(view.getMode()).toBe('arcade');
 
     // Setting texture and mapSize works safely without error
     view.setTexture(null, 5600);
-    view.setTilesTexture(null, new Vector2(1920, 1080));
   });
 
   it('firmly anchors building foundations into steep hillside slopes across entire footprint', () => {
@@ -171,7 +151,7 @@ describe('ViewMode input bindings', () => {
 });
 
 describe('TerrainMesh visual modes', () => {
-  it('switches between photoreal, game3d, and textured modes seamlessly', () => {
+  it('switches between photoreal, game3d, and Best 3D modes seamlessly', () => {
     const tm = new TerrainMesh();
     const hf = new Heightfield(100, 4, new Float32Array(5 * 5));
     const terrain = createDesertTerrain(hf);
@@ -183,20 +163,14 @@ describe('TerrainMesh visual modes', () => {
     tm.setMode('game3d');
     expect(mesh.material).not.toBe(initialMat);
 
-    // Textured and masked modes use the photoreal terrain surface for satellite ground
-    tm.setMode('game3d-textured');
+    // Best 3D and masked modes use the photoreal terrain surface for satellite ground
+    tm.setMode('best-3d');
+    expect(mesh.material).toBe(initialMat);
+
+    tm.setMode('best-3d-plus');
     expect(mesh.material).toBe(initialMat);
 
     tm.setMode('masked-tiles');
-    expect(mesh.material).toBe(initialMat);
-
-    tm.setMode('projected-3d');
-    expect(mesh.material).toBe(initialMat);
-
-    tm.setMode('game3d-planar');
-    expect(mesh.material).toBe(initialMat);
-
-    tm.setMode('game3d-hybrid');
     expect(mesh.material).toBe(initialMat);
 
     tm.setMode('photoreal');

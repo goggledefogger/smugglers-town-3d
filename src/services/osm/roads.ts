@@ -91,11 +91,12 @@ export interface RoadMaskInput {
 
 // Overpass is the fallback behind the Google road raster (docs/ROAD-MASK.md); public
 // mirrors go down for hours at a time, so ask several run by different operators
+// (overpass.osm.ch is Switzerland only: it answers any bbox with zero ways, which ended
+// the search early, so it is not listed)
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
   'https://overpass.kumi.systems/api/interpreter',
   'https://overpass.private.coffee/api/interpreter',
-  'https://overpass.osm.ch/api/interpreter',
   'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
 ] as const;
 // Kumi rate-limits requests without one (429); a meaningful UA is standard
@@ -110,7 +111,7 @@ const USER_AGENT = 'smugglers-town-3d/0.1 (game map pipeline; github.com/goggled
  */
 export async function fetchRoadPolylines(
   input: RoadMaskInput,
-  timeoutMs = 40000
+  timeoutMs = 60000
 ): Promise<{ east: number; north: number; widthM: number }[][] | null> {
   const { lat, lon, halfM } = input;
   const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(halfM)}`;
@@ -131,7 +132,8 @@ export async function fetchRoadPolylines(
   const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|cycleway|pedestrian|path|track)"](${bbox});out geom tags;`;
 
   let data: OverpassResponse | null = null;
-  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 10000);
+  // a downtown bbox takes a mirror 10-20 s on a good day
+  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 20000);
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (typeof navigator === 'undefined') {
     headers['User-Agent'] = USER_AGENT;
@@ -235,7 +237,7 @@ export interface RoadGrid {
  * path adds it to each way's tagged half-width the same way.
  */
 export function rasterizeRoadRaster(
-  raster: RoadRaster,
+  rasters: RoadRaster | readonly RoadRaster[],
   grid: { cell: number; half: number; n: number },
   origin: { lat: number; lon: number },
   reachSlackMultiplier = 0.5
@@ -243,27 +245,32 @@ export function rasterizeRoadRaster(
   const { cell, half, n } = grid;
   const mask = new Uint8Array(n * n);
   const cosLat = Math.max(0.2, Math.cos((origin.lat * Math.PI) / 180));
-  const metersPerPx = (2 * Math.PI * EARTH_RADIUS_M * cosLat) / (256 * Math.pow(2, raster.zoom)) / raster.scale;
-  const r = Math.max(1, Math.ceil((reachSlackMultiplier * cell) / metersPerPx));
-  for (let j = 0; j < n; j++) {
-    const cz = -half + (j + 0.5) * cell;
-    for (let i = 0; i < n; i++) {
-      const cx = -half + (i + 0.5) * cell;
-      const { lat, lon } = worldToLl(cx, cz, origin as GeoOrigin);
-      const wp = latLonToWorldPixel(lat, lon, raster.zoom);
-      const px = Math.round((wp.x - raster.left) * raster.scale);
-      const py = Math.round((wp.y - raster.top) * raster.scale);
-      let hit = 0;
-      for (let dy = -r; dy <= r && !hit; dy++) {
-        const y = py + dy;
-        if (y < 0 || y >= raster.h) continue;
-        for (let dx = -r; dx <= r; dx++) {
-          const x = px + dx;
-          if (x < 0 || x >= raster.w) continue;
-          if (raster.pixels[y * raster.w + x]) { hit = 1; break; }
+  const layers = Array.isArray(rasters) ? rasters as readonly RoadRaster[] : [rasters as RoadRaster];
+  for (const raster of layers) {
+    const metersPerPx = (2 * Math.PI * EARTH_RADIUS_M * cosLat) / (256 * Math.pow(2, raster.zoom)) / raster.scale;
+    const r = Math.max(1, Math.ceil((reachSlackMultiplier * cell) / metersPerPx));
+    for (let j = 0; j < n; j++) {
+      const cz = -half + (j + 0.5) * cell;
+      for (let i = 0; i < n; i++) {
+        if (mask[j * n + i]) continue;
+        const cx = -half + (i + 0.5) * cell;
+        const { lat, lon } = worldToLl(cx, cz, origin as GeoOrigin);
+        const wp = latLonToWorldPixel(lat, lon, raster.zoom);
+        const px = Math.round((wp.x - raster.left) * raster.scale);
+        const py = Math.round((wp.y - raster.top) * raster.scale);
+        if (px < -r || px >= raster.w + r || py < -r || py >= raster.h + r) continue;
+        let hit = 0;
+        for (let dy = -r; dy <= r && !hit; dy++) {
+          const y = py + dy;
+          if (y < 0 || y >= raster.h) continue;
+          for (let dx = -r; dx <= r; dx++) {
+            const x = px + dx;
+            if (x < 0 || x >= raster.w) continue;
+            if (raster.pixels[y * raster.w + x]) { hit = 1; break; }
+          }
         }
+        mask[j * n + i] = hit;
       }
-      mask[j * n + i] = hit;
     }
   }
   return { cell, half, n, mask };

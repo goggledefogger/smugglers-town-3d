@@ -57,7 +57,7 @@ const landed = await page.evaluate(([fx, fz]) => {
     for (let dj = -1; dj <= 1 && clear; dj++) for (let di = -1; di <= 1; di++) if (st[(j + dj) * n + i + di]) { clear = false; break; }
     if (!clear) continue;
     const cx = (i + 0.5) * cell - half, cz = (j + 0.5) * cell - half;
-    const d = Math.hypot(cx, cz);
+    const d = Math.hypot(cx - fx, cz - fz);
     if (d < bestD) { bestD = d; best = [cx, cz]; }
   }
   const [tx, tz] = best ?? [fx, fz];

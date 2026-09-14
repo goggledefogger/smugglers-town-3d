@@ -4,10 +4,9 @@
  * scene by the view modules.
  */
 import {
-  WebGLRenderer, Scene, PerspectiveCamera, Fog, Vector3, Vector2,
+  WebGLRenderer, Scene, PerspectiveCamera, Fog, Vector3,
   DirectionalLight, AmbientLight, HemisphereLight,
-  SRGBColorSpace, ACESFilmicToneMapping, WebGLRenderTarget,
-  RGBAFormat, UnsignedByteType, LinearFilter,
+  SRGBColorSpace, ACESFilmicToneMapping,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { makeSkyTexture, SKY_HORIZON, SKY_MID_LIGHT } from './skyTexture.ts';
@@ -54,9 +53,6 @@ export class GameRenderer {
   private readonly sun: DirectionalLight;
   private readonly ambient: AmbientLight;
   private readonly hemi: HemisphereLight;
-  private tilesTarget: WebGLRenderTarget | null = null;
-  private isProjecting3dTiles = false;
-  private readonly _res = new Vector2();
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -148,9 +144,6 @@ export class GameRenderer {
     this.camera.updateProjectionMatrix();
     this.renderer.setPixelRatio(this.baseRatio * this.scale);
     this.renderer.setSize(width, height);
-    if (this.tilesTarget) {
-      this.tilesTarget.setSize(Math.round(width * this.pixelRatio), Math.round(height * this.pixelRatio));
-    }
     this.deps.onResize?.(width, height);
   }
 
@@ -186,11 +179,6 @@ export class GameRenderer {
     this.scale = Math.max(this.minScale, this.tiers[tier]!);
     this.lastAdjustMs = nowMs;
     this.renderer.setPixelRatio(this.baseRatio * this.scale);
-    if (this.tilesTarget) {
-      const w = this.renderer.domElement.width || 1280;
-      const h = this.renderer.domElement.height || 720;
-      this.tilesTarget.setSize(w, h);
-    }
     log.debug('render scale', {
       tier,
       pixelRatio: Number((this.baseRatio * this.scale).toFixed(3)),
@@ -202,77 +190,7 @@ export class GameRenderer {
     return this.baseRatio * this.scale;
   }
 
-  setProjecting3dTiles(enabled: boolean): void {
-    this.isProjecting3dTiles = enabled;
-    if (enabled) {
-      const w = Math.round(this.renderer.domElement.width || 1280);
-      const h = Math.round(this.renderer.domElement.height || 720);
-      if (!this.tilesTarget) {
-        this.tilesTarget = new WebGLRenderTarget(w, h, {
-          minFilter: LinearFilter,
-          magFilter: LinearFilter,
-          format: RGBAFormat,
-          type: UnsignedByteType,
-          depthBuffer: true,
-          generateMipmaps: false,
-        });
-      } else {
-        this.tilesTarget.setSize(w, h);
-      }
-    } else {
-      this.camera.layers.enable(1);
-    }
-  }
-
-  getTilesTexture(): Texture | null {
-    return this.tilesTarget?.texture ?? null;
-  }
-
-  getResolution(out?: Vector2): Vector2 {
-    const res = out ?? this._res;
-    const w = this.renderer.domElement.width || 1280;
-    const h = this.renderer.domElement.height || 720;
-    return res.set(w, h);
-  }
-
   render(): void {
-    if (this.isProjecting3dTiles && this.tilesTarget) {
-      // 1. Offscreen pass: render 3D tiles (layer 1) with transparent background
-      const prevBg = this.scene.background;
-      this.scene.background = null;
-
-      // Ensure clutter filter is off during offscreen pass so building facades are never clipped
-      const clutterFilter = (window as any).__clutterFilter;
-      const prevClutterMode = clutterFilter?.mode;
-      if (clutterFilter) {
-        clutterFilter.mode = 'off';
-      }
-
-      // Use this.camera directly so aspect, FOV, and projection matrix are 100% identical
-      const tiles = (window as any).__tiles;
-      const prevTilesVisible = tiles?.group?.visible ?? true;
-      if (tiles) tiles.group.visible = true;
-      this.camera.layers.set(1);
-
-      this.renderer.setRenderTarget(this.tilesTarget);
-      this.renderer.setClearColor(0x000000, 0.0);
-      this.renderer.clear();
-      this.renderer.render(this.scene, this.camera);
-      this.renderer.setRenderTarget(null);
-      this.scene.background = prevBg;
-
-      if (clutterFilter && prevClutterMode !== undefined) {
-        clutterFilter.mode = prevClutterMode;
-      }
-
-      // 2. Main scene camera only renders layer 0 and tiles group is EXPLICITLY HIDDEN
-      // so zero raw photogrammetry tiles can ever be drawn directly to the screen
-      if (tiles) tiles.group.visible = false;
-      this.camera.layers.set(0);
-      this.renderer.render(this.scene, this.camera);
-      if (tiles) tiles.group.visible = prevTilesVisible;
-      return;
-    }
     this.renderer.render(this.scene, this.camera);
   }
 
@@ -322,7 +240,6 @@ export class GameRenderer {
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.handleResize);
     }
-    this.tilesTarget?.dispose();
     this.renderer.dispose();
   }
 }

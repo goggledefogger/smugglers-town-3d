@@ -6,7 +6,7 @@
  * zero drive-through-wall mismatch.
  */
 import {
-  Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3, Vector2,
+  Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3,
   Quaternion, Color, LineSegments, DataTexture, RGBAFormat, UnsignedByteType,
   type Texture, type WebGLProgramParametersWithUniforms
 } from 'three';
@@ -16,7 +16,6 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -48,17 +47,21 @@ vLocalNormY = position.y + 0.5;
 
 const FRAGMENT_PARS_BUILDING = `
 uniform sampler2D uSatelliteMap;
-uniform sampler2D uTilesMap;
-uniform vec2 uResolution;
 uniform float uMapSize;
 uniform float uHasTexture;
-uniform float uTextureStyle;
 varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
 `;
 
+/**
+ * Textured (Best 3D) look: the roof is the satellite image, the walls are an
+ * unlit satellite-toned concrete with face shading and eave/plinth occlusion.
+ * The walls are only the fill behind the snapped tile facades; the tiles
+ * themselves carry the real imagery. Unlit like the tiles and the ground
+ * around it: the photo light rig turned a lit wall near black.
+ */
 const FRAGMENT_BODY_BUILDING = `
 vec3 bestFill = vec3(-1.0);
 if (uHasTexture > 0.5) {
@@ -67,140 +70,25 @@ if (uHasTexture > 0.5) {
     0.5 - vWorldPos.z / uMapSize
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
-
   if (vIsRoof > 0.5) {
-    // Rooftop: Pristine satellite aerial imagery with authentic rooftop textures
-    diffuseColor.rgb = sat.rgb;
-    if (uTextureStyle > 3.5) bestFill = sat.rgb;
-  } else if (uTextureStyle > 1.5 && uTextureStyle < 3.5) {
-    // Projected Modes (both 2D maps and 3D tiles fallback):
-    // High-resolution architectural facade structure derived from aerial maps
-    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
-    float wallV = vWorldPos.y;
-
-    // Directional sun and ambient shading per facade
-    float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
-    if (vBuildingNormal.y < -0.5) faceLight = 0.5;
-
-    // Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
-    float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
-    float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
-    float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.32 * groundPlinth);
-
-    // Oblique aerial projection: project satellite imagery along facade normal with elevation offset
-    vec2 obliqueUV = satUV + vBuildingNormal.xz * (vLocalNormY * 0.0035);
-    vec4 obliqueSat = texture2D(uSatelliteMap, clamp(obliqueUV, 0.0, 1.0));
-
-    // Authentic building tone from the real 3D map
-    vec3 realMapTone = max(mix(sat.rgb, obliqueSat.rgb, 0.45), vec3(0.18, 0.19, 0.22));
-
-    // Multi-story architectural facade structure
-    // Standard commercial/residential story is ~3.5m high
-    float storyCoord = wallV / 3.5;
-    float storyFrac = fract(storyCoord);
-    float isFloorSlab = step(storyFrac, 0.20);
-
-    // Window bays: 2.6m spacing with 0.65m structural masonry piers
-    float bayCoord = wallU / 2.6;
-    float bayFrac = fract(bayCoord);
-    float isMullion = step(bayFrac, 0.25);
-
-    // Window aperture (pane between floor slabs and between mullions)
-    float isWindow = (1.0 - isFloorSlab) * (1.0 - isMullion);
-
-    // Subtle per-window interior light variation
-    float windowId = sin(floor(storyCoord) * 37.17 + floor(bayCoord) * 73.91);
-    float windowVar = fract(windowId * 43758.5453);
-
-    // Architectural reflective glass: sky gradient reflection with specular sheen
-    vec3 glassReflection = vec3(0.12, 0.18, 0.26) + vec3(0.06, 0.08, 0.10) * (1.0 - storyFrac);
-    if (windowVar > 0.70) {
-      // Warm interior ambient light in select windows
-      glassReflection += vec3(0.08, 0.06, 0.03);
-    }
-
-    // Structural masonry piers and spandrels derived directly from real 3D map
-    vec3 wallMasonry = realMapTone * faceLight * verticalAO;
-    vec3 floorSlabTone = wallMasonry * 0.82;
-
-    // Ground floor commercial storefront display windows
-    float isStorefront = step(vLocalNormY, 0.12);
-    vec3 storefrontGlass = vec3(0.08, 0.12, 0.16);
-
-    // Ground foundation plinth (solid concrete/slate base anchoring into the terrain)
-    float isPlinth = step(vLocalNormY, 0.05);
-    vec3 plinthColor = vec3(0.14, 0.15, 0.17);
-
-    vec3 facade = mix(wallMasonry, floorSlabTone, isFloorSlab * 0.5);
-    facade = mix(facade, glassReflection, isWindow * 0.75);
-    facade = mix(facade, storefrontGlass, isStorefront * isWindow * 0.6);
-    facade = mix(facade, plinthColor, isPlinth * 0.85);
-
-    diffuseColor.rgb = facade;
+    bestFill = sat.rgb;
   } else {
-    // Wall facades: Grounded directly in real aerial imagery of the building
-    // 1. Directional sun and ambient shading per facade
     float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
     if (vBuildingNormal.y < -0.5) faceLight = 0.5;
-
-    // 2. Vertical ambient occlusion: soft eave shadow under roof, contact plinth at ground
     float eaveShadow = smoothstep(0.92, 1.0, vLocalNormY);
     float groundPlinth = smoothstep(0.08, 0.0, vLocalNormY);
     float verticalAO = (1.0 - 0.22 * eaveShadow) * (1.0 - 0.32 * groundPlinth);
-
-    // Instance masonry tone (warm sandstone/limestone/stucco/terracotta from building color palette)
-    #ifdef USE_INSTANCING_COLOR
-      vec3 instTone = vColor.rgb;
-    #else
-      vec3 instTone = vec3(0.68, 0.65, 0.60);
-    #endif
-
-    // Blend genuine satellite imagery with warm, vibrant building masonry tone
-    // so walls are NEVER a hollow black void, but a rich, warm, color-mapped facade
-    vec3 wallTone = mix(instTone, sat.rgb, 0.5);
-    wallTone = max(wallTone, instTone * 0.7);
-
-    vec3 baseWall = wallTone * faceLight * verticalAO;
-
-    if (uTextureStyle > 3.5) {
-      // Best 3D fill behind the snapped tile facades: unlit like the tiles and the ground
-      // around it (the photo light rig turned a lit wall near black), warm concrete tinted
-      // by the satellite roof colour, with the same face shading and eave/plinth occlusion
-      // linear values: 0.2 lands near mid grey once tone mapped and encoded, about the
-      // brightness of a photographed concrete wall
-      bestFill = mix(vec3(0.21, 0.20, 0.19), sat.rgb, 0.35) * faceLight * verticalAO;
-      diffuseColor.rgb = bestFill;
-    } else if (uTextureStyle < 0.5) {
-      // Planar mode: satellite-toned solid wall with natural ambient occlusion
-      diffuseColor.rgb = baseWall;
-    } else {
-      // Hybrid mode: Real satellite imagery modulated with subtle architectural floor relief
-      // Architectural story height ~3.5m
-      float storyFrac = fract(vWorldPos.y / 3.5);
-      float isFloorBand = step(storyFrac, 0.18);
-
-      // Subtle horizontal facade frieze derived from building's own tone
-      vec3 floorBandColor = baseWall * 0.86;
-      vec3 facadeColor = mix(baseWall, floorBandColor, isFloorBand * 0.35);
-
-      // Solid concrete/slate foundation plinth contact at terrain
-      vec3 plinthTone = mix(facadeColor, instTone * 0.45, groundPlinth * 0.55);
-      diffuseColor.rgb = plinthTone;
-    }
+    // linear values: 0.2 lands near mid grey once tone mapped and encoded, about the
+    // brightness of a photographed concrete wall
+    bestFill = mix(vec3(0.21, 0.20, 0.19), sat.rgb, 0.35) * faceLight * verticalAO;
   }
+  diffuseColor.rgb = bestFill;
 }
 `;
 
 const FRAGMENT_OPAQUE_BUILDING = `
 if (bestFill.r >= 0.0) {
   gl_FragColor.rgb = bestFill;
-}
-if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 3.5) {
-  vec2 screenUV = gl_FragCoord.xy / uResolution;
-  vec4 tileSample = texture2D(uTilesMap, screenUV);
-  if (tileSample.a > 0.04) {
-    gl_FragColor.rgb = tileSample.rgb;
-  }
 }
 `;
 
@@ -248,12 +136,9 @@ export class BuildingMeshView {
 
   // Material uniforms for texture projection
   private readonly uHasTexture = { value: 0.0 };
-  private readonly uTextureStyle = { value: 0.0 }; // 0 = planar, 1 = hybrid, 2 = projected-2d, 3 = projected-3d
   private readonly uMapSize = { value: 5600.0 };
-  private readonly uResolution = { value: new Vector2(1280, 720) };
   private readonly dummyTex: DataTexture;
   private readonly uSatelliteMap: { value: Texture };
-  private readonly uTilesMap: { value: Texture };
 
   // Modern arcade architectural materials
   private readonly buildingMat: MeshStandardMaterial;
@@ -264,7 +149,6 @@ export class BuildingMeshView {
     this.dummyTex = new DataTexture(new Uint8Array([100, 110, 120, 255]), 1, 1, RGBAFormat, UnsignedByteType);
     this.dummyTex.needsUpdate = true;
     this.uSatelliteMap = { value: this.dummyTex };
-    this.uTilesMap = { value: this.dummyTex };
 
     this.buildingMat = new MeshStandardMaterial({
       color: 0xffffff,
@@ -293,10 +177,7 @@ export class BuildingMeshView {
     mat.customProgramCacheKey = () => cacheKey;
     mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
       shader.uniforms.uHasTexture = this.uHasTexture;
-      shader.uniforms.uTextureStyle = this.uTextureStyle;
       shader.uniforms.uSatelliteMap = this.uSatelliteMap;
-      shader.uniforms.uTilesMap = this.uTilesMap;
-      shader.uniforms.uResolution = this.uResolution;
       shader.uniforms.uMapSize = this.uMapSize;
 
       shader.vertexShader = VERTEX_PARS_BUILDING + shader.vertexShader
@@ -316,37 +197,9 @@ export class BuildingMeshView {
     return this.uHasTexture.value > 0.5 ? 'textured' : 'arcade';
   }
 
-  private _style: BuildingTextureStyle = 'planar';
-
-  setTextureStyle(style: BuildingTextureStyle): void {
-    this._style = style;
-    if (style === 'best-3d') {
-      this.uTextureStyle.value = 4.0;
-    } else if (style === 'projected-3d') {
-      this.uTextureStyle.value = 3.0;
-    } else if (style === 'projected-2d' || style === 'projected') {
-      this.uTextureStyle.value = 2.0;
-    } else if (style === 'hybrid') {
-      this.uTextureStyle.value = 1.0;
-    } else {
-      this.uTextureStyle.value = 0.0;
-    }
-  }
-
-  getTextureStyle(): BuildingTextureStyle {
-    return this._style;
-  }
-
   setTexture(tex: Texture | null, mapSize: number): void {
     this.uSatelliteMap.value = tex ?? this.dummyTex;
     this.uMapSize.value = mapSize;
-  }
-
-  setTilesTexture(tex: Texture | null, resolution?: Vector2): void {
-    this.uTilesMap.value = tex ?? this.dummyTex;
-    if (resolution) {
-      this.uResolution.value.copy(resolution);
-    }
   }
 
   get visible(): boolean {

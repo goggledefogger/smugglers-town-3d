@@ -184,7 +184,7 @@ export class TerrainMesh {
   private readonly _uCover = { value: new DataTexture(new Uint8Array(1), 1, 1, RedFormat, UnsignedByteType) };
   private readonly _uCoverCell = { value: 0 };
   private readonly _uCoverN = { value: 1 };
-  private _mode: 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d' | 'game3d-textured' | 'game3d-planar' | 'game3d-hybrid' = 'photoreal';
+  private _mode: 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'game3d' = 'photoreal';
   private _sourceCanvas: HTMLCanvasElement | null = null;
   private _workingCanvas: HTMLCanvasElement | null = null;
   private _lastNeutralizedGeneration = -1;
@@ -225,7 +225,7 @@ export class TerrainMesh {
     return this._gridTexture;
   }
 
-  setMode(mode: 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d' | 'game3d-textured' | 'game3d-planar' | 'game3d-hybrid'): void {
+  setMode(mode: 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'game3d'): void {
     this._mode = mode;
     const isArcadeGrid = mode === 'game3d';
     if (this._mesh) {

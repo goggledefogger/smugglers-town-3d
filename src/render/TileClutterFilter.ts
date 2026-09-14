@@ -51,8 +51,6 @@ export const CLUTTER_RISE_M = 2.5;
 /** Swept only: with no structure cell within bilinear reach, tall enough to take buses and RVs too. */
 export const CLUTTER_TALL_M = 6;
 
-/** Facade snap: roof geometry this far above a box top (m) still lands on it. */
-export const SNAP_OUT_M = 4;
 /** Facade snap: catch zone in front of a wall face, in grid cells; the walls are lenient on purpose. */
 export const SNAP_REACH_OUT_CELLS = 2.5;
 /** Facade snap: catch zone behind a wall face (inside the box), in grid cells. */
@@ -71,7 +69,6 @@ uniform float uClutterRise;
 uniform float uClutterTall;
 uniform float uSnap;
 uniform float uSnapIn;
-uniform float uSnapTop;
 uniform sampler2D uSnapIds;
 uniform sampler2D uSnapBoxes;
 varying vec3 vClutterWorldPos;
@@ -83,12 +80,13 @@ varying float vSnapped;
 flat varying float vSnapFace;
 varying float vSnapFaceS;
 
-// nearest snappable outer face of one box for point p: returns |distance| (1e9 = none)
+// nearest snappable wall face of one box for point p: returns |distance| (1e9 = none).
+// Roofs are never snapped: a merged box top can sit far above a real roof, and lifting the
+// roof up to it hung sheets of photogrammetry in the sky; the box top shows satellite instead
 float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3 axis, out float plane, out int face) {
   // signed distance to each face plane, positive = outside the box
   float dW = bmin.x - p.x, dE = p.x - bmax.x;
   float dS = bmin.z - p.z, dN = p.z - bmax.z;
-  float dT = p.y - bmax.y;
   bool inX = p.x > bmin.x - tolOut && p.x < bmax.x + tolOut;
   bool inZ = p.z > bmin.z - tolOut && p.z < bmax.z + tolOut;
   bool inY = p.y > bmin.y && p.y < bmax.y + 1.0;
@@ -98,9 +96,6 @@ float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3
   if (inZ && inY && dE > -tolIn && dE < tolOut && abs(dE) < best) { best = abs(dE); axis = vec3(1.0, 0.0, 0.0); plane = bmax.x; face = 2; }
   if (inX && inY && dS > -tolIn && dS < tolOut && abs(dS) < best) { best = abs(dS); axis = vec3(0.0, 0.0, -1.0); plane = bmin.z; face = 3; }
   if (inX && inY && dN > -tolIn && dN < tolOut && abs(dN) < best) { best = abs(dN); axis = vec3(0.0, 0.0, 1.0); plane = bmax.z; face = 4; }
-  // roofs keep a short reach: a merged box top can sit far above a real roof, and lifting
-  // that roof up to it would hang a sheet of photogrammetry in the sky
-  if (uSnapTop > 0.5 && inX && inZ && dT > -${SNAP_OUT_M}.0 && dT < ${SNAP_OUT_M}.0 && abs(dT) < best) { best = abs(dT); axis = vec3(0.0, 1.0, 0.0); plane = bmax.y; face = 5; }
   return best;
 }
 `;
@@ -108,7 +103,7 @@ float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3
 /**
  * Facade snap (Best 3D): the vertex's cell and its eight neighbours name
  * candidate collider boxes (a wall can stand in the cell of the low plaza box
- * next to it); the vertex moves onto the nearest outer face among them when
+ * next to it); the vertex moves onto the nearest wall face among them when
  * it is within the catch zone: SNAP_REACH_IN_CELLS inside, since the box is
  * the cell-quantized hull and the real wall sits anywhere inside its face,
  * and SNAP_REACH_OUT_CELLS outside, since the road corridor carves a wall's
@@ -163,7 +158,7 @@ if (uSnap > 0.5 && !(vClutterRiseVal < uClutterRise && texelFetch(uSnapIds, min(
     cSnapDelta = target - cwp;
     vSnapped = 1.0;
     // the key is the plane, not the box: neighbouring boxes share flush faces, and a
-    // facade running along them is one wall; same axis, planes a step apart, still one wall
+    // facade running along them is one wall
     vSnapFace = float(bestFace) * 100000.0 + floor(plane * 4.0);
     vSnapFaceS = vSnapFace;
     cClutterDy = 0.0;
@@ -254,14 +249,14 @@ if (uClutterMode > 2.5) {
 } else if (uClutterMode > 1.5) {
   if (vClutterFlat > 0.999) discard;
 }
-// snap: a triangle with only some vertices snapped, or with vertices on planes more than
-// 15 m apart (a trolley wire strung between two buildings), is a shard stretched across
-// the street, so it goes; one bridging two steps of a stair of boxes behind a diagonal
-// facade stays. Outside structure cells only snapped facades and flattened road decals
-// survive, so nothing tall is drawn that the car could drive through
+// snap: a triangle with only some vertices snapped, or with vertices on different planes,
+// is a shard stretched between walls (a trolley wire between two buildings; a plaza
+// triangle whose corners landed on two steps of a box stair hung a sheet across the
+// street), so it goes. Outside structure cells only snapped facades and flattened road
+// decals survive, so nothing tall is drawn that the car could drive through
 if (uSnap > 0.5) {
   if (vSnapped > 0.001 && vSnapped < 0.999) discard;
-  if (vSnapped > 0.999 && abs(vSnapFaceS - vSnapFace) > 60.0) discard;
+  if (vSnapped > 0.999 && abs(vSnapFaceS - vSnapFace) > 0.5) discard;
   if (vSnapped < 0.999 && vClutterStructure < 0.5 && vClutterFlat < 0.999) discard;
 }
 `;
@@ -358,7 +353,6 @@ export class TileClutterFilter {
   private readonly uTall = { value: CLUTTER_TALL_M / CLUTTER_RISE_M };
   private readonly uSnap = { value: 0 };
   private readonly uSnapIn = { value: 10 };
-  private readonly uSnapTop = { value: 1 };
   private readonly uSnapDebug = { value: 0 };
 
   /** Diagnostic: tint snapped tile fragments green so they can be told from the box fill. */
@@ -395,19 +389,6 @@ export class TileClutterFilter {
 
   set snap(on: boolean) {
     this.uSnap.value = on ? 1 : 0;
-  }
-
-  /**
-   * Also pull roof geometry up onto the box top. Off when the boxes are drawn
-   * at their per-cell roof heights: a merged box's top can be 80 m above a low
-   * building's real roof, and a roof lifted there would float over the columns.
-   */
-  get snapRoofs(): boolean {
-    return this.uSnapTop.value > 0.5;
-  }
-
-  set snapRoofs(on: boolean) {
-    this.uSnapTop.value = on ? 1 : 0;
   }
 
   /**
@@ -487,7 +468,6 @@ export class TileClutterFilter {
     shader.uniforms.uClutterTall = this.uTall;
     shader.uniforms.uSnap = this.uSnap;
     shader.uniforms.uSnapIn = this.uSnapIn;
-    shader.uniforms.uSnapTop = this.uSnapTop;
     shader.uniforms.uSnapDebug = this.uSnapDebug;
     shader.uniforms.uSnapIds = this.uSnapIds;
     shader.uniforms.uSnapBoxes = this.uSnapBoxes;

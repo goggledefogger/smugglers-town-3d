@@ -211,9 +211,10 @@ export async function fetchStaticGrid(
   lon: number,
   scale: number,
   urlFor: (tileLat: number, tileLon: number) => string,
-  what = 'Static Maps'
+  what = 'Static Maps',
+  zoom = 15
 ): Promise<StaticGrid> {
-  const TILE = 640, GRID = 3, zoom = 15;
+  const TILE = 640, GRID = 3;
   const tilePx = TILE * scale;
   const centerPix = latLonToWorldPixel(lat, lon, zoom);
 
@@ -267,14 +268,34 @@ export interface RoadRaster {
   readonly top: number;
 }
 
-export async function fetchRoadRaster(lat: number, lon: number, apiKey: string): Promise<RoadRaster> {
-  if (typeof document === 'undefined') throw new Error('road raster needs a browser canvas');
-  const g = await fetchStaticGrid(lat, lon, 1, (la, lo) => roadsUrl(la, lo, apiKey, 15, 640, 640, 1), 'Roads');
+async function fetchRoadRaster(lat: number, lon: number, apiKey: string, zoom: number): Promise<RoadRaster> {
+  const g = await fetchStaticGrid(lat, lon, 1, (la, lo) => roadsUrl(la, lo, apiKey, zoom, 640, 640, 1), 'Roads', zoom);
   const { width: w, height: h } = g.canvas;
   const data = g.canvas.getContext('2d')!.getImageData(0, 0, w, h).data;
   const pixels = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) pixels[i] = data[i * 4]! > 128 ? 1 : 0;
+  // every tile carries the Google logo bottom-left and the attribution text bottom-right,
+  // white on our black style, which would threshold into a few false road cells
+  const TILE = 640;
+  for (let ty = TILE - 1; ty < h; ty += TILE) {
+    for (let y = ty - 30; y <= ty; y++) {
+      for (let tx = 0; tx < w; tx += TILE) {
+        pixels.fill(0, y * w + tx, y * w + tx + 90);
+        pixels.fill(0, y * w + tx + TILE - 170, y * w + tx + TILE);
+      }
+    }
+  }
   return { pixels, w, h, zoom: g.zoom, scale: g.scale, left: g.left, top: g.top };
+}
+
+/**
+ * Two layers: zoom 15 covers the whole 5.6 km field with the streets Google
+ * draws at that scale; zoom 16 covers the inner 3.6 km and adds the alleys and
+ * service roads it only draws closer in. A cell is road if either says so.
+ */
+export async function fetchRoadRasters(lat: number, lon: number, apiKey: string): Promise<RoadRaster[]> {
+  if (typeof document === 'undefined') throw new Error('road raster needs a browser canvas');
+  return Promise.all([fetchRoadRaster(lat, lon, apiKey, 15), fetchRoadRaster(lat, lon, apiKey, 16)]);
 }
 
 export async function fetchSatellite(

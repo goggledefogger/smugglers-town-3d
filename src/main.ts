@@ -170,10 +170,10 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'game3d';
 let viewMode: ViewMode = 'photoreal';
 /** Modes that draw the Google 3D tiles on screen (raw, masked, or snapped onto the colliders). */
-const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d', 'best-3d-plus', 'projected-3d-tiles', 'projected-3d']);
+const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d', 'best-3d-plus']);
 /** Best 3D: tiles snapped onto the collider boxes; "plus" draws the boxes at their per-cell roof heights. */
 const SNAPS_TILES: ReadonlySet<ViewMode> = new Set(['best-3d', 'best-3d-plus']);
 let clutterFilter: TileClutterFilter | null = null;
@@ -255,14 +255,6 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: BEST 3D+';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
-  } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
-    viewModeText.textContent = 'VIEW: PROJECTED (3D TILES)';
-  } else if (viewMode === 'projected-2d-maps') {
-    viewModeText.textContent = 'VIEW: PROJECTED (2D MAPS)';
-  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
-    viewModeText.textContent = 'VIEW: TEXTURED 3D';
-  } else if (viewMode === 'game3d-planar') {
-    viewModeText.textContent = 'VIEW: TEXTURED (PLANAR)';
   } else if (viewMode === 'masked-tiles') {
     viewModeText.textContent = 'VIEW: MASKED 3D TILES';
   } else {
@@ -275,20 +267,10 @@ function setViewMode(mode: ViewMode): void {
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = SNAPS_TILES.has(mode);
-  const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
-  const isProjectingTiles = isProjected3dTiles;
-  const isProjected2dMaps = mode === 'projected-2d-maps';
   const hasTiles = SHOWS_TILES.has(mode);
 
-  if (tiles) {
-    tiles.group.visible = hasTiles;
-    if (isProjectingTiles) {
-      tiles.group.traverse(o => o.layers.set(1));
-    }
-  }
-  renderer.setProjecting3dTiles(isProjectingTiles);
-
-  if (isRawPhotoreal || isMaskedTiles || isBest3d) {
+  if (tiles) tiles.group.visible = hasTiles;
+  if (hasTiles) {
     renderer.camera.layers.enable(1);
   } else {
     renderer.camera.layers.disable(1);
@@ -296,11 +278,10 @@ function setViewMode(mode: ViewMode): void {
 
   if (clutterFilter) {
     clutterFilter.snap = isBest3d;
-    clutterFilter.snapRoofs = mode !== 'best-3d-plus';
     if (isBest3d) {
       clutterFilter.mode = 'hidden';
       clutterMode = 'hidden';
-    } else if (isMaskedTiles || isProjectingTiles) {
+    } else if (isMaskedTiles) {
       clutterFilter.mode = 'swept';
       clutterMode = 'swept';
     } else if (isRawPhotoreal) {
@@ -331,26 +312,7 @@ function setViewMode(mode: ViewMode): void {
     buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
   }
 
-  if (mode === 'game3d') {
-    buildingMeshView.setMode('arcade');
-  } else if (mode === 'game3d-planar') {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('planar');
-  } else if (isBest3d) {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('best-3d');
-  } else if (isProjected3dTiles) {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('projected-3d');
-    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
-  } else if (isProjected2dMaps) {
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('projected-2d');
-  } else {
-    // 'game3d-textured' uses hybrid textured buildings
-    buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('hybrid');
-  }
+  buildingMeshView.setMode(mode === 'game3d' ? 'arcade' : 'textured');
 
   renderer.setLightRig(hasTiles && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
@@ -364,14 +326,6 @@ function toggleViewMode(): void {
   } else if (viewMode === 'best-3d') {
     setViewMode('best-3d-plus');
   } else if (viewMode === 'best-3d-plus') {
-    setViewMode('projected-3d-tiles');
-  } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
-    setViewMode('projected-2d-maps');
-  } else if (viewMode === 'projected-2d-maps') {
-    setViewMode('game3d-textured');
-  } else if (viewMode === 'game3d-textured' || viewMode === 'game3d-hybrid') {
-    setViewMode('game3d-planar');
-  } else if (viewMode === 'game3d-planar') {
     setViewMode('game3d');
   } else {
     setViewMode('photoreal');
@@ -963,7 +917,8 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---- 3D Resolution & Photogrammetry Fidelity Profiles ----
-let currentResolution3D: Resolution3DMode = 'balanced';
+// high by default: the Best 3D facades are the tiles themselves, and at balanced they blur to flat stone
+let currentResolution3D: Resolution3DMode = 'high';
 const resParam = urlParams?.get('res3d') as Resolution3DMode | null;
 const savedRes = typeof localStorage !== 'undefined' ? localStorage.getItem('stt.res3d') as Resolution3DMode | null : null;
 if (resParam && RESOLUTION_3D_MODES.includes(resParam)) {
@@ -1289,9 +1244,6 @@ function frame(now: number): void {
       if (tiles) tiles.update(renderer.camera.position, now);
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
-  }
-  if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
-    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   }
   renderer.render();
   requestAnimationFrame(frame);

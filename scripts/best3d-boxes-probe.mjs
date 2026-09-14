@@ -91,7 +91,20 @@ const out = await page.evaluate(([px, pz]) => {
       }
     }
   });
-  return { car: { x: px, z: pz, ground: hf ? Math.round(hf.sample(px, pz)) : null }, near: near.sort((a, b) => a.d - b.d) };
+  // 9x9 cells around the car: box id (or . for none), and R where the OSM/Google road mask is set
+  const ci0 = Math.floor((px + grid.half) / grid.cell), cj0 = Math.floor((pz + grid.half) / grid.cell);
+  const roadM = window.__tiles.roadGrid?.mask;
+  const around = [];
+  for (let dj = -4; dj <= 4; dj++) {
+    let row = '';
+    for (let di = -4; di <= 4; di++) {
+      const c = (cj0 + dj) * n + ci0 + di;
+      const id = ids[c] - 1;
+      row += (id >= 0 ? String(id) : '.').padStart(5) + (roadM && roadM[c] ? 'R' : ' ');
+    }
+    around.push(row);
+  }
+  return { car: { x: px, z: pz, ground: hf ? Math.round(hf.sample(px, pz)) : null, cell: [ci0, cj0] }, around, near: near.sort((a, b) => a.d - b.d) };
 }, [TX, TZ]);
 console.log(JSON.stringify(out, null, 1));
 await b.close();
