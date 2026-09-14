@@ -96,6 +96,12 @@ road pixel (and the canvas edge) and whatever it cannot reach is inside a
 closed outline. `fetchBuildingRaster` stitches a 6×6 grid of zoom 17 tiles
 (the inner 3.6 km, 36 requests, browser-cached).
 
+Since Footprint 3D, the outline fetch is the fallback: `Tileset.loadBuildings`
+first asks Overture Maps for the actual polygons (`services/overture/buildings.ts`,
+range-read from the hosted PMTiles archive, no key, no request cost) and
+rasterizes them into the same raster shape with `footprintRasterFromPolygons`;
+only when Overture fails or has nothing here does it fetch the Google outlines.
+
 `rasterizeCoverage` turns it into a cell mask with a twist: a cell counts as
 building only when 70 % of its area is inside an outline (`BUILDING_COVER`
 in `Tileset.ts`). In the collider pass a footprint cell is a building

@@ -17,6 +17,9 @@ import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
 import { BuildingMeshView, anchorCollider } from './render/BuildingMeshView.ts';
 import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
+import { PrismMeshView, type Prism } from './render/PrismMeshView.ts';
+import { pointInRing, type Footprint } from './services/overture/buildings.ts';
+import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
@@ -164,14 +167,21 @@ let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
+/** Footprint 3D: Overture building polygons extruded to their heights (render/PrismMeshView.ts). */
+const prismView = new PrismMeshView();
+renderer.scene.add(prismView.group);
+if (typeof window !== 'undefined') (window as any).__prismView = prismView;
 /** Painted 3D: photos of the tiles baked onto the box faces (render/FacadeBaker.ts). */
 const facadeBaker = new FacadeBaker(renderer.renderer, renderer.scene, {
   tiles: () => tiles?.group ?? null,
   // the photo wants the raw tiles: no clutter flattening, no snapping
   before: () => { if (clutterFilter) { bakeSaved = { mode: clutterFilter.mode, snap: clutterFilter.snap }; clutterFilter.mode = 'off'; clutterFilter.snap = false; } },
   after: () => { if (clutterFilter && bakeSaved) { clutterFilter.mode = bakeSaved.mode; clutterFilter.snap = bakeSaved.snap; } },
-  onRect: (box, face, r, pv0) => buildingMeshView.setFaceRect(box, face, r.x, r.y, r.w, r.h, ATLAS_SIZE, pv0)
+  onRect: (box, face, r, pv0) => buildingMeshView.setFaceRect(box, face, r.x, r.y, r.w, r.h, ATLAS_SIZE, pv0),
+  onWallRect: (wall, r, pv0) => prismView.setWallRect(wall, r.x, r.y, r.w, r.h, ATLAS_SIZE, pv0)
 });
+/** the colliders as last applied, so switching into Painted 3D can queue their faces */
+let lastColliders: readonly BuildingCollider[] = [];
 let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
 if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;
 buildingMeshView.visible = false;
@@ -181,7 +191,9 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'painted-3d' | 'game3d';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'painted-3d' | 'footprint-3d' | 'game3d';
+/** Modes that paint tile photos onto walls and need the baker running each frame. */
+const PAINTS_WALLS: ReadonlySet<ViewMode> = new Set(['painted-3d', 'footprint-3d']);
 let viewMode: ViewMode = 'photoreal';
 /** Modes that draw the Google 3D tiles on screen (raw, masked, or snapped onto the colliders). */
 const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d', 'best-3d-plus']);
@@ -247,6 +259,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   streamer.onBuildingsLoaded = () => {
     log.info('building footprints arrived in background, refreshing colliders');
     refreshColliders();
+    if (viewMode === 'footprint-3d' && rebuildPrisms()) facadeBaker.setWalls(prismView.walls);
   };
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
@@ -270,6 +283,8 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: BEST 3D+';
   } else if (viewMode === 'painted-3d') {
     viewModeText.textContent = 'VIEW: PAINTED 3D';
+  } else if (viewMode === 'footprint-3d') {
+    viewModeText.textContent = 'VIEW: FOOTPRINT 3D';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
   } else if (viewMode === 'masked-tiles') {
@@ -285,6 +300,7 @@ function setViewMode(mode: ViewMode): void {
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = SNAPS_TILES.has(mode);
   const isPainted = mode === 'painted-3d';
+  const isFootprint = mode === 'footprint-3d';
   const hasTiles = SHOWS_TILES.has(mode);
 
   if (tiles) tiles.group.visible = hasTiles;
@@ -322,8 +338,9 @@ function setViewMode(mode: ViewMode): void {
 
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
   // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
-  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles);
+  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint);
   buildingMeshView.columns = mode === 'best-3d-plus';
+  prismView.visible = isFootprint;
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (satTex) {
@@ -332,8 +349,17 @@ function setViewMode(mode: ViewMode): void {
 
   buildingMeshView.setMode(mode === 'game3d' ? 'arcade' : 'textured');
   buildingMeshView.setAtlas(isPainted ? facadeBaker.texture : null);
+  if (satTex) prismView.setTexture(satTex, config.world.mapHalf * 2);
+  prismView.setAtlas(isFootprint ? facadeBaker.texture : null);
+  // the baker holds one job list: the box faces or the footprint walls
+  if (isFootprint) {
+    rebuildPrisms();
+    facadeBaker.setWalls(prismView.walls);
+  } else if (isPainted) {
+    facadeBaker.setColliders(lastColliders);
+  }
 
-  renderer.setLightRig((hasTiles || isPainted) && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  renderer.setLightRig((hasTiles || PAINTS_WALLS.has(mode)) && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
@@ -347,6 +373,8 @@ function toggleViewMode(): void {
   } else if (viewMode === 'best-3d-plus') {
     setViewMode('painted-3d');
   } else if (viewMode === 'painted-3d') {
+    setViewMode('footprint-3d');
+  } else if (viewMode === 'footprint-3d') {
     setViewMode('game3d');
   } else {
     setViewMode('photoreal');
@@ -433,6 +461,57 @@ function refreshColliders(): void {
     });
 }
 
+/** Height a footprint without an Overture height gets (m): two storeys, so it at least stands. */
+const PRISM_FALLBACK_M = 6;
+
+/**
+ * Footprint 3D geometry: every Overture polygon from the ground it stands
+ * on up to its height. Without a height, the photogrammetry roof over the
+ * footprint (the classifier's per-cell tops) says how tall it is.
+ */
+let prismsFor: readonly Footprint[] | null = null;
+function rebuildPrisms(): boolean {
+  const polys = tiles?.footprints;
+  if (!tiles || !polys) return false;
+  // ponytail: built once per footprint set (~750 ms for a downtown); the roof-raster
+  // fallback behind the 5% of polygons without a height is not worth re-extruding for
+  if (prismsFor === polys && prismView.walls.length > 0) return false;
+  prismsFor = polys;
+  const hf = world.terrainProvider.heightfield;
+  const grid = tiles.activeGrid;
+  const tops = tiles.activeTopGrid;
+  const prisms: Prism[] = [];
+  for (const p of polys) {
+    let gMin = Infinity, gSum = 0, n = 0;
+    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (let i = 0; i + 3 < p.ring.length; i += 2) {
+      const x = p.ring[i]!, z = p.ring[i + 1]!;
+      const g = hf.sample(x, z);
+      gMin = Math.min(gMin, g); gSum += g; n++;
+      x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+    }
+    if (n === 0) continue;
+    const ground = gSum / n;
+    let height = p.height;
+    if (height == null) {
+      let top = -Infinity;
+      const i0 = Math.max(0, Math.floor((x0 + grid.half) / grid.cell)), i1 = Math.min(grid.n - 1, Math.floor((x1 + grid.half) / grid.cell));
+      const j0 = Math.max(0, Math.floor((z0 + grid.half) / grid.cell)), j1 = Math.min(grid.n - 1, Math.floor((z1 + grid.half) / grid.cell));
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        const t = tops[j * grid.n + i]!;
+        if (t === NO_DATA || t <= top) continue;
+        if (pointInRing(p.ring, -grid.half + (i + 0.5) * grid.cell, -grid.half + (j + 0.5) * grid.cell)) top = t;
+      }
+      height = top > -Infinity ? Math.max(3, top - ground) : PRISM_FALLBACK_M;
+    }
+    // a metre into the ground on the low side so a hillside never shows under the wall
+    const y0 = p.minHeight > 0 ? ground + p.minHeight : gMin - 1;
+    prisms.push({ ring: p.ring, holes: p.holes, y0, y1: ground + p.minHeight + height });
+  }
+  prismView.build(prisms);
+  return true;
+}
+
 function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
   const rawColliders = [...tileBoxes, ...propScatter.colliders];
@@ -448,7 +527,12 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
     sample,
     tiles?.activeTopGrid
   );
-  facadeBaker.setColliders(colliders);
+  lastColliders = colliders;
+  if (viewMode === 'painted-3d') {
+    facadeBaker.setColliders(colliders);
+  } else if (viewMode === 'footprint-3d' && rebuildPrisms()) {
+    facadeBaker.setWalls(prismView.walls);
+  }
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (satTex) {
     buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
@@ -486,6 +570,8 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 
 function clearTiles(): void {
   footprintPaintAt = -Infinity;
+  prismView.clear();
+  prismsFor = null;
   game.setSurfaceProvider(undefined);
   groundBuilder = null;
   if (groundStreamer) {
@@ -1267,7 +1353,7 @@ function frame(now: number): void {
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
   }
-  if (viewMode === 'painted-3d') facadeBaker.update(renderer.camera.position, now);
+  if (PAINTS_WALLS.has(viewMode)) facadeBaker.update(renderer.camera.position, now);
   renderer.render();
   requestAnimationFrame(frame);
 }

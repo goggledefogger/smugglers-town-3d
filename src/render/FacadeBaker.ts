@@ -1,20 +1,21 @@
 /**
- * Painted 3D: photographs of the Google 3D Tiles baked onto the collision
- * boxes. For every wall face of every box, a flat (orthographic) camera in
- * the street looks straight at the face and renders the tiles into that
- * face's rectangle of one big atlas texture; the box then wears the photo.
- * Only satellite ground and painted boxes are ever drawn in the mode, so
- * nothing can float and no road is ever covered: whatever a wall shows is
- * whatever stood in front of it, taken once, never re-projected.
+ * Painted 3D and Footprint 3D: photographs of the Google 3D Tiles baked onto
+ * building walls. For every wall (a box face in Painted 3D, a footprint
+ * edge in Footprint 3D), a flat (orthographic) camera in the street looks
+ * straight at the wall and renders the tiles into that wall's rectangle of
+ * one big atlas texture; the wall then wears the photo. Only satellite
+ * ground and painted walls are ever drawn in the modes, so nothing can
+ * float and no road is ever covered: whatever a wall shows is whatever
+ * stood in front of it, taken once, never re-projected.
  *
- * The camera looks from `out` metres in front of the face to `IN_M` behind
- * it. `out` is half the gap to the nearest box across the street (capped),
- * so a narrow street's far side cannot leak into the near wall's photo; the
- * inside reach exists because the box is the cell-quantized hull and the real
- * wall can stand several metres inside its face.
+ * The camera looks from `out` metres in front of the wall to a few metres
+ * behind it. `out` is half the gap to the nearest wall across the street
+ * (capped), so a narrow street's far side cannot leak into the near wall's
+ * photo; the inside reach exists because a box is the cell-quantized hull
+ * and the real wall can stand several metres inside its face.
  *
- * Faces are baked nearest the car first, a time budget per frame, and a box
- * that survives a collider rebuild with the same bounds keeps its photos.
+ * Walls are baked nearest the car first, a time budget per frame, and a
+ * wall that survives a rebuild in the same place keeps its photo.
  */
 import {
   OrthographicCamera, WebGLRenderTarget, Vector3, Color, LinearFilter, RGBAFormat, UnsignedByteType,
@@ -25,11 +26,13 @@ import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 /** Wall faces in the order the box shader's rect attributes use. */
 export type WallFace = 0 | 1 | 2 | 3; // -x, +x, -z, +z
 export const ATLAS_SIZE = 4096;
-/** Furthest the face camera stands into the street (m): half a wide avenue. */
+/** Furthest the wall camera stands into the street (m): half a wide avenue. */
 const MAX_OUT_M = 25;
-/** How far behind the face the camera still sees (m): a wall inside its cell-quantized box. */
+/** How far behind a box face the camera still sees (m): a wall inside its cell-quantized box. */
 const IN_M = 12;
-/** Longest side of one face's rectangle in texels. */
+/** A footprint wall is metre-exact: the camera need not see far behind it. */
+const IN_EXACT_M = 3;
+/** Longest side of one wall's rectangle in texels. */
 const MAX_FACE_PX = 768;
 /** Shelf rows are this granular in texels; keeps packing simple. */
 const ROW_STEP = 16;
@@ -37,20 +40,34 @@ const ROW_STEP = 16;
 const FILL_TARGET = 0.7;
 /** Texel size bounds (m). */
 const TEXEL_MIN = 0.35, TEXEL_MAX = 2.0;
-/** After everything is painted, the nearest faces are refreshed this often (ms) to pick up refined tiles. */
+/** After everything is painted, the nearest walls are refreshed this often (ms) to pick up refined tiles. */
 const REFRESH_MS = 4000;
 
 export interface AtlasRect { x: number; y: number; w: number; h: number }
 
-interface FaceJob {
-  readonly box: number;
+/** A vertical wall segment in world space with its outward normal. */
+export interface Wall {
+  readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number;
+  readonly nx: number; readonly nz: number;
+  readonly y0: number; readonly y1: number;
+}
+
+interface WallJob {
+  readonly kind: 'box' | 'wall';
+  /** box index (kind box) or wall index (kind wall) */
+  readonly owner: number;
   readonly face: WallFace;
-  /** face centre and size in world units */
+  /** what the wall is, so a rebuild in the same place keeps the photo */
+  readonly key: string;
+  /** wall centre, size and outward normal in world units */
   readonly cx: number; readonly cy: number; readonly cz: number;
+  readonly nx: number; readonly nz: number;
   readonly width: number; readonly height: number;
-  /** how far into the street the camera stands; 0 means an internal face, never baked */
+  /** how far into the street the camera stands; 0 means an internal wall, never baked */
   readonly out: number;
-  /** where the photo starts, as a fraction of the box height: the part below is hidden by a flush neighbour */
+  /** how far behind the wall the camera sees */
+  readonly inM: number;
+  /** where the photo starts, as a fraction of the wall height: the part below is hidden by a flush neighbour */
   readonly pv0: number;
   rect: AtlasRect | null;
   done: boolean;
@@ -62,6 +79,10 @@ const FACE_NORMAL: readonly [number, number, number][] = [[-1, 0, 0], [1, 0, 0],
 /** Key identical boxes across collider rebuilds so their photos survive. */
 export function boxKey(b: BuildingCollider): string {
   return `${b.min.x.toFixed(1)},${b.min.y.toFixed(1)},${b.min.z.toFixed(1)}|${b.max.x.toFixed(1)},${b.max.y.toFixed(1)},${b.max.z.toFixed(1)}`;
+}
+
+export function wallKey(w: Wall): string {
+  return `${w.ax.toFixed(1)},${w.az.toFixed(1)},${w.bx.toFixed(1)},${w.bz.toFixed(1)},${w.y0.toFixed(1)},${w.y1.toFixed(1)}`;
 }
 
 /** A neighbour must cover this much of a face's width to count as the box across from it. */
@@ -114,6 +135,67 @@ export function faceReach(boxes: readonly BuildingCollider[], i: number, face: W
   return { out: Math.min(MAX_OUT_M, Math.max(2, gap / 2)), bottom };
 }
 
+/** Spatial hash cell for wallReaches (m). */
+const HASH_CELL = 40;
+
+/**
+ * How far each footprint wall may look into the street: half the distance
+ * from its midpoint, along its normal, to the first other wall that rises
+ * above its base (capped); 0 when that wall is flush against it, which is
+ * what two OpenStreetMap buildings sharing a party wall look like. Walls
+ * hash into 40 m cells so a downtown of 50k walls stays a few million
+ * segment tests.
+ */
+export function wallReaches(walls: readonly Wall[]): Float32Array {
+  const out = new Float32Array(walls.length);
+  const cells = new Map<string, number[]>();
+  const cellOf = (v: number) => Math.floor(v / HASH_CELL);
+  walls.forEach((w, k) => {
+    const i0 = cellOf(Math.min(w.ax, w.bx)), i1 = cellOf(Math.max(w.ax, w.bx));
+    const j0 = cellOf(Math.min(w.az, w.bz)), j1 = cellOf(Math.max(w.az, w.bz));
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const kk = `${i},${j}`;
+      let list = cells.get(kk);
+      if (!list) cells.set(kk, list = []);
+      list.push(k);
+    }
+  });
+  const reach = 2 * MAX_OUT_M;
+  const seen = new Set<number>();
+  walls.forEach((w, k) => {
+    // the ray starts a quarter metre behind the wall so a party wall on the same line still counts as a hit
+    const px = (w.ax + w.bx) / 2 - w.nx * 0.25, pz = (w.az + w.bz) / 2 - w.nz * 0.25;
+    const qx = px + w.nx * reach, qz = pz + w.nz * reach;
+    const i0 = cellOf(Math.min(px, qx)), i1 = cellOf(Math.max(px, qx));
+    const j0 = cellOf(Math.min(pz, qz)), j1 = cellOf(Math.max(pz, qz));
+    let best = Infinity;
+    seen.clear();
+    for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+      const list = cells.get(`${i},${j}`);
+      if (!list) continue;
+      for (const m of list) {
+        if (m === k || seen.has(m)) continue;
+        seen.add(m);
+        const o = walls[m]!;
+        if (o.y1 < w.y0 + 1 || o.y0 > w.y1 - 1) continue;
+        // a wall facing the same way on the same line is a duplicate (a building part
+        // tracing its building's outline), not something standing in front of us
+        if (o.nx * w.nx + o.nz * w.nz > 0.9) continue;
+        const dx = o.bx - o.ax, dz = o.bz - o.az;
+        const den = w.nx * dz - w.nz * dx;
+        if (Math.abs(den) < 1e-6) continue;
+        const ex = o.ax - px, ez = o.az - pz;
+        const t = (ex * dz - ez * dx) / den;
+        const s = (ex * w.nz - ez * w.nx) / den;
+        if (t > 0.01 && s >= 0 && s <= 1 && t < best) best = t;
+      }
+    }
+    const gap = best - 0.25;
+    out[k] = gap < 0.5 ? 0 : Math.min(MAX_OUT_M, Math.max(2, gap / 2));
+  });
+  return out;
+}
+
 /**
  * Shelf packer: rows, faces placed left to right, never frees. A face takes
  * the shortest existing row it fits with room to spare; a new row opens only
@@ -153,13 +235,15 @@ export interface BakerHooks {
   /** turn the clutter filter and snap off for the photo, and back after */
   readonly before: () => void;
   readonly after: () => void;
-  /** a face's photo landed: hand the box mesh its atlas rect (texels) and where on the face it starts */
+  /** a box face's photo landed: hand the box mesh its atlas rect (texels) and where on the face it starts */
   readonly onRect: (box: number, face: WallFace, rect: AtlasRect, pv0: number) => void;
+  /** a footprint wall's photo landed: the same for the prism mesh */
+  readonly onWallRect: (wall: number, rect: AtlasRect, pv0: number) => void;
 }
 
 export class FacadeBaker {
   readonly atlas: WebGLRenderTarget;
-  private jobs: FaceJob[] = [];
+  private jobs: WallJob[] = [];
   private packer = new ShelfPacker(ATLAS_SIZE);
   private texel = 1;
   private readonly cam = new OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
@@ -188,76 +272,106 @@ export class FacadeBaker {
     return this.atlas.texture;
   }
 
-  /** Faces painted so far, for the diag line. */
+  /** Walls painted so far, for the diag line. */
   get progress(): { done: number; total: number; texel: number; atlasUsed: number } {
     let done = 0, total = 0;
     for (const j of this.jobs) { if (j.out > 0) { total++; if (j.done) done++; } }
     return { done, total, texel: this.texel, atlasUsed: this.packer.used };
   }
 
-  /** The colliders were rebuilt: keep photos of boxes that did not change, queue the rest. */
-  setColliders(boxes: readonly BuildingCollider[]): void {
-    const keep = new Map<string, FaceJob[]>();
-    for (const j of this.jobs) {
-      if (!j.done || !j.rect) continue;
-      const key = j.box < this.lastBoxes.length ? boxKey(this.lastBoxes[j.box]!) : '';
-      let list = keep.get(key);
-      if (!list) keep.set(key, list = []);
-      list.push(j);
-    }
-    this.lastBoxes = boxes;
-    // texel size from the total wall area, so a whole downtown fits the atlas
-    let area = 0;
-    for (const b of boxes) {
-      const h = Math.max(0, b.max.y - b.min.y);
-      area += 2 * ((b.max.x - b.min.x) + (b.max.z - b.min.z)) * h;
-    }
+  /**
+   * Swap the job list for a new one: photos of walls with the same key
+   * survive, the texel size follows the total wall area (so a whole downtown
+   * fits the atlas), and a layout that ran out of room restarts coarser.
+   */
+  private relayout(area: number, build: (kept: Map<string, WallJob>) => WallJob[]): void {
+    const kept = new Map<string, WallJob>();
+    for (const j of this.jobs) if (j.done && j.rect) kept.set(j.key, j);
     let texel = Math.min(TEXEL_MAX, Math.max(TEXEL_MIN, Math.sqrt(area / (ATLAS_SIZE * ATLAS_SIZE * FILL_TARGET))));
-    // the last layout ran out of room: go coarser rather than leave the rest bare
     if (this.full) texel = Math.max(texel, this.texel * 1.25);
     if (Math.abs(texel - this.texel) > 0.05 || this.full) {
-      // a new density means a new layout: start the atlas over
       this.texel = texel;
       this.packer = new ShelfPacker(ATLAS_SIZE);
       this.full = false;
-      keep.clear();
+      kept.clear();
     }
-    const jobs: FaceJob[] = [];
-    for (let i = 0; i < boxes.length; i++) {
-      const b = boxes[i]!;
-      const kept = keep.get(boxKey(b));
-      for (let f = 0; f < 4; f++) {
-        const face = f as WallFace;
-        const along = face < 2 ? b.max.z - b.min.z : b.max.x - b.min.x;
-        const reach = faceReach(boxes, i, face);
-        const height = b.max.y - reach.bottom;
-        const cx = face === 0 ? b.min.x : face === 1 ? b.max.x : (b.min.x + b.max.x) / 2;
-        const cz = face === 2 ? b.min.z : face === 3 ? b.max.z : (b.min.z + b.max.z) / 2;
-        const prev = kept?.find(j => j.face === face);
-        const job: FaceJob = {
-          box: i, face, cx, cy: (reach.bottom + b.max.y) / 2, cz, width: along, height,
-          out: reach.out, pv0: (reach.bottom - b.min.y) / Math.max(0.1, b.max.y - b.min.y),
-          rect: prev?.rect ?? null, done: !!prev, bakedAt: prev?.bakedAt ?? 0
-        };
-        if (job.done && job.rect) this.hooks.onRect(i, face, job.rect, job.pv0);
-        jobs.push(job);
-      }
-    }
-    this.jobs = jobs;
+    this.jobs = build(kept);
+    for (const j of this.jobs) if (j.done) this.landed(j);
     this.orderFor.set(Infinity, Infinity, Infinity);
   }
 
-  private lastBoxes: readonly BuildingCollider[] = [];
+  /** Painted 3D: the colliders were rebuilt; keep photos of boxes that did not change, queue the rest. */
+  setColliders(boxes: readonly BuildingCollider[]): void {
+    // texel size from the area that will actually be photographed: internal faces never are
+    const reaches: FaceReach[] = [];
+    let area = 0;
+    for (let i = 0; i < boxes.length; i++) {
+      const b = boxes[i]!;
+      for (let f = 0; f < 4; f++) {
+        const reach = faceReach(boxes, i, f as WallFace);
+        reaches.push(reach);
+        if (reach.out > 0) area += (f < 2 ? b.max.z - b.min.z : b.max.x - b.min.x) * Math.max(0, b.max.y - reach.bottom);
+      }
+    }
+    this.relayout(area, kept => {
+      const jobs: WallJob[] = [];
+      for (let i = 0; i < boxes.length; i++) {
+        const b = boxes[i]!;
+        for (let f = 0; f < 4; f++) {
+          const face = f as WallFace;
+          const along = face < 2 ? b.max.z - b.min.z : b.max.x - b.min.x;
+          const reach = reaches[i * 4 + f]!;
+          const n = FACE_NORMAL[face]!;
+          const key = `${boxKey(b)}:${face}`;
+          const prev = kept.get(key);
+          jobs.push({
+            kind: 'box', owner: i, face, key,
+            cx: face === 0 ? b.min.x : face === 1 ? b.max.x : (b.min.x + b.max.x) / 2,
+            cy: (reach.bottom + b.max.y) / 2,
+            cz: face === 2 ? b.min.z : face === 3 ? b.max.z : (b.min.z + b.max.z) / 2,
+            nx: n[0], nz: n[2], width: along, height: b.max.y - reach.bottom,
+            out: reach.out, inM: IN_M, pv0: (reach.bottom - b.min.y) / Math.max(0.1, b.max.y - b.min.y),
+            rect: prev?.rect ?? null, done: !!prev, bakedAt: prev?.bakedAt ?? 0
+          });
+        }
+      }
+      return jobs;
+    });
+  }
+
+  /** Footprint 3D: the prism walls were rebuilt; keep photos of walls that did not move. */
+  setWalls(walls: readonly Wall[]): void {
+    const reach = wallReaches(walls);
+    let area = 0;
+    walls.forEach((w, i) => { if (reach[i]! > 0) area += Math.hypot(w.bx - w.ax, w.bz - w.az) * Math.max(0, w.y1 - w.y0); });
+    this.relayout(area, kept => walls.map((w, i) => {
+      const key = wallKey(w);
+      const prev = kept.get(key);
+      return {
+        kind: 'wall', owner: i, face: 0, key,
+        cx: (w.ax + w.bx) / 2, cy: (w.y0 + w.y1) / 2, cz: (w.az + w.bz) / 2,
+        nx: w.nx, nz: w.nz, width: Math.hypot(w.bx - w.ax, w.bz - w.az), height: w.y1 - w.y0,
+        out: reach[i]!, inM: IN_EXACT_M, pv0: 0,
+        rect: prev?.rect ?? null, done: !!prev, bakedAt: prev?.bakedAt ?? 0
+      };
+    }));
+  }
 
   private reorder(camPos: Vector3): void {
     if (camPos.distanceTo(this.orderFor) < 40) return;
     this.orderFor.copy(camPos);
-    const d = (j: FaceJob) => (j.cx - camPos.x) * (j.cx - camPos.x) + (j.cz - camPos.z) * (j.cz - camPos.z);
+    const d = (j: WallJob) => (j.cx - camPos.x) * (j.cx - camPos.x) + (j.cz - camPos.z) * (j.cz - camPos.z);
     this.order = this.jobs.map((_, i) => i).filter(i => this.jobs[i]!.out > 0).sort((a, b) => d(this.jobs[a]!) - d(this.jobs[b]!));
     this.refreshCursor = 0;
   }
 
-  /** Bake pending faces nearest the camera first, within `budgetMs` of wall clock. */
+  private landed(j: WallJob): void {
+    if (!j.rect) return;
+    if (j.kind === 'box') this.hooks.onRect(j.owner, j.face, j.rect, j.pv0);
+    else this.hooks.onWallRect(j.owner, j.rect, j.pv0);
+  }
+
+  /** Bake pending walls nearest the camera first, within `budgetMs` of wall clock. */
   update(camPos: Vector3, nowMs: number, budgetMs = 4): void {
     if (this.jobs.length === 0) return;
     this.reorder(camPos);
@@ -285,9 +399,9 @@ export class FacadeBaker {
       this.bake(j);
       j.done = true;
       j.bakedAt = nowMs;
-      this.hooks.onRect(j.box, j.face, j.rect, j.pv0);
+      this.landed(j);
     }
-    // everything painted: refresh the nearest faces slowly so tiles that refined since show up
+    // everything painted: refresh the nearest walls slowly so tiles that refined since show up
     if (!began && this.order.length > 0) {
       const n = Math.min(6, this.order.length);
       for (let k = 0; k < n && performance.now() - t0 < budgetMs; k++) {
@@ -306,19 +420,18 @@ export class FacadeBaker {
     }
   }
 
-  private bake(j: FaceJob): void {
+  private bake(j: WallJob): void {
     const r = j.rect!;
     const tiles = this.hooks.tiles();
     const wasVisible = tiles?.visible ?? false;
     if (tiles) tiles.visible = true;
     const bg = this.scene.background;
     this.scene.background = null;
-    const n = FACE_NORMAL[j.face]!;
     this.cam.left = -j.width / 2; this.cam.right = j.width / 2;
     this.cam.top = j.height / 2; this.cam.bottom = -j.height / 2;
-    this.cam.near = 0.1; this.cam.far = j.out + IN_M;
+    this.cam.near = 0.1; this.cam.far = j.out + j.inM;
     this.cam.updateProjectionMatrix();
-    this.cam.position.set(j.cx + n[0] * j.out, j.cy, j.cz + n[2] * j.out);
+    this.cam.position.set(j.cx + j.nx * j.out, j.cy, j.cz + j.nz * j.out);
     this.cam.lookAt(this._c.set(j.cx, j.cy, j.cz));
     this.cam.updateMatrixWorld();
     // the target's own viewport and scissor, applied by setRenderTarget: renderer.setViewport

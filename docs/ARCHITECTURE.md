@@ -414,6 +414,33 @@ that refined since show up. Texel size follows the total wall area (about
 1 m downtown). Where the photo saw nothing (alpha 0) the box shows the same
 satellite-toned fill as Best 3D.
 
+### "Footprint 3D" Visual Mode (`render/PrismMeshView.ts`, `services/overture/buildings.ts`)
+
+Painted 3D with the buildings drawn as the prisms they are. Overture Maps
+publishes its buildings theme as one PMTiles archive on S3 with open CORS,
+so `fetchFootprints` range-reads the few zoom-14 vector tiles covering the
+inner field straight from the browser (about 1 MB a tile downtown, no key,
+no server of ours) and returns metre-exact polygons in world metres with
+Overture's `height` (95 % of downtown San Francisco has one; `num_floors`
+times 3.2 m otherwise, and failing that the photogrammetry roof over the
+footprint from the classifier's per-cell tops, then 6 m). `rebuildPrisms`
+in `main.ts` extrudes each polygon from a metre under the lowest ground on
+its outline to its height; building parts stack on their building. The mesh
+is one BufferGeometry: a quad per footprint edge with an outward normal
+(`prismWalls`), the roof triangulated by `ShapeUtils`, and per-vertex atlas
+rectangles the same `FacadeBaker` fills, generalised from box faces to
+`Wall` segments (`setWalls`). `wallReaches` decides how far each wall's
+camera stands out with a 2D ray along the wall normal against every other
+wall in a 40 m spatial hash: half the gap to the first wall that rises above
+its base, 0 for a party wall on the same line (so it is never baked), and a
+duplicate outline facing the same way (a part tracing its building) does not
+count. The same polygons, rasterized, replace the Google outline fetch as
+the classifier's footprint mask (`footprintRasterFromPolygons`), so every
+mode gets the exact footprints and no Static Maps request for them; the
+outline fetch stays as the fallback when Overture does not answer. Measured
+downtown: 10,871 polygons, 96,531 walls, 765 ms to extrude (once per
+place), about 1.4 m per texel across the whole set.
+
 "Best 3D" (`render/TileClutterFilter.ts`, `snap`) is the earlier approach:
 tile vertices moved onto the nearest box face so the tiles themselves are the
 walls. It is kept for comparison; its failure modes (shards, walls buried in

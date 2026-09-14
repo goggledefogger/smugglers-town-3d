@@ -36,6 +36,10 @@ import { fetchRoadPolylines, rasterizeRoads, rasterizeRoadRaster, rasterizeCover
 /** Fraction of a 10 m cell inside Google's building outlines that makes it a building cell even under the road corridor. */
 const BUILDING_COVER = 0.7;
 import { fetchRoadRasters, fetchBuildingRaster, type RoadRaster } from '../maps/MapsApi.ts';
+import { fetchFootprints, footprintRasterFromPolygons, type Footprint } from '../overture/buildings.ts';
+
+/** Overture footprints are fetched this far from the origin (m): the inner field, like the zoom-16 road layer. */
+const FOOTPRINT_RADIUS_M = 1800;
 import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
@@ -384,6 +388,12 @@ export class TileStreamer {
   private roadRaster: RoadRaster[] | null = null;
   private buildingRaster: RoadRaster | null = null;
   private buildingGrid: RoadGrid | null = null;
+  private footprintPolys: Footprint[] | null = null;
+
+  /** Overture building polygons with heights (world metres), null until they land or when only Google answered. */
+  get footprints(): readonly Footprint[] | null {
+    return this.footprintPolys;
+  }
   private resolutionMode: Resolution3DMode = 'balanced';
   private lod: LodPolicy = STREAM_LOD;
   private maxTiles = MAX_TILES;
@@ -552,11 +562,29 @@ export class TileStreamer {
 
   private buildingsPromise: Promise<void> | null = null;
 
-  /** Google's building footprints, once; a failure just means the classifier judges buildings alone, as before. */
+  /**
+   * Building footprints, once: Overture polygons (exact, with heights, free)
+   * first, Google's styled outlines when Overture does not answer. A failure
+   * of both just means the classifier judges buildings alone, as before.
+   */
   private loadBuildings(): Promise<void> {
     return this.buildingsPromise ??= (async () => {
+      const origin = this.origin;
       try {
-        this.buildingRaster = await fetchBuildingRaster(this.origin.lat, this.origin.lon, this.apiKey);
+        const polys = await fetchFootprints(origin, FOOTPRINT_RADIUS_M);
+        if (polys.length > 0) {
+          this.footprintPolys = polys;
+          this.buildingRaster = footprintRasterFromPolygons(polys, origin);
+          log.info('building footprints from overture', { polygons: polys.length });
+          this.publishBuildingGrid();
+          return;
+        }
+        log.warn('overture has no buildings here; trying google outlines');
+      } catch (e) {
+        log.warn('overture footprints failed', String(e).slice(0, 120));
+      }
+      try {
+        this.buildingRaster = await fetchBuildingRaster(origin.lat, origin.lon, this.apiKey);
         log.info('building footprints from google roadmap');
         this.publishBuildingGrid();
       } catch (e) {
