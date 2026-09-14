@@ -50,6 +50,17 @@ describe('SpawnPlanner', () => {
     }
   });
 
+  it('pinned to a point, forms the ring on the nearest open ground to it instead of the roomiest place in the field', () => {
+    const grid = new NavGrid(840);
+    grid.rebuild([box(-60, -60, 60, 60)]);
+    const free = new SpawnPlanner(DEFAULT_SPAWN, grid, mulberry32(3)).matchSpawns(8, teamOf);
+    const pinned = new SpawnPlanner(DEFAULT_SPAWN, grid, mulberry32(3)).matchSpawns(8, teamOf, { x: 0, z: 0 });
+    const far = (pts: { x: number; z: number }[]): number => Math.max(...pts.map(p => Math.hypot(p.x, p.z)));
+    expect(far(pinned)).toBeLessThan(60 + DEFAULT_SPAWN.ringRadius + 30);
+    expect(far(free)).toBeGreaterThan(far(pinned));
+    for (const p of pinned) expect(grid.isBlockedAt(p.x, p.z)).toBe(false);
+  });
+
   it('never returns a blocked point even when nothing meets the clearance it wants', () => {
     // a dense grid of pillars: nowhere has 30 units clear, but there is always open ground
     const walls: BuildingCollider[] = [];

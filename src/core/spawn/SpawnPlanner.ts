@@ -100,13 +100,16 @@ export class SpawnPlanner {
 
   /**
    * Starting positions for a whole match: one ring, teams on opposite arcs.
-   * The ring is centred on the roomiest place near the middle of the field,
-   * and each slot is nudged to open ground, so a downtown start puts the
-   * grid in a plaza or along a wide street instead of inside a block.
+   * The ring is centred on the roomiest place in the field, and each slot is
+   * nudged to open ground, so a downtown start puts the grid in a plaza or
+   * along a wide street instead of inside a block. Given `at`, the ring is
+   * centred on the nearest open ground to that point instead: a player who
+   * asked for a place expects to start there, not at the roomiest park in
+   * the 5 km field.
    */
-  matchSpawns(count: number, teamOf: (index: number) => 0 | 1): SpawnPoint[] {
+  matchSpawns(count: number, teamOf: (index: number) => 0 | 1, at?: Vec2): SpawnPoint[] {
     const { ringRadius, carClearance } = this.cfg;
-    const center = this.space.mostOpen(0, 0, ringRadius + carClearance) ?? CENTER;
+    const center = at ? this.open(at, carClearance) : this.space.mostOpen(0, 0, ringRadius + carClearance) ?? CENTER;
     const spin = this.rng() * Math.PI * 2;
     // slots go round the ring in team order, so each team lines up on its own
     // arc however the caller happens to index its drivers

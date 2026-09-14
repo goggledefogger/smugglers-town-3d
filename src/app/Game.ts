@@ -221,8 +221,9 @@ export class Game {
 
   private spawnAllVehicles(seats: readonly Seat[]): void {
     const hf = this.terrain.heightfield;
-    // one planner call for every driver, human and AI alike
-    const points = this.spawn.matchSpawns(seats.length, i => seats[i]!.team);
+    // one planner call for every driver, human and AI alike; a real place was
+    // asked for by name or deep link, so the grid forms where it was asked
+    const points = this.spawn.matchSpawns(seats.length, i => seats[i]!.team, this.terrain.isReal ? { x: 0, z: 0 } : undefined);
     const dropH = this.initialDropHeight();
     const graceS = Math.max(SPAWN_GRACE_S, this.round.countdownS + 1.5);
     seats.forEach((seat, i) => {
