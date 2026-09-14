@@ -57,6 +57,8 @@ export const SNAP_REACH_OUT_CELLS = 2.5;
 export const SNAP_REACH_IN_CELLS = 1.5;
 /** Facade snap: cell -> box map is dilated by this many cells so the catch zone can find its box. */
 export const SNAP_RING_CELLS = 2;
+/** Facade snap: kerb-height geometry on a road cell (parked cars) only snaps from this close (m): a ground floor at its wall. */
+export const SNAP_LOW_ROAD_M = 2;
 /** Box bounds texture: this many boxes per row, two texels (min, max) each. */
 const BOXES_PER_ROW = 1024;
 
@@ -122,12 +124,14 @@ vec3 cSnapDelta = vec3(0.0);
 vSnapped = 0.0;
 vSnapFace = -1.0;
 vSnapFaceS = -1.0;
-// kerb-height geometry on an OSM road cell is a parked car: never a wall
-if (uSnap > 0.5 && !(vClutterRiseVal < uClutterRise && texelFetch(uSnapIds, min(ivec2(clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0) * vec2(textureSize(uSnapIds, 0))), textureSize(uSnapIds, 0) - 1), 0).g > 0.5)) {
+if (uSnap > 0.5) {
   vec2 suv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
   ivec2 sn = textureSize(uSnapIds, 0);
   ivec2 sc0 = min(ivec2(suv * vec2(sn)), sn - 1);
-  float tolOut = uSnapIn * ${SNAP_REACH_OUT_CELLS};
+  // kerb-height geometry on a road cell is a parked car unless it stands right at a wall,
+  // where it is the wall's own ground floor: those reach only ${SNAP_LOW_ROAD_M} m
+  bool cKerb = vClutterRiseVal < uClutterRise && texelFetch(uSnapIds, sc0, 0).g > 0.5;
+  float tolOut = cKerb ? ${SNAP_LOW_ROAD_M}.0 : uSnapIn * ${SNAP_REACH_OUT_CELLS};
   float tolIn = uSnapIn * ${SNAP_REACH_IN_CELLS};
   float best = 1e9;
   vec3 axis = vec3(0.0), bmin = vec3(0.0), bmax = vec3(0.0);

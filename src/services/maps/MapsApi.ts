@@ -167,7 +167,7 @@ export function worldPixelToLatLon(x: number, y: number, zoom: number): { lat: n
  * hidden. Thresholded, that image is a road mask; see docs/ROAD-MASK.md for
  * why this replaced Overpass. Weights are stroke widths in map pixels at
  * scale 1 (zoom 15 downtown is about 3.8 m per pixel), so a highway is drawn
- * about 23 m wide, an arterial 15 m, a local street 11 m.
+ * about 19 m wide, an arterial 11 m, a local street 8 m.
  */
 export function roadsUrl(
   lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 1
@@ -181,9 +181,11 @@ export function roadsUrl(
     'feature:landscape|element:geometry|color:0x000000',
     'feature:water|element:geometry|color:0x000000',
     'feature:road|element:geometry.stroke|visibility:off',
-    'feature:road|element:geometry.fill|visibility:on|color:0xffffff|weight:3',
-    'feature:road.arterial|element:geometry.fill|weight:4',
-    'feature:road.highway|element:geometry.fill|weight:6'
+    // kerb to kerb, not wall to wall: the collider pass dilates by half a cell on each
+    // side, and a corridor wider than the street pushes the boxes inside the buildings
+    'feature:road|element:geometry.fill|visibility:on|color:0xffffff|weight:2',
+    'feature:road.arterial|element:geometry.fill|weight:3',
+    'feature:road.highway|element:geometry.fill|weight:5'
   ];
   return 'https://maps.googleapis.com/maps/api/staticmap'
     + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}&scale=${scale}&maptype=roadmap`

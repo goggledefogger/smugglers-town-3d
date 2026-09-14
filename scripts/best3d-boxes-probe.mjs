@@ -46,8 +46,8 @@ const out = await page.evaluate(([px, pz]) => {
     const ci = Math.floor((x + grid.half) / grid.cell), cj = Math.floor((z + grid.half) / grid.cell);
     const rise = hf ? y - hf.sample(x, z) : 99;
     const road = window.__tiles.roadGrid?.mask;
-    if (rise < 2.5 && road && road[cj * n + ci] === 1) return { bestK: -1, face: '' };
-    const tolOut = grid.cell * 2.5, tolIn = grid.cell * 1.5;
+    const kerb = rise < 2.5 && road && road[cj * n + ci] === 1;
+    const tolOut = kerb ? 2 : grid.cell * 2.5, tolIn = grid.cell * 1.5;
     let best = 1e9, bestK = -1, face = '';
     for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
       const i = Math.min(n - 1, Math.max(0, ci + ox)), j = Math.min(n - 1, Math.max(0, cj + oy));
@@ -72,6 +72,7 @@ const out = await page.evaluate(([px, pz]) => {
       if (Math.hypot(v.x - px, v.z - pz) > 45) continue;
       const r = snapV(v.x, v.y, v.z);
       if (r.bestK >= 0 && byK.has(r.bestK)) { byK.get(r.bestK).snapped[r.face]++; continue; }
+      if (r.lowOnRoad) { for (const rec of near) { const bx = boxes[rec.k]; const dx = Math.max(bx.min.x - v.x, 0, v.x - bx.max.x), dz = Math.max(bx.min.z - v.z, 0, v.z - bx.max.z); if (Math.hypot(dx, dz) <= 4) rec.lowOnRoadNearFace = (rec.lowOnRoadNearFace ?? 0) + 1; } continue; }
       // not snapped: which nearby box is it hugging (within 14 m horizontally)
       for (const rec of near) {
         const bx = boxes[rec.k];
