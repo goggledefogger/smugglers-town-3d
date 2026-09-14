@@ -155,14 +155,19 @@ export function anchorCollider(
   };
 }
 
-/** A deck island this small that never comes down to the ground is a canopy or skybridge: not drawn. */
-const DECK_ISLAND_MAX_CELLS = 12;
+/** A deck island longer than this many cells is an elevated road even if its ramps went unfound. */
+const DECK_ROAD_MIN_CELLS = 60;
+/** A deck island reaching this close to the loaded area's edge may continue outside it: drawn. */
+const DECK_EDGE_CELLS = 2;
 
 /**
  * Which deck cells to draw: every cell of a 4-connected deck component that
- * either touches ground level somewhere (a ramp) or is bigger than a canopy.
- * The physics keeps all of them; a slab the car can never reach is only
- * ever seen, and downtown it is seen as a square floating over the street.
+ * comes down to ground level somewhere (a ramp), runs off the edge of the
+ * loaded area (a bridge whose ramps lie outside it), or is long enough to be
+ * an elevated road regardless. The rest are building setbacks and rooftop
+ * terraces the classifier read as roadway: downtown they hung in the air as
+ * squares over every street. The physics keeps all of them; a slab the car
+ * can never reach is only ever seen.
  */
 export function reachableDecks(
   deckGrid: Float32Array,
@@ -182,11 +187,12 @@ export function reachableDecks(
     comp.length = 0;
     comp.push(s0);
     seen[s0] = 1;
-    let grounded = false;
+    let grounded = false, atEdge = false;
     for (let q = 0; q < comp.length; q++) {
       const c = comp[q]!;
       const i = c % n, j = Math.floor(c / n);
       if (deckGrid[c]! <= sampleGround(-half + (i + 0.5) * cell, -half + (j + 0.5) * cell) + 1.5) grounded = true;
+      if (i < DECK_EDGE_CELLS || j < DECK_EDGE_CELLS || i >= n - DECK_EDGE_CELLS || j >= n - DECK_EDGE_CELLS) atEdge = true;
       const nbs = [i > 0 ? c - 1 : -1, i < n - 1 ? c + 1 : -1, c - n, c + n];
       for (const nb of nbs) {
         if (nb < 0 || nb >= n * n || seen[nb] || deckGrid[nb] === NO_DATA) continue;
@@ -194,7 +200,7 @@ export function reachableDecks(
         comp.push(nb);
       }
     }
-    if (grounded || comp.length > DECK_ISLAND_MAX_CELLS) for (const c of comp) drawn[c] = 1;
+    if (grounded || atEdge || comp.length >= DECK_ROAD_MIN_CELLS) for (const c of comp) drawn[c] = 1;
   }
   return drawn;
 }
