@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { Vector3, Matrix4, Quaternion, Vector2 } from 'three';
+import { Vector3, Matrix4, Quaternion, Vector2, Texture, ShaderLib, type InstancedMesh, type WebGLProgramParametersWithUniforms, type MeshStandardMaterial, type WebGLRenderer } from 'three';
 import { BuildingMeshView, anchorCollider } from '../src/render/BuildingMeshView.ts';
 import { Bindings } from '../src/input/bindings.ts';
 import { TerrainMesh } from '../src/render/TerrainMesh.ts';
@@ -83,6 +83,9 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('best-3d');
     expect(view.getTextureStyle()).toBe('best-3d');
 
+    view.setTextureStyle('map-objects');
+    expect(view.getTextureStyle()).toBe('map-objects');
+
     view.setTextureStyle('planar');
     expect(view.getTextureStyle()).toBe('planar');
 
@@ -92,6 +95,43 @@ describe('BuildingMeshView', () => {
     // Setting texture and mapSize works safely without error
     view.setTexture(null, 5600);
     view.setTilesTexture(null, new Vector2(1920, 1080));
+  });
+
+  it('keeps map-object geometry and live shader uniforms stable across texture and mode changes', () => {
+    const view = new BuildingMeshView();
+    const collider = { min: new Vector3(0, 0, 0), max: new Vector3(12, 20, 12) };
+    view.update([collider]);
+    const mesh = view.group.children[0] as InstancedMesh;
+    const matrix = Array.from(mesh.instanceMatrix.array);
+    const material = mesh.material as MeshStandardMaterial;
+    const shader = { uniforms: {}, vertexShader: ShaderLib.standard.vertexShader,
+      fragmentShader: ShaderLib.standard.fragmentShader } as WebGLProgramParametersWithUniforms;
+    material.onBeforeCompile(shader, {} as WebGLRenderer);
+    const satellite = new Texture();
+    const tiles = new Texture();
+
+    view.setMode('textured');
+    view.setTextureStyle('best-3d');
+    view.setTilesTexture(tiles);
+    expect(shader.uniforms.uTextureStyle!.value).toBe(4);
+    view.setTextureStyle('map-objects');
+    view.setTexture(satellite, 200);
+    expect(shader.uniforms.uTextureStyle!.value).toBe(5);
+    expect(shader.uniforms.uHasSatellite!.value).toBe(1);
+    expect(shader.uniforms.uSatelliteMap!.value).toBe(satellite);
+    expect(shader.uniforms.uMapSize!.value).toBe(200);
+
+    view.setTexture(null, 100);
+    expect(shader.uniforms.uHasSatellite!.value).toBe(0);
+    expect(shader.uniforms.uSatelliteMap!.value).not.toBe(satellite);
+    view.setMode('arcade');
+    expect(shader.uniforms.uHasTexture!.value).toBe(0);
+    expect(view.group.children[0]).toBe(mesh);
+    expect(Array.from(mesh.instanceMatrix.array)).toEqual(matrix);
+    expect(collider.min.y).toBe(0);
+    view.clear();
+    satellite.dispose();
+    tiles.dispose();
   });
 
   it('firmly anchors building foundations into steep hillside slopes across entire footprint', () => {
@@ -226,4 +266,3 @@ describe('TileClutterFilter modes for Real 3D vs Masked 3D Tiles', () => {
     filter.dispose();
   });
 });
-

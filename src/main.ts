@@ -170,7 +170,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'map-objects' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -185,7 +185,7 @@ const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatte
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
-  clutterBtn.hidden = !clutterFilter;
+  clutterBtn.hidden = !clutterFilter || viewMode === 'map-objects';
   clutterBtn.classList.toggle('active', clutterMode !== 'off');
   clutterText.textContent = CLUTTER_LABEL[clutterMode];
 }
@@ -239,13 +239,15 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     refreshColliders();
   };
   updateClutterUi();
-  setViewMode(viewMode);
+  setViewMode(viewMode, terrain.isReal);
 }
 
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
-  if (viewMode === 'best-3d') {
+  if (viewMode === 'map-objects') {
+    viewModeText.textContent = 'VIEW: MAP + OBJECTS';
+  } else if (viewMode === 'best-3d') {
     viewModeText.textContent = 'VIEW: BEST 3D';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
@@ -264,11 +266,12 @@ function updateViewModeUi(): void {
   }
 }
 
-function setViewMode(mode: ViewMode): void {
+function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): void {
   viewMode = mode;
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
+  const isMapObjects = mode === 'map-objects';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
   const isProjectingTiles = isProjected3dTiles || isBest3d;
   const isProjected2dMaps = mode === 'projected-2d-maps';
@@ -315,12 +318,14 @@ function setViewMode(mode: ViewMode): void {
   buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles);
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
-  if (satTex) {
-    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-  }
+  buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
 
   if (mode === 'game3d') {
     buildingMeshView.setMode('arcade');
+  } else if (isMapObjects) {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('map-objects');
+    buildingMeshView.setTilesTexture(null);
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
@@ -341,12 +346,14 @@ function setViewMode(mode: ViewMode): void {
     buildingMeshView.setTextureStyle('hybrid');
   }
 
-  renderer.setLightRig(hasTiles && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  renderer.setLightRig((hasTiles || isMapObjects) && isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
 function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
+    setViewMode('map-objects');
+  } else if (viewMode === 'map-objects') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
     setViewMode('best-3d');
@@ -459,9 +466,7 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
     sample
   );
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
-  if (satTex) {
-    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-  }
+  buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
   // the repaint re-uploads a 3840² satellite texture with mipmaps, a 50-150 ms
   // stall, for ground the tiles mostly cover: once at match start, then rarely
   const now = performance.now();
@@ -480,7 +485,7 @@ function rebuildViews(): void {
   for (const actor of world.vehicles) {
     const view = new VehicleView(
       actor, () => world.terrainProvider.heightfield,
-      (x, z) => viewMode === 'photoreal' ? groundShade.shadeAt(x, z) : 1
+      (x, z) => viewMode === 'photoreal' || viewMode === 'map-objects' ? groundShade.shadeAt(x, z) : 1
     );
     vehicleViews.push(view);
     renderer.scene.add(view.group);
@@ -527,12 +532,7 @@ function swapTerrainMesh(terrain: TerrainProvider): void {
   if (old) renderer.scene.remove(old);
   const mesh = terrainMesh.build(terrain, renderer.maxAnisotropy);
   groundShade.setBase(terrain.satelliteCanvas, config.world.mapHalf * 2);
-  terrainMesh.setMode(viewMode);
-  const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
-  if (satTex) {
-    buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
-  }
-  renderer.setLightRig(viewMode === 'photoreal' && terrain.isReal ? 'photo' : 'arcade');
+  setViewMode(viewMode, terrain.isReal);
   renderer.scene.add(mesh);
   minimapEl.setTerrain(terrain.heightfield, config.world.mapHalf);
 }

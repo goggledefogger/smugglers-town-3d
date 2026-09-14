@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -30,6 +30,7 @@ varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
+varying float vBuildingHeight;
 `;
 
 const VERTEX_BODY_BUILDING = `
@@ -44,6 +45,10 @@ vWorldPos = (modelMatrix * bWorldPos).xyz;
 vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
 vBuildingNormal = normal;
 vLocalNormY = position.y + 0.5;
+vBuildingHeight = 1.0;
+#ifdef USE_INSTANCING
+  vBuildingHeight = length(instanceMatrix[1].xyz);
+#endif
 `;
 
 const FRAGMENT_PARS_BUILDING = `
@@ -53,14 +58,35 @@ uniform vec2 uResolution;
 uniform float uMapSize;
 uniform float uHasTexture;
 uniform float uTextureStyle;
+uniform float uHasSatellite;
 varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
+varying float vBuildingHeight;
 `;
 
 const FRAGMENT_BODY_BUILDING = `
-if (uHasTexture > 0.5) {
+if (uHasTexture > 0.5 && uTextureStyle > 4.5) {
+  if (vIsRoof < 0.5) {
+    float belowRoof = (1.0 - vLocalNormY) * vBuildingHeight;
+    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
+    vec2 bays = vec2(wallU / 3.0, belowRoof / 3.5);
+    vec2 edge = abs(fract(bays) - 0.5);
+    vec2 aa = max(fwidth(bays), vec2(0.001));
+    vec2 aperture = 1.0 - smoothstep(vec2(0.27, 0.24) - aa, vec2(0.27, 0.24) + aa, edge);
+    float windows = aperture.x * aperture.y;
+    windows *= 1.0 - smoothstep(0.15, 0.5, max(aa.x, aa.y));
+    windows *= step(6.0, vBuildingHeight) * step(0.5, belowRoof) * step(0.08, vLocalNormY);
+    float contact = smoothstep(0.0, 0.12, vLocalNormY);
+    float eave = smoothstep(0.0, 0.6, belowRoof);
+    vec3 stone = mix(vec3(0.48, 0.43, 0.36), vec3(0.32, 0.40, 0.46), smoothstep(18.0, 50.0, vBuildingHeight));
+    vec3 masonry = mix(diffuseColor.rgb, stone, 0.8) * mix(0.72, 1.0, contact) * mix(0.8, 1.0, eave);
+    diffuseColor.rgb = mix(masonry, vec3(0.10, 0.16, 0.21), windows * 0.65);
+    // Baked ambient fill keeps shaded facades readable beside sunlit aerial imagery
+    totalEmissiveRadiance += diffuseColor.rgb * 0.25;
+  }
+} else if (uHasTexture > 0.5) {
   vec2 satUV = vec2(
     vWorldPos.x / uMapSize + 0.5,
     0.5 - vWorldPos.z / uMapSize
@@ -207,11 +233,22 @@ if (uHasTexture > 0.5) {
 `;
 
 const FRAGMENT_OPAQUE_BUILDING = `
-if (uHasTexture > 0.5 && uTextureStyle > 2.5) {
+if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 4.5) {
   vec2 screenUV = gl_FragCoord.xy / uResolution;
   vec4 tileSample = texture2D(uTilesMap, screenUV);
   if (tileSample.a > 0.04) {
     gl_FragColor.rgb = tileSample.rgb;
+  }
+}
+`;
+
+// Three applies lighting and tone mapping before output color-space conversion
+// Aerial roofs already contain daylight, so replace them after tone mapping but before fog/output conversion
+const FRAGMENT_MAP_ROOF = `
+if (uHasTexture > 0.5 && uTextureStyle > 4.5 && uHasSatellite > 0.5 && vIsRoof > 0.5) {
+  vec2 roofUV = vec2(vWorldPos.x / uMapSize + 0.5, 0.5 - vWorldPos.z / uMapSize);
+  if (all(greaterThanEqual(roofUV, vec2(0.0))) && all(lessThanEqual(roofUV, vec2(1.0)))) {
+    gl_FragColor.rgb = texture2D(uSatelliteMap, roofUV).rgb;
   }
 }
 `;
@@ -260,7 +297,8 @@ export class BuildingMeshView {
 
   // Material uniforms for texture projection
   private readonly uHasTexture = { value: 0.0 };
-  private readonly uTextureStyle = { value: 0.0 }; // 0 = planar, 1 = hybrid, 2 = projected-2d, 3 = projected-3d
+  private readonly uHasSatellite = { value: 0.0 };
+  private readonly uTextureStyle = { value: 0.0 }; // 0 planar, 1 hybrid, 2 projected-2d, 3 projected-3d, 4 best-3d, 5 map-objects
   private readonly uMapSize = { value: 5600.0 };
   private readonly uResolution = { value: new Vector2(1280, 720) };
   private readonly dummyTex: DataTexture;
@@ -305,6 +343,7 @@ export class BuildingMeshView {
     mat.customProgramCacheKey = () => cacheKey;
     mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
       shader.uniforms.uHasTexture = this.uHasTexture;
+      shader.uniforms.uHasSatellite = this.uHasSatellite;
       shader.uniforms.uTextureStyle = this.uTextureStyle;
       shader.uniforms.uSatelliteMap = this.uSatelliteMap;
       shader.uniforms.uTilesMap = this.uTilesMap;
@@ -316,7 +355,8 @@ export class BuildingMeshView {
 
       shader.fragmentShader = FRAGMENT_PARS_BUILDING + shader.fragmentShader
         .replace('#include <color_fragment>', '#include <color_fragment>\n' + FRAGMENT_BODY_BUILDING)
-        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n' + FRAGMENT_OPAQUE_BUILDING);
+        .replace('#include <opaque_fragment>', '#include <opaque_fragment>\n' + FRAGMENT_OPAQUE_BUILDING)
+        .replace('#include <tonemapping_fragment>', '#include <tonemapping_fragment>\n' + FRAGMENT_MAP_ROOF);
     };
   }
 
@@ -332,7 +372,9 @@ export class BuildingMeshView {
 
   setTextureStyle(style: BuildingTextureStyle): void {
     this._style = style;
-    if (style === 'best-3d') {
+    if (style === 'map-objects') {
+      this.uTextureStyle.value = 5.0;
+    } else if (style === 'best-3d') {
       this.uTextureStyle.value = 4.0;
     } else if (style === 'projected-3d') {
       this.uTextureStyle.value = 3.0;
@@ -351,6 +393,7 @@ export class BuildingMeshView {
 
   setTexture(tex: Texture | null, mapSize: number): void {
     this.uSatelliteMap.value = tex ?? this.dummyTex;
+    this.uHasSatellite.value = tex ? 1.0 : 0.0;
     this.uMapSize.value = mapSize;
   }
 
@@ -370,15 +413,13 @@ export class BuildingMeshView {
   }
 
   private lastColliders: readonly BuildingCollider[] = [];
-  private lastDeckGrid?: Float32Array;
-  private lastGrid?: Grid;
-  private lastSampleGround?: (x: number, z: number) => number;
+  private lastDeckGrid: Float32Array | undefined;
+  private lastGrid: Grid | undefined;
 
   /**
    * Refresh building heights when the terrain heightfield refines in the background.
    */
   refreshHeights(sampleGround: (x: number, z: number) => number): void {
-    this.lastSampleGround = sampleGround;
     if (this.lastColliders.length > 0) {
       this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround);
     }
@@ -398,7 +439,6 @@ export class BuildingMeshView {
     this.lastColliders = colliders;
     this.lastDeckGrid = deckGrid;
     this.lastGrid = grid;
-    this.lastSampleGround = sampleGround;
 
     this.dispose();
 
