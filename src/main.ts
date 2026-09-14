@@ -170,7 +170,7 @@ const facadeBaker = new FacadeBaker(renderer.renderer, renderer.scene, {
   // the photo wants the raw tiles: no clutter flattening, no snapping
   before: () => { if (clutterFilter) { bakeSaved = { mode: clutterFilter.mode, snap: clutterFilter.snap }; clutterFilter.mode = 'off'; clutterFilter.snap = false; } },
   after: () => { if (clutterFilter && bakeSaved) { clutterFilter.mode = bakeSaved.mode; clutterFilter.snap = bakeSaved.snap; } },
-  onRect: (box, face, r) => buildingMeshView.setFaceRect(box, face, r.x, r.y, r.w, r.h, ATLAS_SIZE)
+  onRect: (box, face, r, pv0) => buildingMeshView.setFaceRect(box, face, r.x, r.y, r.w, r.h, ATLAS_SIZE, pv0)
 });
 let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
 if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;

@@ -29,6 +29,7 @@ attribute vec4 aRectNX;
 attribute vec4 aRectPX;
 attribute vec4 aRectNZ;
 attribute vec4 aRectPZ;
+attribute vec4 aPhotoV0;
 varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
@@ -54,9 +55,12 @@ vLocalNormY = position.y + 0.5;
 // face, -z on +x, -x on -z, +x on +z; v is height
 {
   vec4 rect = normal.x < -0.5 ? aRectNX : normal.x > 0.5 ? aRectPX : normal.z < -0.5 ? aRectNZ : aRectPZ;
+  // the photo may start part way up: below that a flush neighbour hides the face anyway
+  float pv0 = normal.x < -0.5 ? aPhotoV0.x : normal.x > 0.5 ? aPhotoV0.y : normal.z < -0.5 ? aPhotoV0.z : aPhotoV0.w;
   float fu = normal.x < -0.5 ? position.z + 0.5 : normal.x > 0.5 ? 0.5 - position.z : normal.z < -0.5 ? 0.5 - position.x : position.x + 0.5;
-  vAtlasUV = rect.xy + vec2(fu, position.y + 0.5) * rect.zw;
-  vHasRect = (rect.z > 0.0 && abs(normal.y) < 0.5) ? 1.0 : 0.0;
+  float fv = position.y + 0.5;
+  vAtlasUV = rect.xy + vec2(fu, (fv - pv0) / max(0.001, 1.0 - pv0)) * rect.zw;
+  vHasRect = (rect.z > 0.0 && abs(normal.y) < 0.5 && fv >= pv0) ? 1.0 : 0.0;
 }
 `;
 
@@ -211,6 +215,8 @@ export class BuildingMeshView {
   private readonly uAtlas: { value: Texture };
   /** Per-instance atlas rects, four faces, (x, y, w, h) in atlas UV; w = -1 until painted. */
   private rects: InstancedBufferAttribute[] | null = null;
+  /** Per-instance fraction of the box height where each face's photo starts (four faces). */
+  private photoV0: InstancedBufferAttribute | null = null;
 
   // Modern arcade architectural materials
   private readonly buildingMat: MeshStandardMaterial;
@@ -287,11 +293,13 @@ export class BuildingMeshView {
    * A face's photo landed in the atlas: give box `i`'s face its rectangle
    * (texels, atlas `size` square). Face order: -x, +x, -z, +z.
    */
-  setFaceRect(i: number, face: 0 | 1 | 2 | 3, x: number, y: number, w: number, h: number, size: number): void {
+  setFaceRect(i: number, face: 0 | 1 | 2 | 3, x: number, y: number, w: number, h: number, size: number, pv0 = 0): void {
     const attr = this.rects?.[face];
-    if (!attr || i >= attr.count) return;
+    if (!attr || i >= attr.count || !this.photoV0) return;
     attr.setXYZW(i, x / size, y / size, w / size, h / size);
     attr.needsUpdate = true;
+    this.photoV0.setComponent(i, face, pv0);
+    this.photoV0.needsUpdate = true;
   }
 
   get visible(): boolean {
@@ -348,6 +356,8 @@ export class BuildingMeshView {
         geo.setAttribute(name, attr);
         return attr;
       });
+      this.photoV0 = new InstancedBufferAttribute(new Float32Array(count * 4), 4);
+      geo.setAttribute('aPhotoV0', this.photoV0);
       const mesh = new InstancedMesh(geo, this.buildingMat, count);
       mesh.castShadow = false; // Perf: avoid rendering thousands of instances in shadow pass
       mesh.receiveShadow = true;
@@ -503,6 +513,7 @@ export class BuildingMeshView {
       this.buildingMesh.dispose();
       this.buildingMesh = null;
       this.rects = null;
+      this.photoV0 = null;
     }
     if (this.columnMesh) {
       this.group.remove(this.columnMesh);

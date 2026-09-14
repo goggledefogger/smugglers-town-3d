@@ -50,6 +50,8 @@ interface FaceJob {
   readonly width: number; readonly height: number;
   /** how far into the street the camera stands; 0 means an internal face, never baked */
   readonly out: number;
+  /** where the photo starts, as a fraction of the box height: the part below is hidden by a flush neighbour */
+  readonly pv0: number;
   rect: AtlasRect | null;
   done: boolean;
   bakedAt: number;
@@ -65,36 +67,51 @@ export function boxKey(b: BuildingCollider): string {
 /** A neighbour must cover this much of a face's width to count as the box across from it. */
 const BLOCK_COVER = 0.6;
 
+/** Where a face's photo starts (world y) and how far its camera stands out; out 0 = nothing exposed. */
+export interface FaceReach { out: number; bottom: number }
+
 /**
  * How far a wall face may look into the street before it would see the box
- * on the other side: half the gap to the nearest box that covers most of the
- * face's width, capped. 0 for a face another box is flush against
- * (internal). A box covering only a sliver of the face (a stray one-cell
- * column, a narrower strip of the same building) does not count: it would
- * have declared a whole 60 m wall internal, and it simply shows up in the
- * photo as foreground.
+ * on the other side, and from what height the face is exposed at all.
+ * Buildings come out of the collider pass as stacks of 10 m strips of
+ * different heights, so a face another strip is flush against is internal
+ * only up to that strip's roof; above it the face is open air and wants a
+ * photo like any other. Out is half the gap to the nearest box that covers
+ * most of the face's width and reaches above that line, capped. A box
+ * covering only a sliver of the face (a stray one-cell column, a narrower
+ * strip) does not count: it would have declared a whole 60 m wall internal,
+ * and it simply shows up in the photo as foreground.
  */
-export function faceReach(boxes: readonly BuildingCollider[], i: number, face: WallFace): number {
+export function faceReach(boxes: readonly BuildingCollider[], i: number, face: WallFace): FaceReach {
   const a = boxes[i]!;
   const along = face < 2 ? a.max.z - a.min.z : a.max.x - a.min.x;
-  let gap = Infinity;
+  const coverAndGap = (b: BuildingCollider): [number, number] => {
+    if (face === 0 || face === 1) {
+      return [Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z), face === 0 ? a.min.x - b.max.x : b.min.x - a.max.x];
+    }
+    return [Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x), face === 2 ? a.min.z - b.max.z : b.min.z - a.max.z];
+  };
+  // flush neighbours hide the face up to the tallest of their roofs
+  let bottom = a.min.y;
   for (let k = 0; k < boxes.length; k++) {
     if (k === i) continue;
     const b = boxes[k]!;
     if (b.max.y < a.min.y + 1) continue;
-    let g: number, cover: number;
-    if (face === 0 || face === 1) {
-      cover = Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z);
-      g = face === 0 ? a.min.x - b.max.x : b.min.x - a.max.x;
-    } else {
-      cover = Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x);
-      g = face === 2 ? a.min.z - b.max.z : b.min.z - a.max.z;
-    }
-    if (cover < BLOCK_COVER * along) continue;
-    if (g >= -0.01 && g < gap) gap = g;
+    const [cover, g] = coverAndGap(b);
+    if (cover < BLOCK_COVER * along || g < -0.01 || g >= 0.5) continue;
+    bottom = Math.max(bottom, Math.min(b.max.y, a.max.y));
   }
-  if (gap < 0.5) return 0;
-  return Math.min(MAX_OUT_M, Math.max(2, gap / 2));
+  if (bottom >= a.max.y - 2) return { out: 0, bottom: a.max.y };
+  let gap = Infinity;
+  for (let k = 0; k < boxes.length; k++) {
+    if (k === i) continue;
+    const b = boxes[k]!;
+    if (b.max.y < bottom + 1) continue;
+    const [cover, g] = coverAndGap(b);
+    if (cover < BLOCK_COVER * along) continue;
+    if (g >= 0.5 && g < gap) gap = g;
+  }
+  return { out: Math.min(MAX_OUT_M, Math.max(2, gap / 2)), bottom };
 }
 
 /**
@@ -136,8 +153,8 @@ export interface BakerHooks {
   /** turn the clutter filter and snap off for the photo, and back after */
   readonly before: () => void;
   readonly after: () => void;
-  /** a face's photo landed: hand the box mesh its atlas rect (texels) */
-  readonly onRect: (box: number, face: WallFace, rect: AtlasRect) => void;
+  /** a face's photo landed: hand the box mesh its atlas rect (texels) and where on the face it starts */
+  readonly onRect: (box: number, face: WallFace, rect: AtlasRect, pv0: number) => void;
 }
 
 export class FacadeBaker {
@@ -212,16 +229,17 @@ export class FacadeBaker {
       for (let f = 0; f < 4; f++) {
         const face = f as WallFace;
         const along = face < 2 ? b.max.z - b.min.z : b.max.x - b.min.x;
-        const height = b.max.y - b.min.y;
+        const reach = faceReach(boxes, i, face);
+        const height = b.max.y - reach.bottom;
         const cx = face === 0 ? b.min.x : face === 1 ? b.max.x : (b.min.x + b.max.x) / 2;
         const cz = face === 2 ? b.min.z : face === 3 ? b.max.z : (b.min.z + b.max.z) / 2;
         const prev = kept?.find(j => j.face === face);
         const job: FaceJob = {
-          box: i, face, cx, cy: (b.min.y + b.max.y) / 2, cz, width: along, height,
-          out: faceReach(boxes, i, face),
+          box: i, face, cx, cy: (reach.bottom + b.max.y) / 2, cz, width: along, height,
+          out: reach.out, pv0: (reach.bottom - b.min.y) / Math.max(0.1, b.max.y - b.min.y),
           rect: prev?.rect ?? null, done: !!prev, bakedAt: prev?.bakedAt ?? 0
         };
-        if (job.done && job.rect) this.hooks.onRect(i, face, job.rect);
+        if (job.done && job.rect) this.hooks.onRect(i, face, job.rect, job.pv0);
         jobs.push(job);
       }
     }
@@ -267,7 +285,7 @@ export class FacadeBaker {
       this.bake(j);
       j.done = true;
       j.bakedAt = nowMs;
-      this.hooks.onRect(j.box, j.face, j.rect);
+      this.hooks.onRect(j.box, j.face, j.rect, j.pv0);
     }
     // everything painted: refresh the nearest faces slowly so tiles that refined since show up
     if (!began && this.order.length > 0) {
