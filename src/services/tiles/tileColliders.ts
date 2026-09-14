@@ -362,8 +362,10 @@ function windowExtreme(src: Float32Array, n: number, k: number, min: boolean, sk
 }
 
 export const NO_DATA = -Infinity;
-/** A lone one-cell column taller than this (m) that stands beside no deck is a sliver of a carved facade, dropped. */
+/** A lone one-cell column taller than this (m) that stands beside no bridge deck is a sliver of a carved facade, dropped. */
 const ISOLATED_COLUMN_MAX_M = 20;
+/** Deck cells in the 5x5 around a lone column that still read as a bridge ribbon rather than a plaza. */
+const TOWER_DECK_MAX_CELLS = 10;
 
 /**
  * Ground level under the photogrammetry surface: a morphological opening
@@ -1264,15 +1266,19 @@ export function collidersFromRasters(
     const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
     // a lone tall cell is a sliver of a facade the road carve cut into pieces (three stood
     // in a line across a park lawn): a phantom. A bridge tower is lone and tall too, but it
-    // stands within two cells of its deck or ramp; nothing else that tall is one cell wide
+    // stands within two cells of its deck ribbon; nothing else that tall is one cell wide
     if (isIsolatedColumn && b.max.y - b.min.y > ISOLATED_COLUMN_MAX_M) {
-      let byDeck = false;
-      for (let dj = -2; dj <= 2 && !byDeck; dj++) {
+      // a bridge deck is a ribbon at most two cells wide, so it fills at most ten of the
+      // 25 cells around a tower; an elevated plaza misread as deck fills far more, and a
+      // lone column beside one is as phantom as the plaza
+      let deckCells = 0;
+      for (let dj = -2; dj <= 2; dj++) {
         for (let di = -2; di <= 2; di++) {
           const i = i0 + di, j = j0 + dj;
-          if (i >= 0 && i < n && j >= 0 && j < n && (isDeck[j * n + i] || isRamp[j * n + i])) { byDeck = true; break; }
+          if (i >= 0 && i < n && j >= 0 && j < n && (isDeck[j * n + i] || isRamp[j * n + i])) deckCells++;
         }
       }
+      const byDeck = deckCells > 0 && deckCells <= TOWER_DECK_MAX_CELLS;
       if (!byDeck) {
         dropped.add(b);
         continue;
