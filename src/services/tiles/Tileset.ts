@@ -500,26 +500,38 @@ export class TileStreamer {
   }
 
   private roadsPromise: Promise<void> | null = null;
+  private roadRetryTimer: ReturnType<typeof setTimeout> | null = null;
+  private roadRetryMs = 20000;
 
   private async loadRoads(): Promise<void> {
     if (this.roadsPromise) return this.roadsPromise;
     const origin = this.origin;
     this.roadsPromise = (async () => {
+      let polys: Awaited<ReturnType<typeof fetchRoadPolylines>> = null;
       try {
-        const polys = await fetchRoadPolylines({
+        polys = await fetchRoadPolylines({
           lat: origin.lat, lon: origin.lon,
           halfM: this.grid.half
         });
-        if (polys) {
-          this.roadPolys = polys;
-          const th = thresholdsForMode(this.currentExperiment);
-          this.roadGrid = rasterizeRoads(polys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
-          this.dirty = true;
-          this.onRoadsLoaded?.();
-        }
       } catch (e) {
         log.warn('road mask failed', e);
       }
+      if (polys) {
+        this.roadPolys = polys;
+        const th = thresholdsForMode(this.currentExperiment);
+        this.roadGrid = rasterizeRoads(polys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
+        this.dirty = true;
+        this.onRoadsLoaded?.();
+        return;
+      }
+      // Overpass is down for hours at a time, and without the corridor mask whole blocks
+      // merge into one collider: keep asking, backing off to two minutes, until it answers
+      this.roadRetryTimer = setTimeout(() => {
+        this.roadRetryTimer = null;
+        this.roadsPromise = null;
+        void this.loadRoads();
+      }, this.roadRetryMs);
+      this.roadRetryMs = Math.min(120000, this.roadRetryMs * 2);
     })();
     return this.roadsPromise;
   }
@@ -861,6 +873,8 @@ export class TileStreamer {
   }
 
   dispose(): void {
+    if (this.roadRetryTimer) clearTimeout(this.roadRetryTimer);
+    this.roadRetryTimer = null;
     for (const t of this.tiles) disposeTiles(t.group);
     this.tiles.length = 0;
     this.group.clear();

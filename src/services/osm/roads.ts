@@ -16,6 +16,7 @@
  * exactly as before.
  */
 import { logger } from '../../app/log.ts';
+import { tileCache } from '../tiles/TileCache.ts';
 
 const log = logger('osm-roads');
 
@@ -106,6 +107,13 @@ export async function fetchRoadPolylines(
   const { lat, lon, halfM } = input;
   const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(halfM)}`;
   if (cacheKey === roadCache.key) return roadCache.polys;
+  // Overpass is down for hours at a time: a place fetched once lives in the tile cache
+  const stored = await readStoredRoads(cacheKey);
+  if (stored) {
+    roadCache.key = cacheKey;
+    roadCache.polys = stored;
+    return stored;
+  }
   const dLat = (halfM / 111_320) * 1.05;
   const cosLat = Math.max(0.0001, Math.cos((lat * Math.PI) / 180));
   const dLon = (halfM / (111_320 * cosLat)) * 1.05;
@@ -165,6 +173,7 @@ export async function fetchRoadPolylines(
   log.info('osm roads fetched', { ways: out.length, bbox });
   roadCache.key = cacheKey;
   roadCache.polys = out;
+  void tileCache.putJson(ROAD_CACHE_URL + cacheKey, out).catch(() => {});
   return out;
 }
 
@@ -172,6 +181,20 @@ const roadCache: { key: string; polys: { east: number; north: number; widthM: nu
   key: '',
   polys: null
 };
+
+/** Synthetic URL the road polylines are filed under in the tile cache (CacheStorage keys are URLs). */
+const ROAD_CACHE_URL = 'https://osm.local/roads/';
+
+async function readStoredRoads(cacheKey: string): Promise<{ east: number; north: number; widthM: number }[][] | null> {
+  try {
+    const buf = await tileCache.getBuffer(ROAD_CACHE_URL + cacheKey);
+    if (!buf) return null;
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(buf));
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : null;
+  } catch {
+    return null;
+  }
+}
 
 function wayWidthM(tags: Record<string, string> | undefined): number {
   if (!tags) return DEFAULT_WIDTH_M;
