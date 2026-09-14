@@ -29,7 +29,10 @@ const out = await page.evaluate(([px, pz]) => {
   const boxes = window.__buildingMeshView.lastColliders;
   const grid = window.__tiles.grid;
   const f = window.__clutterFilter;
-  const ids = f.uSnapIds.value.image.data, n = f.uSnapIds.value.image.width;
+  const idData = f.uSnapIds.value.image.data, n = f.uSnapIds.value.image.width;
+  // RG texels: id + 1 in .r, OSM road flag in .g
+  const ids = new Float32Array(n * n);
+  for (let c = 0; c < n * n; c++) ids[c] = idData[c * 2];
   const hf = window.__game.terrainProvider?.heightfield;
   const near = [];
   boxes.forEach((bx, k) => {
@@ -42,7 +45,9 @@ const out = await page.evaluate(([px, pz]) => {
   const snapV = (x, y, z) => {
     const ci = Math.floor((x + grid.half) / grid.cell), cj = Math.floor((z + grid.half) / grid.cell);
     const rise = hf ? y - hf.sample(x, z) : 99;
-    const tolOut = rise < 2.5 ? 4 : grid.cell * 1.5;
+    const road = window.__tiles.roadGrid?.mask;
+    if (rise < 2.5 && road && road[cj * n + ci] === 1) return { bestK: -1, face: '' };
+    const tolOut = grid.cell * 2.5, tolIn = grid.cell * 1.5;
     let best = 1e9, bestK = -1, face = '';
     for (let oy = -1; oy <= 1; oy++) for (let ox = -1; ox <= 1; ox++) {
       const i = Math.min(n - 1, Math.max(0, ci + ox)), j = Math.min(n - 1, Math.max(0, cj + oy));
@@ -52,8 +57,8 @@ const out = await page.evaluate(([px, pz]) => {
       const dW = bx.min.x - x, dE = x - bx.max.x, dS = bx.min.z - z, dN = z - bx.max.z, dT = y - bx.max.y;
       const inX = x > bx.min.x - tolOut && x < bx.max.x + tolOut, inZ = z > bx.min.z - tolOut && z < bx.max.z + tolOut, inY = y > bx.min.y && y < bx.max.y + 1;
       const pen = Math.min(bx.max.x - bx.min.x, bx.max.z - bx.min.z) < 6 ? grid.cell : 0;
-      for (const [ok, dd, fc] of [[inZ && inY, dW, 'W'], [inZ && inY, dE, 'E'], [inX && inY, dS, 'S'], [inX && inY, dN, 'N'], [inX && inZ && dT < 4, dT, 'T']]) {
-        if (ok && dd > -grid.cell && dd < tolOut && Math.abs(dd) + pen < best) { best = Math.abs(dd) + pen; bestK = sid; face = fc; }
+      for (const [ok, dd, fc] of [[inZ && inY, dW, 'W'], [inZ && inY, dE, 'E'], [inX && inY, dS, 'S'], [inX && inY, dN, 'N'], [inX && inZ && dT > -4 && dT < 4, dT, 'T']]) {
+        if (ok && dd > -tolIn && dd < tolOut && Math.abs(dd) + pen < best) { best = Math.abs(dd) + pen; bestK = sid; face = fc; }
       }
     }
     return { bestK, face };

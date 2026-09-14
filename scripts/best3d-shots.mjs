@@ -3,6 +3,7 @@
 //
 //   node scripts/best3d-shots.mjs <outdir>          # SF Financial District
 //   LAT=.. LON=.. node scripts/best3d-shots.mjs out
+//   TINT=1 tints snapped tile fragments green (diagnostic)
 // Needs the dev server (E2E_URL, default :5176) and .sm-key.txt.
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -81,7 +82,7 @@ console.log('teleport', JSON.stringify(landed));
 await page.waitForTimeout(10000);
 
 const shot = async name => { await page.screenshot({ path: `${OUT}/${name}.png` }); console.log('shot', name); };
-const mode = async m => { await page.evaluate(m => window.__setViewMode(m), m); await page.waitForTimeout(1500); };
+const mode = async m => { await page.evaluate(m => window.__setViewMode(m), m); await page.evaluate(t => { if (window.__clutterFilter) window.__clutterFilter.debugTint = t; }, !!process.env.TINT); await page.waitForTimeout(1500); };
 
 const heading = async yaw => {
   await page.evaluate(y => {

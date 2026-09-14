@@ -17,6 +17,9 @@
  */
 import { logger } from '../../app/log.ts';
 import { tileCache } from '../tiles/TileCache.ts';
+import { latLonToWorldPixel, type RoadRaster } from '../maps/MapsApi.ts';
+import { worldToLl } from '../../core/geo/projection.ts';
+import { EARTH_RADIUS_M, type GeoOrigin } from '../../core/geo/ecef.ts';
 
 const log = logger('osm-roads');
 
@@ -86,9 +89,14 @@ export interface RoadMaskInput {
   readonly halfM: number;
 }
 
+// Overpass is the fallback behind the Google road raster (docs/ROAD-MASK.md); public
+// mirrors go down for hours at a time, so ask several run by different operators
 const OVERPASS_ENDPOINTS = [
   'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+  'https://overpass.osm.ch/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter'
 ] as const;
 // Kumi rate-limits requests without one (429); a meaningful UA is standard
 // practice for OSM API consumers anyway
@@ -102,7 +110,7 @@ const USER_AGENT = 'smugglers-town-3d/0.1 (game map pipeline; github.com/goggled
  */
 export async function fetchRoadPolylines(
   input: RoadMaskInput,
-  timeoutMs = 20000
+  timeoutMs = 40000
 ): Promise<{ east: number; north: number; widthM: number }[][] | null> {
   const { lat, lon, halfM } = input;
   const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(halfM)}`;
@@ -217,6 +225,48 @@ export interface RoadGrid {
   readonly n: number;
   /** n*n, 1 where a road corridor covers the cell centre. */
   readonly mask: Uint8Array;
+}
+
+/**
+ * The same grid from the Google road raster (the primary source, see
+ * docs/ROAD-MASK.md): a cell is road when any road pixel lies within
+ * `reachSlackMultiplier` cells of its centre. Road widths come from the map
+ * style's stroke weights, so the slack is the only knob left; the Overpass
+ * path adds it to each way's tagged half-width the same way.
+ */
+export function rasterizeRoadRaster(
+  raster: RoadRaster,
+  grid: { cell: number; half: number; n: number },
+  origin: { lat: number; lon: number },
+  reachSlackMultiplier = 0.5
+): RoadGrid {
+  const { cell, half, n } = grid;
+  const mask = new Uint8Array(n * n);
+  const cosLat = Math.max(0.2, Math.cos((origin.lat * Math.PI) / 180));
+  const metersPerPx = (2 * Math.PI * EARTH_RADIUS_M * cosLat) / (256 * Math.pow(2, raster.zoom)) / raster.scale;
+  const r = Math.max(1, Math.ceil((reachSlackMultiplier * cell) / metersPerPx));
+  for (let j = 0; j < n; j++) {
+    const cz = -half + (j + 0.5) * cell;
+    for (let i = 0; i < n; i++) {
+      const cx = -half + (i + 0.5) * cell;
+      const { lat, lon } = worldToLl(cx, cz, origin as GeoOrigin);
+      const wp = latLonToWorldPixel(lat, lon, raster.zoom);
+      const px = Math.round((wp.x - raster.left) * raster.scale);
+      const py = Math.round((wp.y - raster.top) * raster.scale);
+      let hit = 0;
+      for (let dy = -r; dy <= r && !hit; dy++) {
+        const y = py + dy;
+        if (y < 0 || y >= raster.h) continue;
+        for (let dx = -r; dx <= r; dx++) {
+          const x = px + dx;
+          if (x < 0 || x >= raster.w) continue;
+          if (raster.pixels[y * raster.w + x]) { hit = 1; break; }
+        }
+      }
+      mask[j * n + i] = hit;
+    }
+  }
+  return { cell, half, n, mask };
 }
 
 /**

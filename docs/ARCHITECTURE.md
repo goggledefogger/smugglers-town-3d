@@ -379,9 +379,11 @@ From this raster, two physical surfaces are extracted:
    Neighbor-aware horizontal insetting insets exterior street faces by 1.0 m to
    prevent 10 m raster quantization from protruding into street lanes, while
    keeping internal touching faces 100% flush.
-4. **OSM Road Corridors (`services/osm/roads.ts`)**: In hilly cities, morphological
+4. **Road Corridors (`services/osm/roads.ts`, see `docs/ROAD-MASK.md`)**: In hilly cities, morphological
    opening sags by up to 17 m across crests, misclassifying streets as buildings.
-   Drivable OpenStreetMap road centrelines fetched via Overpass are rasterized
+   The road network is taken from a Google Static Maps roadmap styled down to road
+   fills (thresholded to a raster), with drivable OpenStreetMap centrelines from
+   Overpass as the fallback, and rasterized
    into a `roadMask` grid with reach-aware bounding box clearance (`halfWidth + cellSize * 0.85`).
    Road cells are exempt from building classification, and their driving ground height in
    `AmortizedGroundBuilder` is pinned directly to the true surface (`Math.min(top, low)`)

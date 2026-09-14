@@ -161,16 +161,58 @@ export function worldPixelToLatLon(x: number, y: number, zoom: number): { lat: n
   return { lat, lon };
 }
 
-export async function fetchSatellite(
+/**
+ * A Static Maps roadmap styled down to the road network alone: white road
+ * fills on black, everything else (labels, water, parks, transit, borders)
+ * hidden. Thresholded, that image is a road mask; see docs/ROAD-MASK.md for
+ * why this replaced Overpass. Weights are stroke widths in map pixels at
+ * scale 1 (zoom 15 downtown is about 3.8 m per pixel), so a highway is drawn
+ * about 23 m wide, an arterial 15 m, a local street 11 m.
+ */
+export function roadsUrl(
+  lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 1
+): string {
+  const styles = [
+    'feature:all|element:labels|visibility:off',
+    'feature:all|element:geometry|color:0x000000',
+    'feature:administrative|visibility:off',
+    'feature:poi|visibility:off',
+    'feature:transit|visibility:off',
+    'feature:landscape|element:geometry|color:0x000000',
+    'feature:water|element:geometry|color:0x000000',
+    'feature:road|element:geometry.stroke|visibility:off',
+    'feature:road|element:geometry.fill|visibility:on|color:0xffffff|weight:3',
+    'feature:road.arterial|element:geometry.fill|weight:4',
+    'feature:road.highway|element:geometry.fill|weight:6'
+  ];
+  return 'https://maps.googleapis.com/maps/api/staticmap'
+    + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}&scale=${scale}&maptype=roadmap`
+    + styles.map(s => '&style=' + encodeURIComponent(s)).join('')
+    + `&key=${encodeURIComponent(apiKey)}`;
+}
+
+/** A stitched 3x3 grid of Static Maps tiles; `left`/`top` are the canvas origin in Web Mercator world pixels at `zoom`. */
+export interface StaticGrid {
+  readonly canvas: HTMLCanvasElement;
+  readonly zoom: number;
+  readonly scale: number;
+  readonly left: number;
+  readonly top: number;
+}
+
+/**
+ * Stitch a 3x3 grid of 640 px Static Maps tiles at zoom 15 into one canvas
+ * using exact Web Mercator pixel alignment: neighbouring tile centres are
+ * exactly 640 world pixels apart, so there is no gap and no overlap. About
+ * 7 km across downtown, covering the 5.6 km field.
+ */
+export async function fetchStaticGrid(
   lat: number,
   lon: number,
-  apiKey: string,
-  scale = 2
-): Promise<HTMLCanvasElement> {
-  // Stitch a 3x3 grid of Static Maps satellite tiles into one contiguous canvas using
-  // exact Web Mercator pixel alignment.
-  // Each tile is 640x640 at zoom 15. In Web Mercator pixel space, neighboring tiles
-  // are separated by EXACTLY 640 pixels, guaranteeing 0-pixel gap and 0-pixel overlap.
+  scale: number,
+  urlFor: (tileLat: number, tileLon: number) => string,
+  what = 'Static Maps'
+): Promise<StaticGrid> {
   const TILE = 640, GRID = 3, zoom = 15;
   const tilePx = TILE * scale;
   const centerPix = latLonToWorldPixel(lat, lon, zoom);
@@ -185,7 +227,7 @@ export async function fetchSatellite(
     img.crossOrigin = 'anonymous';
     const timer = setTimeout(() => {
       img.src = '';
-      rej(new Error('Satellite image request timed out (check Static Maps API enabled)'));
+      rej(new Error(`${what} image request timed out (check Static Maps API enabled)`));
     }, 10000);
     img.onload = () => {
       clearTimeout(timer);
@@ -193,7 +235,7 @@ export async function fetchSatellite(
     };
     img.onerror = () => {
       clearTimeout(timer);
-      rej(new Error('satellite tile load failed (check Static Maps API enabled)'));
+      rej(new Error(`${what} tile load failed (check Static Maps API enabled)`));
     };
     img.src = url;
   });
@@ -205,11 +247,45 @@ export async function fetchSatellite(
       const tilePixX = centerPix.x + (c - 1) * TILE;
       const tilePixY = centerPix.y + (r - 1) * TILE;
       const { lat: tileLat, lon: tileLon } = worldPixelToLatLon(tilePixX, tilePixY, zoom);
-      rowPromises.push(loadImg(satelliteUrl(tileLat, tileLon, apiKey, zoom, TILE, TILE, scale)));
+      rowPromises.push(loadImg(urlFor(tileLat, tileLon)));
     }
     const imgs = await Promise.all(rowPromises);
     for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * tilePx, r * tilePx, tilePx, tilePx);
   }
+  return { canvas, zoom, scale, left: centerPix.x - 1.5 * TILE, top: centerPix.y - 1.5 * TILE };
+}
+
+/** The road network around (lat, lon) as a 1-bit raster: 1 = road, from the styled roadmap. */
+export interface RoadRaster {
+  readonly pixels: Uint8Array;
+  readonly w: number;
+  readonly h: number;
+  readonly zoom: number;
+  readonly scale: number;
+  /** canvas origin in Web Mercator world pixels at `zoom` */
+  readonly left: number;
+  readonly top: number;
+}
+
+export async function fetchRoadRaster(lat: number, lon: number, apiKey: string): Promise<RoadRaster> {
+  if (typeof document === 'undefined') throw new Error('road raster needs a browser canvas');
+  const g = await fetchStaticGrid(lat, lon, 1, (la, lo) => roadsUrl(la, lo, apiKey, 15, 640, 640, 1), 'Roads');
+  const { width: w, height: h } = g.canvas;
+  const data = g.canvas.getContext('2d')!.getImageData(0, 0, w, h).data;
+  const pixels = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) pixels[i] = data[i * 4]! > 128 ? 1 : 0;
+  return { pixels, w, h, zoom: g.zoom, scale: g.scale, left: g.left, top: g.top };
+}
+
+export async function fetchSatellite(
+  lat: number,
+  lon: number,
+  apiKey: string,
+  scale = 2
+): Promise<HTMLCanvasElement> {
+  const zoom = 15;
+  const { canvas } = await fetchStaticGrid(lat, lon, scale, (la, lo) => satelliteUrl(la, lo, apiKey, zoom, 640, 640, scale), 'Satellite');
+  const tilePx = 640 * scale, GRID = 3;
 
   // Crop the stitched canvas to match the exact 5600m x 5600m world bounds centered at (lat, lon)
   const cosLat = Math.max(0.2, Math.cos((lat * Math.PI) / 180));

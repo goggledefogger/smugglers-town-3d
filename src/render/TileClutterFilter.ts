@@ -220,12 +220,18 @@ mvPosition.xyz += (viewMatrix * vec4(cSnapDelta.x, cClutterDy + cSnapDelta.y, cS
 gl_Position = projectionMatrix * mvPosition;
 `;
 
+/** Diagnostic tint, after tone mapping so it survives as pure green: snapped fragments only. */
+const FRAGMENT_DEBUG = `
+if (uSnapDebug > 0.5 && vSnapped > 0.999) gl_FragColor.rgb = mix(gl_FragColor.rgb, vec3(0.0, 1.0, 0.0), 0.6);
+`;
+
 const FRAGMENT_PARS = `
 uniform sampler2D uClutterMask;
 uniform vec2 uClutterField;
 uniform float uClutterMode;
 uniform float uClutterRise;
 uniform float uSnap;
+uniform float uSnapDebug;
 varying vec3 vClutterWorldPos;
 varying float vClutterRiseVal;
 varying float vClutterStructure;
@@ -353,6 +359,16 @@ export class TileClutterFilter {
   private readonly uSnap = { value: 0 };
   private readonly uSnapIn = { value: 10 };
   private readonly uSnapTop = { value: 1 };
+  private readonly uSnapDebug = { value: 0 };
+
+  /** Diagnostic: tint snapped tile fragments green so they can be told from the box fill. */
+  get debugTint(): boolean {
+    return this.uSnapDebug.value > 0.5;
+  }
+
+  set debugTint(on: boolean) {
+    this.uSnapDebug.value = on ? 1 : 0;
+  }
   private readonly uSnapIds: { value: DataTexture };
   private readonly uSnapBoxes: { value: DataTexture };
 
@@ -472,6 +488,7 @@ export class TileClutterFilter {
     shader.uniforms.uSnap = this.uSnap;
     shader.uniforms.uSnapIn = this.uSnapIn;
     shader.uniforms.uSnapTop = this.uSnapTop;
+    shader.uniforms.uSnapDebug = this.uSnapDebug;
     shader.uniforms.uSnapIds = this.uSnapIds;
     shader.uniforms.uSnapBoxes = this.uSnapBoxes;
     const lit = shader.vertexShader.includes('#include <normal_pars_vertex>');
@@ -479,7 +496,8 @@ export class TileClutterFilter {
       .replace('#include <begin_vertex>', '#include <begin_vertex>' + VERTEX_BODY + VERTEX_SNAP + (lit ? VERTEX_NORMAL : ''))
       .replace('#include <project_vertex>', '#include <project_vertex>' + VERTEX_PROJECT);
     shader.fragmentShader = FRAGMENT_PARS + shader.fragmentShader
-      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + FRAGMENT_CUT);
+      .replace('#include <clipping_planes_fragment>', '#include <clipping_planes_fragment>' + FRAGMENT_CUT)
+      .replace('#include <dithering_fragment>', '#include <dithering_fragment>' + FRAGMENT_DEBUG);
   }
 
   dispose(): void {

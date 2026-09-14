@@ -1,4 +1,6 @@
-import { rasterizeRoads, isDrivableWay } from '../src/services/osm/roads.ts';
+import { rasterizeRoads, rasterizeRoadRaster, isDrivableWay } from '../src/services/osm/roads.ts';
+import { latLonToWorldPixel } from '../src/services/maps/MapsApi.ts';
+import { worldToLl } from '../src/core/geo/projection.ts';
 import {
   collidersFromRasters, groundField, type TileRaster
 } from '../src/services/tiles/tileColliders.ts';
@@ -47,6 +49,28 @@ describe('rasterizeRoads', () => {
     const roads = rasterizeRoads([line([[-99999, 99999], [99999, -99999]], 20)], grid);
     expect(roads.mask.length).toBe(N * N);
     expect(roads.mask[0 * N + 0]).toBe(1);
+  });
+});
+
+describe('rasterizeRoadRaster', () => {
+  it('marks the cells under a white road stripe in the styled raster and no others', () => {
+    // a 3x3 grid of 640 px zoom-15 tiles centred on the origin, like fetchRoadRaster builds
+    const origin = { lat: 37.7929, lon: -122.403 };
+    const zoom = 15, w = 1920, h = 1920;
+    const c = latLonToWorldPixel(origin.lat, origin.lon, zoom);
+    const left = c.x - 960, top = c.y - 960;
+    const pixels = new Uint8Array(w * h);
+    // paint a north-south road 3 px wide through world x = 105 m (cell i = 40 on this 60-cell grid)
+    const at = worldToLl(105, 0, origin as never);
+    const rx = Math.round(latLonToWorldPixel(at.lat, at.lon, zoom).x - left);
+    for (let y = 0; y < h; y++) for (let x = rx - 1; x <= rx + 1; x++) pixels[y * w + x] = 1;
+    const rg = rasterizeRoadRaster({ pixels, w, h, zoom, scale: 1, left, top }, grid, origin, 0.5);
+    const row = 30;
+    expect(rg.mask[row * N + 40]).toBe(1);
+    expect(rg.mask[row * N + 41]).toBe(1); // 5 m slack reaches the next cell centre
+    expect(rg.mask[row * N + 38]).toBe(0);
+    expect(rg.mask[row * N + 43]).toBe(0);
+    expect(rg.mask[5 * N + 40]).toBe(1); // the whole column, not just one row
   });
 });
 

@@ -31,7 +31,8 @@ import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
-import { fetchRoadPolylines, rasterizeRoads, type RoadGrid } from '../osm/roads.ts';
+import { fetchRoadPolylines, rasterizeRoads, rasterizeRoadRaster, type RoadGrid } from '../osm/roads.ts';
+import { fetchRoadRaster, type RoadRaster } from '../maps/MapsApi.ts';
 import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
@@ -375,6 +376,7 @@ export class TileStreamer {
   onRoadsLoaded: (() => void) | null = null;
   private currentExperiment: ColliderExperimentMode = 'baseline';
   private roadPolys: { east: number; north: number; widthM: number }[][] | null = null;
+  private roadRaster: RoadRaster | null = null;
   private resolutionMode: Resolution3DMode = 'balanced';
   private lod: LodPolicy = STREAM_LOD;
   private maxTiles = MAX_TILES;
@@ -507,19 +509,29 @@ export class TileStreamer {
     if (this.roadsPromise) return this.roadsPromise;
     const origin = this.origin;
     this.roadsPromise = (async () => {
-      let polys: Awaited<ReturnType<typeof fetchRoadPolylines>> = null;
+      const th = thresholdsForMode(this.currentExperiment);
+      const slack = th.roadReachSlackMultiplier ?? 0.5;
+      let grid: RoadGrid | null = null;
+      // primary: the road network drawn by Google Static Maps, same key and uptime as the
+      // imagery; fallback: OSM ways from Overpass (docs/ROAD-MASK.md)
       try {
-        polys = await fetchRoadPolylines({
-          lat: origin.lat, lon: origin.lon,
-          halfM: this.grid.half
-        });
+        this.roadRaster = await fetchRoadRaster(origin.lat, origin.lon, this.apiKey);
+        grid = rasterizeRoadRaster(this.roadRaster, this.grid, origin, slack);
+        log.info('road mask from google roadmap');
       } catch (e) {
-        log.warn('road mask failed', e);
+        log.warn('google road raster failed, trying overpass', String(e).slice(0, 120));
+        try {
+          const polys = await fetchRoadPolylines({ lat: origin.lat, lon: origin.lon, halfM: this.grid.half });
+          if (polys) {
+            this.roadPolys = polys;
+            grid = rasterizeRoads(polys, this.grid, slack);
+          }
+        } catch (e2) {
+          log.warn('road mask failed', e2);
+        }
       }
-      if (polys) {
-        this.roadPolys = polys;
-        const th = thresholdsForMode(this.currentExperiment);
-        this.roadGrid = rasterizeRoads(polys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
+      if (grid) {
+        this.roadGrid = grid;
         this.dirty = true;
         this.onRoadsLoaded?.();
         return;
@@ -600,7 +612,9 @@ export class TileStreamer {
         t.raster = rasterizeTile(t.group, this.grid);
       }
     }
-    if (this.roadPolys) {
+    if (this.roadRaster) {
+      this.roadGrid = rasterizeRoadRaster(this.roadRaster, this.grid, this.origin, th.roadReachSlackMultiplier ?? 0.5);
+    } else if (this.roadPolys) {
       this.roadGrid = rasterizeRoads(this.roadPolys, this.grid, th.roadReachSlackMultiplier ?? 0.5);
     } else if (mode === 'road_carve') {
       void this.loadRoads();
