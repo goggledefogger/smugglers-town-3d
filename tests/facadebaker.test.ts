@@ -19,6 +19,13 @@ describe('faceReach', () => {
     const boxes = [box(0, 0, 20, 20), box(30, 40, 50, 60)];
     expect(faceReach(boxes, 0, 1)).toBe(25);
   });
+
+  it('a sliver touching a wide face does not make the face internal', () => {
+    // a 4 m column flush against a 60 m wall, and a narrower strip of the same building
+    const boxes = [box(0, 0, 60, 10), box(28, 10, 32, 14), box(0, -10, 40, 0)];
+    expect(faceReach(boxes, 0, 3)).toBe(25); // +z face: the column covers 4 of 60 m
+    expect(faceReach(boxes, 0, 2)).toBe(0);  // -z face: the strip covers 40 of 60 m, flush
+  });
 });
 
 describe('ShelfPacker', () => {

@@ -362,6 +362,8 @@ function windowExtreme(src: Float32Array, n: number, k: number, min: boolean, sk
 }
 
 export const NO_DATA = -Infinity;
+/** A lone one-cell column taller than this (m) that stands beside no deck is a sliver of a carved facade, dropped. */
+const ISOLATED_COLUMN_MAX_M = 20;
 
 /**
  * Ground level under the photogrammetry surface: a morphological opening
@@ -1230,6 +1232,7 @@ export function collidersFromRasters(
   // buildings are solid with zero gaps, zero cracks, and zero isolated pillars.
   // Freestanding 1-cell columns (isolated piers/towers with no building neighbors on all 4 sides)
   // get a 2.8m inset to snugly hug structural supports.
+  const dropped = new Set<BuildingCollider>();
   for (const { b, i0, i1, j0, j1 } of boxes) {
     let touchSouth = false;
     if (j0 > 0) {
@@ -1259,6 +1262,22 @@ export function collidersFromRasters(
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
     const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
+    // a lone tall cell is a sliver of a facade the road carve cut into pieces (three stood
+    // in a line across a park lawn): a phantom. A bridge tower is lone and tall too, but it
+    // stands within two cells of its deck or ramp; nothing else that tall is one cell wide
+    if (isIsolatedColumn && b.max.y - b.min.y > ISOLATED_COLUMN_MAX_M) {
+      let byDeck = false;
+      for (let dj = -2; dj <= 2 && !byDeck; dj++) {
+        for (let di = -2; di <= 2; di++) {
+          const i = i0 + di, j = j0 + dj;
+          if (i >= 0 && i < n && j >= 0 && j < n && (isDeck[j * n + i] || isRamp[j * n + i])) { byDeck = true; break; }
+        }
+      }
+      if (!byDeck) {
+        dropped.add(b);
+        continue;
+      }
+    }
     const insetMax = isIsolatedColumn ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
     const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
     const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
@@ -1269,7 +1288,7 @@ export function collidersFromRasters(
     if (!touchNorth) b.max.z -= insetZ;
   }
 
-  return boxes.map(e => e.b);
+  return boxes.filter(e => !dropped.has(e.b)).map(e => e.b);
 }
 
 /** Colliders straight from a group of meshes (tests and one-shot use). */

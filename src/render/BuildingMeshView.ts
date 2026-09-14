@@ -151,6 +151,50 @@ export function anchorCollider(
   };
 }
 
+/** A deck island this small that never comes down to the ground is a canopy or skybridge: not drawn. */
+const DECK_ISLAND_MAX_CELLS = 12;
+
+/**
+ * Which deck cells to draw: every cell of a 4-connected deck component that
+ * either touches ground level somewhere (a ramp) or is bigger than a canopy.
+ * The physics keeps all of them; a slab the car can never reach is only
+ * ever seen, and downtown it is seen as a square floating over the street.
+ */
+export function reachableDecks(
+  deckGrid: Float32Array,
+  grid: Grid,
+  sampleGround?: (x: number, z: number) => number
+): Uint8Array {
+  const { n, cell, half } = grid;
+  const drawn = new Uint8Array(n * n);
+  if (!sampleGround) {
+    for (let c = 0; c < n * n; c++) drawn[c] = deckGrid[c] !== NO_DATA ? 1 : 0;
+    return drawn;
+  }
+  const seen = new Uint8Array(n * n);
+  const comp: number[] = [];
+  for (let s0 = 0; s0 < n * n; s0++) {
+    if (seen[s0] || deckGrid[s0] === NO_DATA) continue;
+    comp.length = 0;
+    comp.push(s0);
+    seen[s0] = 1;
+    let grounded = false;
+    for (let q = 0; q < comp.length; q++) {
+      const c = comp[q]!;
+      const i = c % n, j = Math.floor(c / n);
+      if (deckGrid[c]! <= sampleGround(-half + (i + 0.5) * cell, -half + (j + 0.5) * cell) + 1.5) grounded = true;
+      const nbs = [i > 0 ? c - 1 : -1, i < n - 1 ? c + 1 : -1, c - n, c + n];
+      for (const nb of nbs) {
+        if (nb < 0 || nb >= n * n || seen[nb] || deckGrid[nb] === NO_DATA) continue;
+        seen[nb] = 1;
+        comp.push(nb);
+      }
+    }
+    if (grounded || comp.length > DECK_ISLAND_MAX_CELLS) for (const c of comp) drawn[c] = 1;
+  }
+  return drawn;
+}
+
 export class BuildingMeshView {
   readonly group = new Group();
   private buildingMesh: InstancedMesh | null = null;
@@ -349,9 +393,10 @@ export class BuildingMeshView {
     // 2. Build elevated bridge decks and ramps from deckGrid
     if (deckGrid && grid) {
       const { n, cell, half } = grid;
+      const drawn = reachableDecks(deckGrid, grid, sampleGround);
       const deckIndices: number[] = [];
       for (let c = 0; c < n * n; c++) {
-        if (deckGrid[c] !== NO_DATA) deckIndices.push(c);
+        if (deckGrid[c] !== NO_DATA && drawn[c]) deckIndices.push(c);
       }
 
       if (deckIndices.length > 0) {

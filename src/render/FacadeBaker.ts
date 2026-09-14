@@ -62,26 +62,35 @@ export function boxKey(b: BuildingCollider): string {
   return `${b.min.x.toFixed(1)},${b.min.y.toFixed(1)},${b.min.z.toFixed(1)}|${b.max.x.toFixed(1)},${b.max.y.toFixed(1)},${b.max.z.toFixed(1)}`;
 }
 
+/** A neighbour must cover this much of a face's width to count as the box across from it. */
+const BLOCK_COVER = 0.6;
+
 /**
  * How far a wall face may look into the street before it would see the box
- * on the other side: half the gap to the nearest box that overlaps it
- * across, capped. 0 for a face another box is flush against (internal).
+ * on the other side: half the gap to the nearest box that covers most of the
+ * face's width, capped. 0 for a face another box is flush against
+ * (internal). A box covering only a sliver of the face (a stray one-cell
+ * column, a narrower strip of the same building) does not count: it would
+ * have declared a whole 60 m wall internal, and it simply shows up in the
+ * photo as foreground.
  */
 export function faceReach(boxes: readonly BuildingCollider[], i: number, face: WallFace): number {
   const a = boxes[i]!;
+  const along = face < 2 ? a.max.z - a.min.z : a.max.x - a.min.x;
   let gap = Infinity;
   for (let k = 0; k < boxes.length; k++) {
     if (k === i) continue;
     const b = boxes[k]!;
     if (b.max.y < a.min.y + 1) continue;
-    let g: number;
+    let g: number, cover: number;
     if (face === 0 || face === 1) {
-      if (b.max.z <= a.min.z || b.min.z >= a.max.z) continue;
+      cover = Math.min(a.max.z, b.max.z) - Math.max(a.min.z, b.min.z);
       g = face === 0 ? a.min.x - b.max.x : b.min.x - a.max.x;
     } else {
-      if (b.max.x <= a.min.x || b.min.x >= a.max.x) continue;
+      cover = Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x);
       g = face === 2 ? a.min.z - b.max.z : b.min.z - a.max.z;
     }
+    if (cover < BLOCK_COVER * along) continue;
     if (g >= -0.01 && g < gap) gap = g;
   }
   if (gap < 0.5) return 0;
