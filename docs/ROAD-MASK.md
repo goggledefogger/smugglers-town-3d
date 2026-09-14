@@ -81,6 +81,39 @@ fetch per place and a client never talks to Overpass directly.
 - Worth it once the game has enough players that per-client fetches cost
   money or diverge between clients.
 
+## Building footprints (the other mask)
+
+The same trick, the other way round. On hills the ground estimate sags and
+the driveable-terrain flood swallows all but the tallest core of a building,
+so a whole block came out as one lone 4 m column; and even on the flat, the
+road corridor (kerb width plus half a cell of slack on a 10 m grid) eats the
+first cell of every block. `MapsApi.buildingsUrl` asks Static Maps for a
+roadmap with building strokes white, road fills green and everything else
+black. Google only draws building outlines from zoom 17, and the fill inside
+them is the same man-made landscape as the ground between them, so the
+outline is the only signal: `footprintsFromOutlines` flood-fills from every
+road pixel (and the canvas edge) and whatever it cannot reach is inside a
+closed outline. `fetchBuildingRaster` stitches a 6×6 grid of zoom 17 tiles
+(the inner 3.6 km, 36 requests, browser-cached).
+
+`rasterizeCoverage` turns it into a cell mask with a twist: a cell counts as
+building only when 70 % of its area is inside an outline (`BUILDING_COVER`
+in `Tileset.ts`). In the collider pass a footprint cell is a building
+whatever the ground estimate says, and it outranks the road corridor; the
+70 % rule is what keeps that safe, since a 10 m cell whose centre is a
+metre inside the building line but whose area is mostly street stays
+street, so a 12 m street between two exact outlines always keeps a free
+cell. Measured downtown San Francisco: boxes 1,226 → 1,429, reachable road
+cells 107,354 → 105,638 (centre-sampled instead of 70 %-covered, the same
+override cut the network to 60 cells).
+
+- Fails soft: no raster, no mask, the classifier judges alone as before.
+- Outlines the antialiasing leaves a gap in flood and are missed, and a
+  building under the logo or attribution corner loses its outline there.
+- Bridges and ramps are classified before the footprint, so a deck over a
+  road stays a deck; a building drawn over a tunnel becomes solid, which is
+  what the photogrammetry shows anyway.
+
 ## Switching or adding a source
 
 `TileStreamer.loadRoads` fetches the sources in order and

@@ -193,7 +193,33 @@ export function roadsUrl(
     + `&key=${encodeURIComponent(apiKey)}`;
 }
 
-/** A stitched 3x3 grid of Static Maps tiles; `left`/`top` are the canvas origin in Web Mercator world pixels at `zoom`. */
+/**
+ * A Static Maps roadmap styled down to building outlines: white building
+ * strokes and green road fills on black. Google only draws building outlines
+ * from zoom 17, and the fill inside them is the same man-made landscape as the
+ * ground between them, so the outline is the only signal; a flood fill from
+ * the roads (footprintsFromOutlines) turns it into a footprint mask.
+ */
+export function buildingsUrl(
+  lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 1
+): string {
+  const styles = [
+    'feature:all|element:labels|visibility:off',
+    'feature:all|element:geometry|color:0x000000',
+    'feature:administrative|visibility:off',
+    'feature:poi|visibility:off',
+    'feature:transit|visibility:off',
+    'feature:landscape.man_made|element:geometry.stroke|visibility:on|color:0xffffff',
+    'feature:road|element:geometry.stroke|visibility:off',
+    'feature:road|element:geometry.fill|visibility:on|color:0x00ff00'
+  ];
+  return 'https://maps.googleapis.com/maps/api/staticmap'
+    + `?center=${lat},${lon}&zoom=${zoom}&size=${width}x${height}&scale=${scale}&maptype=roadmap`
+    + styles.map(s => '&style=' + encodeURIComponent(s)).join('')
+    + `&key=${encodeURIComponent(apiKey)}`;
+}
+
+/** A stitched grid of Static Maps tiles; `left`/`top` are the canvas origin in Web Mercator world pixels at `zoom`. */
 export interface StaticGrid {
   readonly canvas: HTMLCanvasElement;
   readonly zoom: number;
@@ -203,10 +229,10 @@ export interface StaticGrid {
 }
 
 /**
- * Stitch a 3x3 grid of 640 px Static Maps tiles at zoom 15 into one canvas
+ * Stitch a GRID x GRID grid of 640 px Static Maps tiles into one canvas
  * using exact Web Mercator pixel alignment: neighbouring tile centres are
- * exactly 640 world pixels apart, so there is no gap and no overlap. About
- * 7 km across downtown, covering the 5.6 km field.
+ * exactly 640 world pixels apart, so there is no gap and no overlap. 3x3 at
+ * zoom 15 is about 7 km across downtown, covering the 5.6 km field.
  */
 export async function fetchStaticGrid(
   lat: number,
@@ -214,9 +240,10 @@ export async function fetchStaticGrid(
   scale: number,
   urlFor: (tileLat: number, tileLon: number) => string,
   what = 'Static Maps',
-  zoom = 15
+  zoom = 15,
+  GRID = 3
 ): Promise<StaticGrid> {
-  const TILE = 640, GRID = 3;
+  const TILE = 640;
   const tilePx = TILE * scale;
   const centerPix = latLonToWorldPixel(lat, lon, zoom);
 
@@ -247,18 +274,18 @@ export async function fetchStaticGrid(
   for (let r = 0; r < GRID; r++) {
     const rowPromises: Promise<HTMLImageElement>[] = [];
     for (let c = 0; c < GRID; c++) {
-      const tilePixX = centerPix.x + (c - 1) * TILE;
-      const tilePixY = centerPix.y + (r - 1) * TILE;
+      const tilePixX = centerPix.x + (c - (GRID - 1) / 2) * TILE;
+      const tilePixY = centerPix.y + (r - (GRID - 1) / 2) * TILE;
       const { lat: tileLat, lon: tileLon } = worldPixelToLatLon(tilePixX, tilePixY, zoom);
       rowPromises.push(loadImg(urlFor(tileLat, tileLon)));
     }
     const imgs = await Promise.all(rowPromises);
     for (let c = 0; c < GRID; c++) ctx.drawImage(imgs[c]!, c * tilePx, r * tilePx, tilePx, tilePx);
   }
-  return { canvas, zoom, scale, left: centerPix.x - 1.5 * TILE, top: centerPix.y - 1.5 * TILE };
+  return { canvas, zoom, scale, left: centerPix.x - (GRID / 2) * TILE, top: centerPix.y - (GRID / 2) * TILE };
 }
 
-/** The road network around (lat, lon) as a 1-bit raster: 1 = road, from the styled roadmap. */
+/** A 1-bit raster over a stitched Static Maps grid: 1 = road (fetchRoadRasters) or 1 = building (fetchBuildingRaster). */
 export interface RoadRaster {
   readonly pixels: Uint8Array;
   readonly w: number;
@@ -276,17 +303,80 @@ async function fetchRoadRaster(lat: number, lon: number, apiKey: string, zoom: n
   const data = g.canvas.getContext('2d')!.getImageData(0, 0, w, h).data;
   const pixels = new Uint8Array(w * h);
   for (let i = 0; i < w * h; i++) pixels[i] = data[i * 4]! > 128 ? 1 : 0;
-  // every tile carries the Google logo bottom-left and the attribution text bottom-right,
-  // white on our black style, which would threshold into a few false road cells
+  blankTileCorners(pixels, w, h, 0);
+  return { pixels, w, h, zoom: g.zoom, scale: g.scale, left: g.left, top: g.top };
+}
+
+/**
+ * Every tile carries the Google logo bottom-left and the attribution text
+ * bottom-right, white on our black styles, which would read as a few false
+ * road cells or as tiny closed building outlines.
+ */
+function blankTileCorners(pixels: Uint8Array, w: number, h: number, value: number): void {
   const TILE = 640;
   for (let ty = TILE - 1; ty < h; ty += TILE) {
     for (let y = ty - 30; y <= ty; y++) {
       for (let tx = 0; tx < w; tx += TILE) {
-        pixels.fill(0, y * w + tx, y * w + tx + 90);
-        pixels.fill(0, y * w + tx + TILE - 170, y * w + tx + TILE);
+        pixels.fill(value, y * w + tx, y * w + tx + 90);
+        pixels.fill(value, y * w + tx + TILE - 170, y * w + tx + TILE);
       }
     }
   }
+}
+
+/** Pixel classes of the buildingsUrl style. */
+export const OUTLINE_GROUND = 0, OUTLINE_WALL = 1, OUTLINE_ROAD = 2;
+
+/**
+ * Building footprints from the buildingsUrl image: a flood fill from every
+ * road pixel (and the canvas edge) through the ground marks the outside, and
+ * whatever it cannot reach sits inside a closed building outline. The walls
+ * themselves count as building. An outline the antialiasing leaves a gap in
+ * simply floods and is missed, which is what the classifier did anyway.
+ * `classes` holds OUTLINE_* per pixel; returns 1 = building.
+ */
+export function footprintsFromOutlines(classes: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(w * h);
+  const seen = new Uint8Array(w * h);
+  const stack: number[] = [];
+  const seed = (p: number): void => {
+    if (!seen[p] && classes[p] !== OUTLINE_WALL) { seen[p] = 1; stack.push(p); }
+  };
+  for (let p = 0; p < w * h; p++) if (classes[p] === OUTLINE_ROAD) seed(p);
+  for (let x = 0; x < w; x++) { seed(x); seed((h - 1) * w + x); }
+  for (let y = 0; y < h; y++) { seed(y * w); seed(y * w + w - 1); }
+  while (stack.length) {
+    const p = stack.pop()!;
+    const x = p % w;
+    if (x > 0) seed(p - 1);
+    if (x < w - 1) seed(p + 1);
+    if (p >= w) seed(p - w);
+    if (p < (h - 1) * w) seed(p + w);
+  }
+  for (let p = 0; p < w * h; p++) out[p] = seen[p] ? 0 : 1;
+  return out;
+}
+
+/**
+ * Building footprints for the inner 3.6 km of the field (a 6x6 grid of zoom
+ * 17 tiles, the first zoom Google draws outlines at) as a 1-bit raster,
+ * 1 = building. Read by the collider pass as the word on which cells are
+ * buildings, ahead of its own ground estimate; see docs/ROAD-MASK.md.
+ */
+export async function fetchBuildingRaster(lat: number, lon: number, apiKey: string): Promise<RoadRaster> {
+  if (typeof document === 'undefined') throw new Error('building raster needs a browser canvas');
+  const zoom = 17;
+  const g = await fetchStaticGrid(lat, lon, 1, (la, lo) => buildingsUrl(la, lo, apiKey, zoom, 640, 640, 1), 'Buildings', zoom, 6);
+  const { width: w, height: h } = g.canvas;
+  const data = g.canvas.getContext('2d')!.getImageData(0, 0, w, h).data;
+  const classes = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) {
+    const r = data[i * 4]!, gr = data[i * 4 + 1]!;
+    // a faint antialiased stroke pixel still closes the outline; green with no red is road
+    classes[i] = r >= 40 ? OUTLINE_WALL : gr > 100 ? OUTLINE_ROAD : OUTLINE_GROUND;
+  }
+  blankTileCorners(classes, w, h, OUTLINE_GROUND);
+  const pixels = footprintsFromOutlines(classes, w, h);
   return { pixels, w, h, zoom: g.zoom, scale: g.scale, left: g.left, top: g.top };
 }
 

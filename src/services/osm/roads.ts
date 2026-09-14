@@ -277,6 +277,51 @@ export function rasterizeRoadRaster(
 }
 
 /**
+ * A cell is set when at least `minFraction` of its area lands on set raster
+ * pixels (a `samples` x `samples` point grid per cell; Mercator is linear at
+ * cell scale, so the samples are metre offsets from the projected centre).
+ * The building footprint uses this: a block-edge cell whose centre is a metre
+ * inside the building line but whose area is mostly street stays street, so
+ * a 10 m grid cannot wall off a 12 m street between two exact outlines.
+ */
+export function rasterizeCoverage(
+  raster: RoadRaster,
+  grid: { cell: number; half: number; n: number },
+  origin: { lat: number; lon: number },
+  minFraction: number,
+  samples = 4
+): RoadGrid {
+  const { cell, half, n } = grid;
+  const mask = new Uint8Array(n * n);
+  const cosLat = Math.max(0.2, Math.cos((origin.lat * Math.PI) / 180));
+  const pxPerM = raster.scale / ((2 * Math.PI * EARTH_RADIUS_M * cosLat) / (256 * Math.pow(2, raster.zoom)));
+  const need = Math.ceil(minFraction * samples * samples);
+  for (let j = 0; j < n; j++) {
+    const cz = -half + (j + 0.5) * cell;
+    for (let i = 0; i < n; i++) {
+      const cx = -half + (i + 0.5) * cell;
+      const { lat, lon } = worldToLl(cx, cz, origin as GeoOrigin);
+      const wp = latLonToWorldPixel(lat, lon, raster.zoom);
+      const px = (wp.x - raster.left) * raster.scale;
+      const py = (wp.y - raster.top) * raster.scale;
+      if (px < -cell * pxPerM || px >= raster.w + cell * pxPerM || py < -cell * pxPerM || py >= raster.h + cell * pxPerM) continue;
+      let hit = 0;
+      for (let sy = 0; sy < samples; sy++) {
+        const y = Math.round(py + ((sy + 0.5) / samples - 0.5) * cell * pxPerM);
+        if (y < 0 || y >= raster.h) continue;
+        for (let sx = 0; sx < samples; sx++) {
+          const x = Math.round(px + ((sx + 0.5) / samples - 0.5) * cell * pxPerM);
+          if (x < 0 || x >= raster.w) continue;
+          if (raster.pixels[y * raster.w + x]) hit++;
+        }
+      }
+      if (hit >= need) mask[j * n + i] = 1;
+    }
+  }
+  return { cell, half, n, mask };
+}
+
+/**
  * Stamp the polylines into the same grid the classifier runs on (cell centres
  * at -half + (i+0.5)*cell, matching TileRaster indexing). A segment covers a
  * cell when the distance from the cell centre to the segment is within the

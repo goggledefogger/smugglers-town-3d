@@ -752,7 +752,9 @@ export function collidersFromRasters(
   /** OSM road-centreline mask on the same grid; road cells are exempt from building classification. */
   roadMask?: RoadGrid | null,
   /** n*n, receives the photogrammetry top of every building cell (NO_DATA elsewhere): per-cell roof heights for rendering. */
-  outTopGrid?: Float32Array
+  outTopGrid?: Float32Array,
+  /** Google building footprints on the same grid: a footprint cell with tile geometry is a building, whatever the ground estimate says. */
+  buildingMask?: RoadGrid | null
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1150,15 +1152,23 @@ export function collidersFromRasters(
     // Border cells (within GROUND_K = 60m of the map edge) have ground[c] === NO_DATA.
     // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
-    if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
-    const terr = terrainTop[c];
-    if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
+    if (t === NO_DATA || g === NO_DATA) return false;
     if (isDeck[c] || isRamp[c]) return false;
-    // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
-    if (isDriveableGround[c]) return false;
+    // Google draws a building here: on a hill the ground estimate sags and the
+    // driveable-terrain flood swallows all but the tallest core of a building,
+    // leaving a lone column; the footprint says the rest of it is building too.
+    // It outranks the road corridor: the corridor is kerb width plus slack on
+    // a 10 m grid and eats the first cell of every block, while the outline is
+    // metre-exact, and a cell centred inside a building is not roadway
+    if (buildingMask?.mask[c]) return true;
     // OSM says a road runs through here: the crest error of the opening-based
     // ground estimate is exactly the false wall this corridor was severed by
     if (roadExempt(roadMask, c)) return false;
+    if (t - g < rise) return false;
+    const terr = terrainTop[c];
+    if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
+    // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
+    if (isDriveableGround[c]) return false;
     return true;
   };
 

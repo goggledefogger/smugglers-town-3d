@@ -31,8 +31,11 @@ import type { TerrainProvider } from '../../core/terrain/TerrainProvider.ts';
 import { Heightfield } from '../../core/heightfield.ts';
 import { logger } from '../../app/log.ts';
 import { tileCache } from './TileCache.ts';
-import { fetchRoadPolylines, rasterizeRoads, rasterizeRoadRaster, type RoadGrid } from '../osm/roads.ts';
-import { fetchRoadRasters, type RoadRaster } from '../maps/MapsApi.ts';
+import { fetchRoadPolylines, rasterizeRoads, rasterizeRoadRaster, rasterizeCoverage, type RoadGrid } from '../osm/roads.ts';
+
+/** Fraction of a 10 m cell inside Google's building outlines that makes it a building cell even under the road corridor. */
+const BUILDING_COVER = 0.7;
+import { fetchRoadRasters, fetchBuildingRaster, type RoadRaster } from '../maps/MapsApi.ts';
 import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,
@@ -374,9 +377,13 @@ export class TileStreamer {
   onTileLoaded: ((group: Group) => void) | null = null;
   /** Called when OSM road network geometry finishes downloading in background. */
   onRoadsLoaded: (() => void) | null = null;
+  /** Called when the Google building footprints land (the collider pass reads them as buildings). */
+  onBuildingsLoaded: (() => void) | null = null;
   private currentExperiment: ColliderExperimentMode = 'baseline';
   private roadPolys: { east: number; north: number; widthM: number }[][] | null = null;
   private roadRaster: RoadRaster[] | null = null;
+  private buildingRaster: RoadRaster | null = null;
+  private buildingGrid: RoadGrid | null = null;
   private resolutionMode: Resolution3DMode = 'balanced';
   private lod: LodPolicy = STREAM_LOD;
   private maxTiles = MAX_TILES;
@@ -479,6 +486,7 @@ export class TileStreamer {
     // roads are static for the match: fetch once, before the first collider
     // build; a failure just means no mask (classifier behaves as before)
     void this.loadRoads();
+    void this.loadBuildings();
     const wanted = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey);
     let next = 0;
     let loaded = 0;
@@ -540,6 +548,34 @@ export class TileStreamer {
       this.roadRetryMs = Math.min(120000, this.roadRetryMs * 2);
     })();
     return this.roadsPromise;
+  }
+
+  private buildingsPromise: Promise<void> | null = null;
+
+  /** Google's building footprints, once; a failure just means the classifier judges buildings alone, as before. */
+  private loadBuildings(): Promise<void> {
+    return this.buildingsPromise ??= (async () => {
+      try {
+        this.buildingRaster = await fetchBuildingRaster(this.origin.lat, this.origin.lon, this.apiKey);
+        log.info('building footprints from google roadmap');
+        this.publishBuildingGrid();
+      } catch (e) {
+        log.warn('google building raster failed', String(e).slice(0, 120));
+      }
+    })();
+  }
+
+  private publishBuildingGrid(fire = true): void {
+    if (!this.buildingRaster) return;
+    // a footprint cell is one mostly inside an outline: it outranks the road corridor in
+    // the collider pass, and a cell that is mostly street must stay street (rasterizeCoverage)
+    this.buildingGrid = rasterizeCoverage(this.buildingRaster, this.grid, this.origin, BUILDING_COVER);
+    this.dirty = true;
+    if (fire) this.onBuildingsLoaded?.();
+  }
+
+  get hasBuildingGrid(): boolean {
+    return this.buildingGrid != null;
   }
 
   /** The union of every road layer that has landed, on the active grid; `fire` announces it to the collider pass. */
@@ -623,6 +659,7 @@ export class TileStreamer {
         t.raster = rasterizeTile(t.group, this.grid);
       }
     }
+    this.publishBuildingGrid(false);
     if (this.roadRaster || this.roadPolys) {
       this.publishRoadGrid(false);
     } else if (mode === 'road_carve') {
@@ -837,12 +874,15 @@ export class TileStreamer {
    * offline measurement rigs (scripts/capture-rasters.mjs) read these to
    * reproduce the classifier's exact inputs without a live session.
    */
-  captureRasters(): { grid: Grid; terrainTop: Float32Array; rasters: (TileRaster | null)[]; roadMask: Uint8Array | null } {
+  captureRasters(): {
+    grid: Grid; terrainTop: Float32Array; rasters: (TileRaster | null)[]; roadMask: Uint8Array | null; buildingMask: Uint8Array | null
+  } {
     return {
       grid: this.grid,
       terrainTop: this.terrainTop,
       rasters: this.tiles.map(t => t.raster),
-      roadMask: this.roadGrid?.mask ?? null
+      roadMask: this.roadGrid?.mask ?? null,
+      buildingMask: this.buildingGrid?.mask ?? null
     };
   }
 
@@ -859,7 +899,8 @@ export class TileStreamer {
       th,
       this.structureGrid,
       this.roadGrid,
-      this.topGrid
+      this.topGrid,
+      this.buildingGrid
     );
   }
 
@@ -889,6 +930,7 @@ export class TileStreamer {
       const job: ColliderJob = {
         rasters: this.tiles.map(t => t.raster), grid: this.grid, terrainTop: this.terrainTop, reliefBoost: this.reliefBoost,
         roadMask: this.roadGrid?.mask ?? null,
+        buildingMask: this.buildingGrid?.mask ?? null,
         thresholds: th
       };
       worker.postMessage(job);

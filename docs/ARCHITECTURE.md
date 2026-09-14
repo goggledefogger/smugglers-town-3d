@@ -390,6 +390,12 @@ From this raster, two physical surfaces are extracted:
    rather than the sagging estimate. An asynchronous event (`onRoadsLoaded`) dynamically
    rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
    driving corridors carve out seamlessly without delaying match start.
+5. **Building Footprints (`MapsApi.fetchBuildingRaster`, see `docs/ROAD-MASK.md`)**: Google's
+   building outlines at zoom 17, flood-filled into a footprint raster and rasterized by area
+   coverage (70 % of a cell inside an outline). A footprint cell is a building whatever the
+   ground estimate or the road corridor says, so a hillside block no longer shrinks to its
+   tallest core and boxes reach the true building line instead of stopping a cell short of
+   the street. Lands asynchronously like the roads (`onBuildingsLoaded`).
 
 ### "Painted 3D" Visual Mode (`render/FacadeBaker.ts`)
 

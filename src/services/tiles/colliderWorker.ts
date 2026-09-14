@@ -14,6 +14,8 @@ export interface ColliderJob {
   readonly reliefBoost: number;
   /** OSM road mask, n*n; null when the fetch failed or has not landed yet. */
   readonly roadMask: Uint8Array | null;
+  /** Google building footprints, n*n; null until they land or when the fetch failed. */
+  readonly buildingMask?: Uint8Array | null;
   /** Optional collider thresholds/experiment configuration. */
   readonly thresholds?: ColliderThresholds;
 }
@@ -32,13 +34,16 @@ const ctx = self as unknown as {
 };
 
 ctx.onmessage = e => {
-  const { rasters, grid, terrainTop, reliefBoost, roadMask, thresholds } = e.data;
+  const { rasters, grid, terrainTop, reliefBoost, roadMask, buildingMask, thresholds } = e.data;
   const deckGrid = new Float32Array(grid.n * grid.n);
   const structureGrid = new Uint8Array(grid.n * grid.n);
   const topGrid = new Float32Array(grid.n * grid.n);
-  const roads: RoadGrid | null = roadMask ? { cell: grid.cell, half: grid.half, n: grid.n, mask: roadMask } : null;
+  const asGrid = (mask: Uint8Array | null | undefined): RoadGrid | null =>
+    mask ? { cell: grid.cell, half: grid.half, n: grid.n, mask } : null;
   const activeThresholds = thresholds ?? DEFAULT_COLLIDER_THRESHOLDS;
-  const boxes = collidersFromRasters(rasters, grid, terrainTop, reliefBoost, deckGrid, activeThresholds, structureGrid, roads, topGrid)
+  const boxes = collidersFromRasters(
+    rasters, grid, terrainTop, reliefBoost, deckGrid, activeThresholds, structureGrid, asGrid(roadMask), topGrid, asGrid(buildingMask)
+  )
     .map(b => ({ min: { x: b.min.x, y: b.min.y, z: b.min.z }, max: { x: b.max.x, y: b.max.y, z: b.max.z } }));
   ctx.postMessage({ boxes, deckGrid, structureGrid, topGrid }, [deckGrid.buffer, structureGrid.buffer, topGrid.buffer]);
 };

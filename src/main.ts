@@ -244,6 +244,10 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     refreshColliders();
     showToast('OSM Road Mask Loaded: Road Corridors Carved');
   };
+  streamer.onBuildingsLoaded = () => {
+    log.info('building footprints arrived in background, refreshing colliders');
+    refreshColliders();
+  };
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.group.traverse(o => o.layers.set(1));
