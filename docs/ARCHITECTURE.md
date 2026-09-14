@@ -345,7 +345,15 @@ are glTF Y-up with the ECEF placement baked into the node matrix, so
 refining around the player: every 250 ms it picks the nearest tile that is
 too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
 640 m) and swaps it for its children, one swap at a time, up to a tile cap.
-There is no coarsening — evict far tiles first if memory ever bites.
+Every coarse tile in the field is collected up front; only the nearest
+`MAX_INITIAL_TILES` load, the rest are *parked*. Each tick, parked tiles
+within 70 % of the fog horizon stream in nearest first, and under budget
+pressure the farthest loaded tile beyond the horizon is evicted back onto
+the parked list, so the player can drive anywhere in the field and find
+photogrammetry there and come back to find it again. Before that, the field
+had tiles only in a blob about 800 m around the spawn (the nearest 150
+coarse tiles, refined until the cap), and Footprint 3D made it obvious
+because its prisms stood there unpainted. There is still no coarsening.
 
 ### `services/tiles/tileColliders.ts` — one ground & 2.5D deckGrid
 A Google 3D tile is one merged photogrammetry mesh (ground + buildings + trees

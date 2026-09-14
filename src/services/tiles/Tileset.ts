@@ -499,7 +499,11 @@ export class TileStreamer {
     // build; a failure just means no mask (classifier behaves as before)
     void this.loadRoads();
     void this.loadBuildings();
-    const wanted = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey);
+    // every coarse tile in the field, nearest first: the closest load now, the rest are
+    // parked and stream in as the player reaches them (update)
+    const all = await collectTiles(root, this.ecef0, LOAD_RADIUS_M, this.apiKey, undefined, Infinity);
+    const wanted = all.slice(0, MAX_INITIAL_TILES);
+    this.parked = all.slice(MAX_INITIAL_TILES);
     let next = 0;
     let loaded = 0;
     const worker = async (): Promise<void> => {
@@ -860,8 +864,8 @@ export class TileStreamer {
     this.lastPickMs = nowMs;
     const p = _ecef.set(playerWorld.x, playerWorld.y - this.shiftY, playerWorld.z).applyMatrix4(this.worldToEcef);
 
-    // If approaching tile capacity, evict the farthest tile beyond the fog horizon
-    if (this.tiles.length >= this.maxTiles) {
+    // under budget pressure the farthest tile goes, if it is out in the fog; it is parked, not forgotten
+    const evictFarthest = (): boolean => {
       let farthest: LoadedTile | null = null;
       let farthestD = 0;
       for (const t of this.tiles) {
@@ -871,24 +875,39 @@ export class TileStreamer {
           farthest = t;
         }
       }
-      if (farthest && farthestD > FOG_HORIZON_M) {
-        this.remove(farthest);
-        this.parked.push(farthest);
-      } else {
+      if (!farthest || farthestD <= FOG_HORIZON_M) return false;
+      this.remove(farthest);
+      this.parked.push(farthest);
+      return true;
+    };
+
+    // parked tiles (never loaded under the initial cap, or evicted into the fog) stream in
+    // nearest first as the player comes within the horizon, ahead of any refinement: without
+    // this the field had photogrammetry only in a blob around the spawn, bare ground beyond
+    if (this.parked.length > 0) {
+      const near = this.parked
+        .map((t, i) => ({ i, d: nodeDistM(t.node, p) }))
+        .filter(x => x.d < FOG_HORIZON_M * 0.7)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, this.refineBatchSize)
+        .sort((a, b) => b.i - a.i);
+      const batch: CollectedTile[] = [];
+      for (const { i } of near) {
+        if (this.tiles.length + batch.length >= this.maxTiles && !evictFarthest()) break;
+        batch.push(this.parked.splice(i, 1)[0]!);
+      }
+      if (batch.length > 0) {
+        this.inFlight = true;
+        Promise.all(batch.map(t => this.add(t).catch(e => noteFailure('reload failed', e)))).finally(() => {
+          this.inFlight = false;
+        });
         return;
       }
     }
 
-    // a tile evicted beyond the fog horizon comes back when the player does, ahead of any
-    // refinement: without this, driving across the field and back left bare satellite ground
-    const back = this.parked.findIndex(t => nodeDistM(t.node, p) < FOG_HORIZON_M * 0.7);
-    if (back >= 0) {
-      const t = this.parked.splice(back, 1)[0]!;
-      this.inFlight = true;
-      this.add(t).catch(e => noteFailure('reload failed', e)).finally(() => {
-        this.inFlight = false;
-      });
-      return;
+    // back under budget before refining: a refinement swaps one tile for up to eight
+    while (this.tiles.length >= this.maxTiles) {
+      if (!evictFarthest()) return;
     }
 
     const candidates: LoadedTile[] = [];
