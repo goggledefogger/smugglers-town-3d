@@ -57,6 +57,8 @@ export class GameRenderer {
   private tilesTarget: WebGLRenderTarget | null = null;
   private isProjecting3dTiles = false;
   private readonly _res = new Vector2();
+  private readonly warming = new Map<Object3D, ReturnType<typeof setTimeout>>();
+  private readonly hiddenWhileWarming: Object3D[] = [];
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -257,7 +259,7 @@ export class GameRenderer {
       this.renderer.setRenderTarget(this.tilesTarget);
       this.renderer.setClearColor(0x000000, 0.0);
       this.renderer.clear();
-      this.renderer.render(this.scene, this.camera);
+      this.drawScene();
       this.renderer.setRenderTarget(null);
       this.scene.background = prevBg;
 
@@ -269,11 +271,31 @@ export class GameRenderer {
       // so zero raw photogrammetry tiles can ever be drawn directly to the screen
       if (tiles) tiles.group.visible = false;
       this.camera.layers.set(0);
-      this.renderer.render(this.scene, this.camera);
+      this.drawScene();
       if (tiles) tiles.group.visible = prevTilesVisible;
       return;
     }
-    this.renderer.render(this.scene, this.camera);
+    this.drawScene();
+  }
+
+  private drawScene(): void {
+    if (this.warming.size === 0) {
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+    const hidden = this.hiddenWhileWarming;
+    for (const obj of this.warming.keys()) {
+      if (obj.visible) {
+        hidden.push(obj);
+        obj.visible = false;
+      }
+    }
+    try {
+      this.renderer.render(this.scene, this.camera);
+    } finally {
+      for (const obj of hidden) obj.visible = true;
+      hidden.length = 0;
+    }
   }
 
   /**
@@ -283,15 +305,35 @@ export class GameRenderer {
    * spreads the same work over the download.
    */
   warm(obj: Object3D): void {
-    // link status is only read on first draw, and reading it blocks until the
-    // driver has finished linking: with sync compile that wait landed inside
-    // a frame (30-100 ms). compileAsync polls KHR_parallel_shader_compile
-    // instead, so hide the object until every program is actually ready
-    const wasVisible = obj.visible;
-    obj.visible = false;
-    this.renderer.compileAsync(obj, this.camera, this.scene)
-      .catch(e => log.warn('shader compile failed', e))
-      .finally(() => { obj.visible = wasVisible; });
+    if (this.warming.has(obj)) return;
+    // three r169 compileAsync polls currentProgram after dispose has removed it
+    // Its timer throws outside the promise, so .catch() cannot handle tile eviction
+    let materials: Set<Material>;
+    try {
+      materials = this.renderer.compile(obj, this.camera, this.scene);
+    } catch (e) {
+      log.warn('shader compile failed', e);
+      return;
+    }
+    const checkReady = () => {
+      try {
+        for (const material of materials) {
+          const { currentProgram: program } = this.renderer.properties.get(material) as {
+            currentProgram?: { isReady(): boolean };
+          };
+          if (!program || program.isReady()) materials.delete(material);
+        }
+        if (materials.size > 0) {
+          this.warming.set(obj, setTimeout(checkReady, 10));
+          return;
+        }
+      } catch (e) {
+        log.warn('shader compile failed', e);
+      }
+      this.warming.delete(obj);
+    };
+    if (this.renderer.extensions.get('KHR_parallel_shader_compile') !== null) checkReady();
+    else this.warming.set(obj, setTimeout(checkReady, 10));
     obj.traverse(o => {
       const mesh = o as Mesh;
       if (!mesh.isMesh) return;
@@ -319,6 +361,8 @@ export class GameRenderer {
   }
 
   dispose(): void {
+    for (const timer of this.warming.values()) clearTimeout(timer);
+    this.warming.clear();
     if (typeof window !== 'undefined') {
       window.removeEventListener('resize', this.handleResize);
     }

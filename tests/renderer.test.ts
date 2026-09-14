@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { BoxGeometry, Group, Mesh, MeshBasicMaterial, Texture } from 'three';
 import { GameRenderer } from '../src/render/Renderer.ts';
 
 describe('GameRenderer adaptive resolution', () => {
@@ -29,6 +30,10 @@ describe('GameRenderer adaptive resolution', () => {
       MAX_VERTEX_TEXTURE_IMAGE_UNITS: 0x8b4c,
       MAX_TEXTURE_IMAGE_UNITS: 0x8872,
       MAX_SAMPLES: 0x8d57,
+      ACTIVE_UNIFORMS: 0x8b86,
+      ACTIVE_ATTRIBUTES: 0x8b89,
+      createProgram: vi.fn(() => ({})),
+      createShader: vi.fn(() => ({})),
       getExtension: vi.fn().mockReturnValue(null),
       getParameter: vi.fn((param: number) => {
         if (param === 0x1f02 || param === undefined) return 'WebGL 1.0';
@@ -39,7 +44,7 @@ describe('GameRenderer adaptive resolution', () => {
       }),
       getShaderPrecisionFormat: vi.fn().mockReturnValue({ precision: 1, rangeMin: 1, rangeMax: 1 }),
       getShaderParameter: vi.fn().mockReturnValue(true),
-      getProgramParameter: vi.fn().mockReturnValue(true),
+      getProgramParameter: vi.fn((_program, param) => param === 0x8b86 || param === 0x8b89 ? 0 : true),
       canvas: { width: 1000, height: 800, style: {} }
     };
 
@@ -62,6 +67,7 @@ describe('GameRenderer adaptive resolution', () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     (globalThis as any).window = origWindow;
     vi.restoreAllMocks();
   });
@@ -153,5 +159,141 @@ describe('GameRenderer adaptive resolution', () => {
     // Resolution recovers upward
     expect(gr.pixelRatio).toBeGreaterThan(reducedRatio);
     gr.dispose();
+  });
+
+  describe('shader warmup', () => {
+    let ready: boolean;
+    let gr: GameRenderer;
+    let tile: Group;
+    let material: MeshBasicMaterial;
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      ready = false;
+      const gl = mockCanvas.getContext('webgl2')!;
+      vi.mocked(gl.getExtension as (name: string) => unknown).mockImplementation(name => name === 'KHR_parallel_shader_compile'
+        ? { COMPLETION_STATUS_KHR: 0x91b1 } : null);
+      vi.mocked(gl.getProgramParameter).mockImplementation((_program, param) => {
+        if (param === 0x91b1) return ready;
+        return param === 0x8b86 || param === 0x8b89 ? 0 : true;
+      });
+      gr = new GameRenderer({ canvas: mockCanvas });
+      material = new MeshBasicMaterial();
+      tile = new Group();
+      tile.add(new Mesh(new BoxGeometry(), material));
+      tile.traverse(o => o.layers.set(1));
+      gr.camera.layers.disable(1);
+      gr.scene.add(tile);
+    });
+
+    afterEach(() => {
+      gr.dispose();
+      material.dispose();
+      tile.traverse(o => { if (o instanceof Mesh) o.geometry.dispose(); });
+    });
+
+    it('survives disposing a real Three.js tile material during readiness polling', async () => {
+      gr.warm(tile);
+      expect(gr.renderer.properties.get(material)).toHaveProperty('currentProgram');
+      expect(vi.getTimerCount()).toBeGreaterThan(0);
+      gr.scene.remove(tile);
+      material.dispose();
+      expect(gr.renderer.properties.get(material)).not.toHaveProperty('currentProgram');
+      await vi.advanceTimersByTimeAsync(10);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it.each([true, false])('preserves mode visibility changes while warming (initially %s)', async initial => {
+      tile.visible = initial;
+      gr.warm(tile);
+      tile.visible = !initial;
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10);
+      expect(tile.visible).toBe(!initial);
+      expect(gr.camera.layers.mask).toBe(1);
+    });
+
+    it('keeps pending tiles out of draws, then draws only after every live material is ready', async () => {
+      const second = new MeshBasicMaterial({ color: 0xff0000 });
+      (tile.children[0] as Mesh).material = [material, second];
+      gr.camera.layers.enable(1);
+      const draw = vi.spyOn(gr.renderer, 'render').mockImplementation(() => {
+        expect(tile.visible).toBe(ready);
+      });
+      try {
+        gr.warm(tile);
+        material.dispose();
+        await vi.advanceTimersByTimeAsync(10);
+        gr.render();
+        expect(tile.visible).toBe(true);
+        expect(vi.getTimerCount()).toBe(1);
+        ready = true;
+        await vi.advanceTimersByTimeAsync(10);
+        gr.render();
+        expect(draw).toHaveBeenCalledTimes(2);
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        second.dispose();
+      }
+    });
+
+    it('deduplicates overlapping warmups and still uploads textures eagerly', async () => {
+      const map = new Texture();
+      material.map = map;
+      const upload = vi.spyOn(gr.renderer, 'initTexture').mockImplementation(() => {});
+      const compile = vi.spyOn(gr.renderer, 'compile');
+      gr.warm(tile);
+      gr.warm(tile);
+      expect(compile).toHaveBeenCalledTimes(1);
+      expect(upload).toHaveBeenCalledWith(map);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10);
+      expect(tile.visible).toBe(true);
+      map.dispose();
+    });
+
+    it('cancels readiness callbacks when the renderer is disposed', async () => {
+      gr.warm(tile);
+      gr.dispose();
+      expect(vi.getTimerCount()).toBe(0);
+      await vi.advanceTimersByTimeAsync(10);
+    });
+
+    it('suppresses pending tiles in both projection passes without changing mode visibility', async () => {
+      (window as any).__tiles = { group: tile };
+      tile.visible = false;
+      gr.setProjecting3dTiles(true);
+      gr.warm(tile);
+      const visibleAtDraw: boolean[] = [];
+      vi.spyOn(gr.renderer, 'setRenderTarget').mockImplementation(() => {});
+      vi.spyOn(gr.renderer, 'render').mockImplementation(() => { visibleAtDraw.push(tile.visible); });
+      gr.render();
+      expect(visibleAtDraw).toEqual([false, false]);
+      expect(tile.visible).toBe(false);
+      ready = true;
+      await vi.advanceTimersByTimeAsync(10);
+      gr.render();
+      expect(visibleAtDraw).toEqual([false, false, true, false]);
+      expect(tile.visible).toBe(false);
+    });
+
+    it('restores draw-scoped visibility even when drawing throws', () => {
+      gr.warm(tile);
+      vi.spyOn(gr.renderer, 'render').mockImplementation(() => { throw new Error('draw failed'); });
+      expect(() => gr.render()).toThrow('draw failed');
+      expect(tile.visible).toBe(true);
+    });
+
+    it('handles disposal during the fallback delay without parallel shader support', async () => {
+      gr.dispose();
+      vi.mocked(mockCanvas.getContext('webgl2')!.getExtension).mockReturnValue(null);
+      gr = new GameRenderer({ canvas: mockCanvas });
+      gr.warm(tile);
+      expect(vi.getTimerCount()).toBe(1);
+      material.dispose();
+      await vi.advanceTimersByTimeAsync(10);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(tile.visible).toBe(true);
+    });
   });
 });
