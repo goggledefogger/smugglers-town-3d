@@ -93,8 +93,14 @@ const MAX_INITIAL_TILES = 150;
  * Evicts the farthest tiles beyond the fog horizon when reaching capacity.
  */
 const MAX_TILES = 350;
-/** Tiles beyond this distance (into the fog horizon) can be evicted under budget pressure. */
-const FOG_HORIZON_M = 1500;
+/** A parked tile loads once the player is this close to it. */
+const PARK_RELOAD_M = 600;
+/** Nothing closer than this is ever evicted to make room; further than PARK_RELOAD_M so an evicted tile does not reload at once. */
+const EVICT_MIN_M = 700;
+/** A tile whose allowed error is this many times its own is over-detailed enough to coarsen (one LOD level). */
+const COARSEN_RATIO = 2;
+/** Tiles coarser than this never feed the classifier: their giant triangles read as decks and pits. */
+const RASTER_MAX_ERROR_M = 8;
 const CONCURRENCY = 6;
 /** Before play, tiles within visible range of the start are refined to the streaming LOD. */
 export const CORE_RADIUS_M = 500;
@@ -200,6 +206,8 @@ export interface CollectedTile {
   /** session of the tileset this node came from, forwarded to its content fetch */
   readonly session: string | null;
   readonly distM: number;
+  /** the tile this one was refined out of, so a group of siblings can coarsen back into it */
+  readonly parent?: CollectedTile;
 }
 
 export function allowedErrorM(distM: number, lod: LodPolicy): number {
@@ -690,7 +698,7 @@ export class TileStreamer {
       this.topGrid = new Float32Array(n * n).fill(NO_DATA);
       this.structureGrid = new Uint8Array(n * n);
       for (const t of this.tiles) {
-        t.raster = rasterizeTile(t.group, this.grid);
+        t.raster = this.rasterOf(t.node, t.group);
       }
     }
     this.publishBuildingGrid(false);
@@ -864,8 +872,8 @@ export class TileStreamer {
     this.lastPickMs = nowMs;
     const p = _ecef.set(playerWorld.x, playerWorld.y - this.shiftY, playerWorld.z).applyMatrix4(this.worldToEcef);
 
-    // under budget pressure the farthest tile goes, if it is out in the fog; it is parked, not forgotten
-    const evictFarthest = (): boolean => {
+    // under budget pressure the farthest tile goes, if it is beyond `beyondM`; it is parked, not forgotten
+    const evictFarthest = (beyondM: number): boolean => {
       let farthest: LoadedTile | null = null;
       let farthestD = 0;
       for (const t of this.tiles) {
@@ -875,25 +883,29 @@ export class TileStreamer {
           farthest = t;
         }
       }
-      if (!farthest || farthestD <= FOG_HORIZON_M) return false;
+      if (!farthest || farthestD <= beyondM) return false;
       this.remove(farthest);
       this.parked.push(farthest);
       return true;
     };
 
-    // parked tiles (never loaded under the initial cap, or evicted into the fog) stream in
-    // nearest first as the player comes within the horizon, ahead of any refinement: without
-    // this the field had photogrammetry only in a blob around the spawn, bare ground beyond
+    // parked tiles (never loaded under the initial cap, or evicted for room) stream in nearest
+    // first once the player is nearly on them, ahead of any refinement: without this the field
+    // had photogrammetry only in a blob around the spawn, bare ground beyond. They may push out
+    // anything beyond EVICT_MIN_M, which is further than they reload from, so nothing thrashes
     if (this.parked.length > 0) {
       const near = this.parked
         .map((t, i) => ({ i, d: nodeDistM(t.node, p) }))
-        .filter(x => x.d < FOG_HORIZON_M * 0.7)
+        .filter(x => x.d < PARK_RELOAD_M)
         .sort((a, b) => a.d - b.d)
         .slice(0, this.refineBatchSize)
         .sort((a, b) => b.i - a.i);
       const batch: CollectedTile[] = [];
       for (const { i } of near) {
-        if (this.tiles.length + batch.length >= this.maxTiles && !evictFarthest()) break;
+        if (this.tiles.length + batch.length >= this.maxTiles && !evictFarthest(EVICT_MIN_M)) {
+          if (batch.length === 0 && this.coarsenOne(p)) return;
+          break;
+        }
         batch.push(this.parked.splice(i, 1)[0]!);
       }
       if (batch.length > 0) {
@@ -903,11 +915,6 @@ export class TileStreamer {
         });
         return;
       }
-    }
-
-    // back under budget before refining: a refinement swaps one tile for up to eight
-    while (this.tiles.length >= this.maxTiles) {
-      if (!evictFarthest()) return;
     }
 
     const candidates: LoadedTile[] = [];
@@ -920,6 +927,15 @@ export class TileStreamer {
     }
     if (candidates.length === 0) return;
     candidates.sort((a, b) => nodeDistM(a.node, p) - nodeDistM(b.node, p));
+    // back under budget before refining (a swap adds up to eight children): detail near the
+    // player always beats a tile twice as far away, so refinement never starves at the cap
+    const nearD = nodeDistM(candidates[0]!.node, p);
+    while (this.tiles.length >= this.maxTiles) {
+      if (evictFarthest(Math.max(EVICT_MIN_M, 2 * nearD))) continue;
+      // nothing far enough to drop: coarsen the most over-detailed siblings back into their parent
+      this.coarsenOne(p);
+      return;
+    }
     const batch = candidates.slice(0, this.refineBatchSize);
 
     this.inFlight = true;
@@ -1018,7 +1034,7 @@ export class TileStreamer {
     }
     if (!g) return null;
     this.onTileLoaded?.(g);
-    return { ...tile, group: g, raster: rasterizeTile(g, this.grid), done: !tile.node.children?.length };
+    return { ...tile, group: g, raster: this.rasterOf(tile.node, g), done: !tile.node.children?.length };
   }
 
   private async add(tile: CollectedTile): Promise<LoadedTile | null> {
@@ -1028,6 +1044,47 @@ export class TileStreamer {
     this.tiles.push(loaded);
     this.dirty = true;
     return loaded;
+  }
+
+  /**
+   * Coarsening: the loaded tile most over-detailed for its distance (allowed
+   * error over its own, at least COARSEN_RATIO) and every sibling refined
+   * out of the same parent go, and the parent loads in their place. This is
+   * what frees budget once the whole cap sits within a few hundred metres,
+   * which is what a spawn refined to full detail leaves behind; without it
+   * the player drives out of that blob into tiles nothing can refine.
+   * Asynchronous like a refinement: true means it started.
+   */
+  private coarsenOne(p: Ecef): boolean {
+    const ratioOf = (t: LoadedTile): number =>
+      allowedErrorM(nodeDistM(t.node, p), this.lod) / Math.max(0.1, t.node.geometricError ?? 0.1);
+    const ranked = this.tiles
+      .filter(t => t.parent)
+      .map(t => ({ t, r: ratioOf(t) }))
+      .filter(x => x.r >= COARSEN_RATIO)
+      .sort((a, b) => b.r - a.r)
+      .slice(0, 20);
+    for (const { t } of ranked) {
+      const parent = t.parent!;
+      const siblings = this.tiles.filter(s => s.parent?.node === parent.node);
+      if (siblings.some(s => ratioOf(s) < COARSEN_RATIO / 2)) continue;
+      for (const s of siblings) this.remove(s);
+      this.inFlight = true;
+      this.add(parent).catch(e => noteFailure('coarsen failed', e)).finally(() => {
+        this.inFlight = false;
+      });
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * A tile's raster for the classifier, or null for a coarse tile: its triangles span whole
+   * blocks, so every cell under one reads as a deck at roof height over a pit, and the ground
+   * sags into the pit. Where only coarse tiles cover, the elevation grid is the ground instead.
+   */
+  private rasterOf(node: TileNode, group: Group): TileRaster | null {
+    return (node.geometricError ?? 0) > RASTER_MAX_ERROR_M ? null : rasterizeTile(group, this.grid);
   }
 
   private remove(tile: LoadedTile): void {
@@ -1043,7 +1100,8 @@ export class TileStreamer {
     tile.done = true;
     const kids = await nextLevel(tile.node, tile.session, this.apiKey);
     if (kids.length === 0) return;
-    const loaded = await Promise.all(kids.map(k => this.loadChild(k)));
+    const parent: CollectedTile = { node: tile.node, session: tile.session, distM: tile.distM, ...(tile.parent ? { parent: tile.parent } : {}) };
+    const loaded = await Promise.all(kids.map(k => this.loadChild({ ...k, parent })));
     if (loaded.some(l => l === null)) {
       for (const l of loaded) {
         if (l) disposeTiles(l.group);

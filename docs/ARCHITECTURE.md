@@ -347,13 +347,23 @@ too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
 640 m) and swaps it for its children, one swap at a time, up to a tile cap.
 Every coarse tile in the field is collected up front; only the nearest
 `MAX_INITIAL_TILES` load, the rest are *parked*. Each tick, parked tiles
-within 70 % of the fog horizon stream in nearest first, and under budget
-pressure the farthest loaded tile beyond the horizon is evicted back onto
-the parked list, so the player can drive anywhere in the field and find
-photogrammetry there and come back to find it again. Before that, the field
-had tiles only in a blob about 800 m around the spawn (the nearest 150
-coarse tiles, refined until the cap), and Footprint 3D made it obvious
-because its prisms stood there unpainted. There is still no coarsening.
+within `PARK_RELOAD_M` (600 m) of the player stream in nearest first, and
+under budget pressure the farthest loaded tile is evicted back onto the
+parked list, never one closer than `EVICT_MIN_M` (700 m, further than the
+reload distance so nothing thrashes) and, for a refinement, never one closer
+than twice the tile being refined, so detail near the player always wins.
+The player can drive anywhere in the field, find photogrammetry there, and
+come back to find it again. Before that, the field had tiles only in a blob
+about 800 m around the spawn (the nearest 150 coarse tiles, refined until
+the cap), and Footprint 3D made it obvious because its prisms stood there
+unpainted. Tiles coarser than `RASTER_MAX_ERROR_M` (8 m) never feed the
+classifier: their block-sized triangles read as decks over pits and dragged
+the ground down with them. When nothing far enough can be evicted (a spawn
+refined to full detail puts the whole cap within a few hundred metres),
+`coarsenOne` collapses the most over-detailed group of siblings (allowed
+error at their distance at least `COARSEN_RATIO` times their own) back into
+their parent tile, which every refined child remembers, so the budget
+follows the player instead of staying where the match started.
 
 ### `services/tiles/tileColliders.ts` — one ground & 2.5D deckGrid
 A Google 3D tile is one merged photogrammetry mesh (ground + buildings + trees
