@@ -6,7 +6,7 @@
  * zero drive-through-wall mismatch.
  */
 import {
-  Group, BoxGeometry, InstancedMesh, MeshStandardMaterial, Matrix4, Vector3,
+  Group, BoxGeometry, InstancedMesh, InstancedBufferAttribute, MeshStandardMaterial, Matrix4, Vector3,
   Quaternion, Color, LineSegments, DataTexture, RGBAFormat, UnsignedByteType,
   type Texture, type WebGLProgramParametersWithUniforms
 } from 'three';
@@ -25,10 +25,16 @@ const _color = new Color();
 
 const VERTEX_PARS_BUILDING = `
 uniform float uHasTexture;
+attribute vec4 aRectNX;
+attribute vec4 aRectPX;
+attribute vec4 aRectNZ;
+attribute vec4 aRectPZ;
 varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
+varying vec2 vAtlasUV;
+varying float vHasRect;
 `;
 
 const VERTEX_BODY_BUILDING = `
@@ -43,16 +49,29 @@ vWorldPos = (modelMatrix * bWorldPos).xyz;
 vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
 vBuildingNormal = normal;
 vLocalNormY = position.y + 0.5;
+// Painted 3D: each wall face's photo lives in an atlas rectangle (x, y, w, h in atlas UV,
+// w < 0 = not painted). u runs the way the face camera's right vector runs: +z on the -x
+// face, -z on +x, -x on -z, +x on +z; v is height
+{
+  vec4 rect = normal.x < -0.5 ? aRectNX : normal.x > 0.5 ? aRectPX : normal.z < -0.5 ? aRectNZ : aRectPZ;
+  float fu = normal.x < -0.5 ? position.z + 0.5 : normal.x > 0.5 ? 0.5 - position.z : normal.z < -0.5 ? 0.5 - position.x : position.x + 0.5;
+  vAtlasUV = rect.xy + vec2(fu, position.y + 0.5) * rect.zw;
+  vHasRect = (rect.z > 0.0 && abs(normal.y) < 0.5) ? 1.0 : 0.0;
+}
 `;
 
 const FRAGMENT_PARS_BUILDING = `
 uniform sampler2D uSatelliteMap;
+uniform sampler2D uAtlas;
+uniform float uUseAtlas;
 uniform float uMapSize;
 uniform float uHasTexture;
 varying vec3 vWorldPos;
 varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
+varying vec2 vAtlasUV;
+varying float vHasRect;
 `;
 
 /**
@@ -81,6 +100,11 @@ if (uHasTexture > 0.5) {
     // linear values: 0.2 lands near mid grey once tone mapped and encoded, about the
     // brightness of a photographed concrete wall
     bestFill = mix(vec3(0.21, 0.20, 0.19), sat.rgb, 0.35) * faceLight * verticalAO;
+    // Painted 3D: the face's photo where the bake saw tiles, the fill where it saw nothing
+    if (uUseAtlas > 0.5 && vHasRect > 0.5) {
+      vec4 photo = texture2D(uAtlas, vAtlasUV);
+      if (photo.a > 0.5) bestFill = photo.rgb;
+    }
   }
   diffuseColor.rgb = bestFill;
 }
@@ -136,9 +160,13 @@ export class BuildingMeshView {
 
   // Material uniforms for texture projection
   private readonly uHasTexture = { value: 0.0 };
+  private readonly uUseAtlas = { value: 0.0 };
   private readonly uMapSize = { value: 5600.0 };
   private readonly dummyTex: DataTexture;
   private readonly uSatelliteMap: { value: Texture };
+  private readonly uAtlas: { value: Texture };
+  /** Per-instance atlas rects, four faces, (x, y, w, h) in atlas UV; w = -1 until painted. */
+  private rects: InstancedBufferAttribute[] | null = null;
 
   // Modern arcade architectural materials
   private readonly buildingMat: MeshStandardMaterial;
@@ -149,6 +177,7 @@ export class BuildingMeshView {
     this.dummyTex = new DataTexture(new Uint8Array([100, 110, 120, 255]), 1, 1, RGBAFormat, UnsignedByteType);
     this.dummyTex.needsUpdate = true;
     this.uSatelliteMap = { value: this.dummyTex };
+    this.uAtlas = { value: this.dummyTex };
 
     this.buildingMat = new MeshStandardMaterial({
       color: 0xffffff,
@@ -177,6 +206,8 @@ export class BuildingMeshView {
     mat.customProgramCacheKey = () => cacheKey;
     mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
       shader.uniforms.uHasTexture = this.uHasTexture;
+      shader.uniforms.uUseAtlas = this.uUseAtlas;
+      shader.uniforms.uAtlas = this.uAtlas;
       shader.uniforms.uSatelliteMap = this.uSatelliteMap;
       shader.uniforms.uMapSize = this.uMapSize;
 
@@ -200,6 +231,23 @@ export class BuildingMeshView {
   setTexture(tex: Texture | null, mapSize: number): void {
     this.uSatelliteMap.value = tex ?? this.dummyTex;
     this.uMapSize.value = mapSize;
+  }
+
+  /** Painted 3D: the facade atlas the walls read their photos from; null turns painting off. */
+  setAtlas(tex: Texture | null): void {
+    this.uAtlas.value = tex ?? this.dummyTex;
+    this.uUseAtlas.value = tex ? 1.0 : 0.0;
+  }
+
+  /**
+   * A face's photo landed in the atlas: give box `i`'s face its rectangle
+   * (texels, atlas `size` square). Face order: -x, +x, -z, +z.
+   */
+  setFaceRect(i: number, face: 0 | 1 | 2 | 3, x: number, y: number, w: number, h: number, size: number): void {
+    const attr = this.rects?.[face];
+    if (!attr || i >= attr.count) return;
+    attr.setXYZW(i, x / size, y / size, w / size, h / size);
+    attr.needsUpdate = true;
   }
 
   get visible(): boolean {
@@ -246,7 +294,17 @@ export class BuildingMeshView {
     // 1. Build building boxes
     const count = colliders.length;
     if (count > 0) {
-      const mesh = new InstancedMesh(this.boxGeo, this.buildingMat, count);
+      // own geometry per mesh: the atlas rects are per-instance attributes on it
+      const geo = this.boxGeo.clone();
+      const names = ['aRectNX', 'aRectPX', 'aRectNZ', 'aRectPZ'] as const;
+      this.rects = names.map(name => {
+        const data = new Float32Array(count * 4);
+        for (let k = 0; k < count; k++) data[k * 4 + 2] = -1;
+        const attr = new InstancedBufferAttribute(data, 4);
+        geo.setAttribute(name, attr);
+        return attr;
+      });
+      const mesh = new InstancedMesh(geo, this.buildingMat, count);
       mesh.castShadow = false; // Perf: avoid rendering thousands of instances in shadow pass
       mesh.receiveShadow = true;
 
@@ -396,8 +454,10 @@ export class BuildingMeshView {
   dispose(): void {
     if (this.buildingMesh) {
       this.group.remove(this.buildingMesh);
+      this.buildingMesh.geometry.dispose();
       this.buildingMesh.dispose();
       this.buildingMesh = null;
+      this.rects = null;
     }
     if (this.columnMesh) {
       this.group.remove(this.columnMesh);

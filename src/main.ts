@@ -16,6 +16,7 @@ import { createStore, type HudSnapshot } from './app/store.ts';
 import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
 import { BuildingMeshView, anchorCollider } from './render/BuildingMeshView.ts';
+import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
@@ -163,6 +164,16 @@ let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
 const buildingMeshView = new BuildingMeshView();
 renderer.scene.add(buildingMeshView.group);
+/** Painted 3D: photos of the tiles baked onto the box faces (render/FacadeBaker.ts). */
+const facadeBaker = new FacadeBaker(renderer.renderer, renderer.scene, {
+  tiles: () => tiles?.group ?? null,
+  // the photo wants the raw tiles: no clutter flattening, no snapping
+  before: () => { if (clutterFilter) { bakeSaved = { mode: clutterFilter.mode, snap: clutterFilter.snap }; clutterFilter.mode = 'off'; clutterFilter.snap = false; } },
+  after: () => { if (clutterFilter && bakeSaved) { clutterFilter.mode = bakeSaved.mode; clutterFilter.snap = bakeSaved.snap; } },
+  onRect: (box, face, r) => buildingMeshView.setFaceRect(box, face, r.x, r.y, r.w, r.h, ATLAS_SIZE)
+});
+let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
+if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;
 buildingMeshView.visible = false;
 if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
@@ -170,7 +181,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'game3d';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'painted-3d' | 'game3d';
 let viewMode: ViewMode = 'photoreal';
 /** Modes that draw the Google 3D tiles on screen (raw, masked, or snapped onto the colliders). */
 const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d', 'best-3d-plus']);
@@ -253,6 +264,8 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: BEST 3D';
   } else if (viewMode === 'best-3d-plus') {
     viewModeText.textContent = 'VIEW: BEST 3D+';
+  } else if (viewMode === 'painted-3d') {
+    viewModeText.textContent = 'VIEW: PAINTED 3D';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
   } else if (viewMode === 'masked-tiles') {
@@ -267,6 +280,7 @@ function setViewMode(mode: ViewMode): void {
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = SNAPS_TILES.has(mode);
+  const isPainted = mode === 'painted-3d';
   const hasTiles = SHOWS_TILES.has(mode);
 
   if (tiles) tiles.group.visible = hasTiles;
@@ -313,8 +327,9 @@ function setViewMode(mode: ViewMode): void {
   }
 
   buildingMeshView.setMode(mode === 'game3d' ? 'arcade' : 'textured');
+  buildingMeshView.setAtlas(isPainted ? facadeBaker.texture : null);
 
-  renderer.setLightRig(hasTiles && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  renderer.setLightRig((hasTiles || isPainted) && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
@@ -326,6 +341,8 @@ function toggleViewMode(): void {
   } else if (viewMode === 'best-3d') {
     setViewMode('best-3d-plus');
   } else if (viewMode === 'best-3d-plus') {
+    setViewMode('painted-3d');
+  } else if (viewMode === 'painted-3d') {
     setViewMode('game3d');
   } else {
     setViewMode('photoreal');
@@ -427,6 +444,7 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
     sample,
     tiles?.activeTopGrid
   );
+  facadeBaker.setColliders(colliders);
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (satTex) {
     buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
@@ -1245,6 +1263,7 @@ function frame(now: number): void {
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
   }
+  if (viewMode === 'painted-3d') facadeBaker.update(renderer.camera.position, now);
   renderer.render();
   requestAnimationFrame(frame);
 }

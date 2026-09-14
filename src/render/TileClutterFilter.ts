@@ -157,6 +157,28 @@ if (uSnap > 0.5) {
     float lift = 0.02 + 0.03 * max(0.0, 1.0 - best / uSnapIn);
     vec3 a = abs(axis);
     vec3 target = cwp * (1.0 - a) + a * plane + axis * lift;
+    // the collider pass overlaps boxes (a run nested inside a wider one): the nearest face
+    // can belong to the inner box, which buries the facade inside the outer box's fill.
+    // Push the point out along the same axis to the face of any box still containing it
+    for (int pass = 0; pass < 2; pass++) {
+      for (int oy = -1; oy <= 1; oy++) {
+        for (int ox = -1; ox <= 1; ox++) {
+          ivec2 sci = clamp(sc0 + ivec2(ox, oy), ivec2(0), sn - 1);
+          int sid = int(texelFetch(uSnapIds, sci, 0).r) - 1;
+          if (sid < 0) continue;
+          ivec2 bxy = ivec2((sid - (sid / ${BOXES_PER_ROW}) * ${BOXES_PER_ROW}) * 2, sid / ${BOXES_PER_ROW});
+          vec3 cmin = texelFetch(uSnapBoxes, bxy, 0).xyz;
+          vec3 cmax = texelFetch(uSnapBoxes, bxy + ivec2(1, 0), 0).xyz;
+          bool inside = target.x > cmin.x + 0.05 && target.x < cmax.x - 0.05
+                     && target.z > cmin.z + 0.05 && target.z < cmax.z - 0.05
+                     && target.y > cmin.y && target.y < cmax.y;
+          if (!inside) continue;
+          plane = axis.x < -0.5 ? cmin.x : axis.x > 0.5 ? cmax.x : axis.z < -0.5 ? cmin.z : cmax.z;
+          target = cwp * (1.0 - a) + a * plane + axis * lift;
+          bmin = cmin; bmax = cmax;
+        }
+      }
+    }
     // nothing past the face's own edges: a vertex beyond the corner folds onto it
     target.xz = clamp(target.xz, bmin.xz - lift, bmax.xz + lift);
     cSnapDelta = target - cwp;
