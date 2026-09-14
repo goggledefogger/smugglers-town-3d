@@ -389,6 +389,8 @@ export class TileStreamer {
   private buildingRaster: RoadRaster | null = null;
   private buildingGrid: RoadGrid | null = null;
   private footprintPolys: Footprint[] | null = null;
+  /** tiles evicted beyond the fog horizon, waiting for the player to come back within it */
+  private parked: CollectedTile[] = [];
 
   /** Overture building polygons with heights (world metres), null until they land or when only Google answered. */
   get footprints(): readonly Footprint[] | null {
@@ -871,9 +873,22 @@ export class TileStreamer {
       }
       if (farthest && farthestD > FOG_HORIZON_M) {
         this.remove(farthest);
+        this.parked.push(farthest);
       } else {
         return;
       }
+    }
+
+    // a tile evicted beyond the fog horizon comes back when the player does, ahead of any
+    // refinement: without this, driving across the field and back left bare satellite ground
+    const back = this.parked.findIndex(t => nodeDistM(t.node, p) < FOG_HORIZON_M * 0.7);
+    if (back >= 0) {
+      const t = this.parked.splice(back, 1)[0]!;
+      this.inFlight = true;
+      this.add(t).catch(e => noteFailure('reload failed', e)).finally(() => {
+        this.inFlight = false;
+      });
+      return;
     }
 
     const candidates: LoadedTile[] = [];
