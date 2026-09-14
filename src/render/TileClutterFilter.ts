@@ -33,7 +33,7 @@
  * refinement or collider rebuild is a re-upload, never a recompile.
  */
 import {
-  DataTexture, RedFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter, LinearFilter,
+  DataTexture, RedFormat, RGFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter, LinearFilter,
   ClampToEdgeWrapping, Vector2,
   type Object3D, type Mesh, type Material, type WebGLProgramParametersWithUniforms
 } from 'three';
@@ -51,10 +51,14 @@ export const CLUTTER_RISE_M = 2.5;
 /** Swept only: with no structure cell within bilinear reach, tall enough to take buses and RVs too. */
 export const CLUTTER_TALL_M = 6;
 
-/** Facade snap: a tile vertex this far outside a collider face (m) still lands on it. */
+/** Facade snap: roof geometry this far above a box top (m) still lands on it. */
 export const SNAP_OUT_M = 4;
-/** Facade snap: street-height geometry (a car at the kerb) only snaps from this close outside (m). */
-export const SNAP_OUT_LOW_M = 4;
+/** Facade snap: catch zone in front of a wall face, in grid cells; the walls are lenient on purpose. */
+export const SNAP_REACH_OUT_CELLS = 2.5;
+/** Facade snap: catch zone behind a wall face (inside the box), in grid cells. */
+export const SNAP_REACH_IN_CELLS = 1.5;
+/** Facade snap: cell -> box map is dilated by this many cells so the catch zone can find its box. */
+export const SNAP_RING_CELLS = 2;
 /** Box bounds texture: this many boxes per row, two texels (min, max) each. */
 const BOXES_PER_ROW = 1024;
 
@@ -94,7 +98,9 @@ float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3
   if (inZ && inY && dE > -tolIn && dE < tolOut && abs(dE) < best) { best = abs(dE); axis = vec3(1.0, 0.0, 0.0); plane = bmax.x; face = 2; }
   if (inX && inY && dS > -tolIn && dS < tolOut && abs(dS) < best) { best = abs(dS); axis = vec3(0.0, 0.0, -1.0); plane = bmin.z; face = 3; }
   if (inX && inY && dN > -tolIn && dN < tolOut && abs(dN) < best) { best = abs(dN); axis = vec3(0.0, 0.0, 1.0); plane = bmax.z; face = 4; }
-  if (uSnapTop > 0.5 && inX && inZ && dT > -tolIn && dT < ${SNAP_OUT_M}.0 && abs(dT) < best) { best = abs(dT); axis = vec3(0.0, 1.0, 0.0); plane = bmax.y; face = 5; }
+  // roofs keep a short reach: a merged box top can sit far above a real roof, and lifting
+  // that roof up to it would hang a sheet of photogrammetry in the sky
+  if (uSnapTop > 0.5 && inX && inZ && dT > -${SNAP_OUT_M}.0 && dT < ${SNAP_OUT_M}.0 && abs(dT) < best) { best = abs(dT); axis = vec3(0.0, 1.0, 0.0); plane = bmax.y; face = 5; }
   return best;
 }
 `;
@@ -103,28 +109,31 @@ float snapFace(vec3 p, vec3 bmin, vec3 bmax, float tolOut, float tolIn, out vec3
  * Facade snap (Best 3D): the vertex's cell and its eight neighbours name
  * candidate collider boxes (a wall can stand in the cell of the low plaza box
  * next to it); the vertex moves onto the nearest outer face among them when
- * it is within reach: one grid cell (uSnapIn) inside, since the box is the
- * cell-quantized hull and the real wall sits anywhere up to a cell inside its
- * face, and up to a cell outside for tall geometry, since the road corridor
- * carves a wall's own cell off its box. Street-height vertices (kerb cars)
- * only snap from SNAP_OUT_LOW_M outside. The photogrammetry texture rides
- * along on the vertex, so the wall the car hits is the wall the player sees,
- * and nothing slides as the camera moves. Geometry that started nearest the
- * face lands a hair further out, so the real facade wins the depth test over
- * anything deeper that snapped with it. Snapped vertices skip flattening.
+ * it is within the catch zone: SNAP_REACH_IN_CELLS inside, since the box is
+ * the cell-quantized hull and the real wall sits anywhere inside its face,
+ * and SNAP_REACH_OUT_CELLS outside, since the road corridor carves a wall's
+ * own cells off its box and a diagonal street leaves a stair of boxes behind
+ * one straight facade. The zone is wide on purpose: whatever stands upright
+ * in front of a wall is what the wall should look like. The one exclusion is
+ * kerb-height geometry on an OSM road cell, which is parked cars. The
+ * photogrammetry texture rides along on the vertex, so the wall the car hits
+ * is the wall the player sees, and nothing slides as the camera moves.
+ * Geometry that started nearest the face lands a hair further out, so the
+ * real facade wins the depth test over anything deeper that snapped with it.
+ * Snapped vertices skip flattening.
  */
 const VERTEX_SNAP = `
 vec3 cSnapDelta = vec3(0.0);
 vSnapped = 0.0;
 vSnapFace = -1.0;
 vSnapFaceS = -1.0;
-if (uSnap > 0.5) {
+// kerb-height geometry on an OSM road cell is a parked car: never a wall
+if (uSnap > 0.5 && !(vClutterRiseVal < uClutterRise && texelFetch(uSnapIds, min(ivec2(clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0) * vec2(textureSize(uSnapIds, 0))), textureSize(uSnapIds, 0) - 1), 0).g > 0.5)) {
   vec2 suv = clamp(cwp.xz / uClutterField.x + 0.5, 0.0, 1.0);
   ivec2 sn = textureSize(uSnapIds, 0);
   ivec2 sc0 = min(ivec2(suv * vec2(sn)), sn - 1);
-  // the road corridor carves a wall's own cell off its box, and the box's 1 m inset adds to
-  // that: tall geometry reaches a cell and a half; kerb-height geometry (parked cars) does not
-  float tolOut = vClutterRiseVal < uClutterRise ? ${SNAP_OUT_LOW_M}.0 : uSnapIn * 1.5;
+  float tolOut = uSnapIn * ${SNAP_REACH_OUT_CELLS};
+  float tolIn = uSnapIn * ${SNAP_REACH_IN_CELLS};
   float best = 1e9;
   vec3 axis = vec3(0.0), bmin = vec3(0.0), bmax = vec3(0.0);
   float plane = 0.0;
@@ -138,7 +147,7 @@ if (uSnap > 0.5) {
       vec3 cmin = texelFetch(uSnapBoxes, bxy, 0).xyz;
       vec3 cmax = texelFetch(uSnapBoxes, bxy + ivec2(1, 0), 0).xyz;
       vec3 cAxis; float cPlane; int cFace;
-      float d = snapFace(cwp, cmin, cmax, tolOut, uSnapIn, cAxis, cPlane, cFace);
+      float d = snapFace(cwp, cmin, cmax, tolOut, tolIn, cAxis, cPlane, cFace);
       // ponytail: the road carve leaves single-cell pillars along the kerb; a wall must not tear
       // between a pillar 2 m away and its own box 12 m back, so a pillar only wins with nothing else near
       if (min(cmax.x - cmin.x, cmax.z - cmin.z) < 6.0) d += uSnapIn;
@@ -154,8 +163,8 @@ if (uSnap > 0.5) {
     cSnapDelta = target - cwp;
     vSnapped = 1.0;
     // the key is the plane, not the box: neighbouring boxes share flush faces, and a
-    // facade running along them is one wall
-    vSnapFace = float(bestFace) * 65536.0 + floor(plane * 4.0);
+    // facade running along them is one wall; same axis, planes a step apart, still one wall
+    vSnapFace = float(bestFace) * 100000.0 + floor(plane * 4.0);
     vSnapFaceS = vSnapFace;
     cClutterDy = 0.0;
     vClutterFlat = 0.0;
@@ -239,13 +248,14 @@ if (uClutterMode > 2.5) {
 } else if (uClutterMode > 1.5) {
   if (vClutterFlat > 0.999) discard;
 }
-// snap: a triangle with only some vertices snapped, or with vertices on different faces
-// (a trolley wire strung between two buildings), is a shard stretched across the street,
-// so it goes; outside structure cells only snapped facades and flattened road decals
+// snap: a triangle with only some vertices snapped, or with vertices on planes more than
+// 15 m apart (a trolley wire strung between two buildings), is a shard stretched across
+// the street, so it goes; one bridging two steps of a stair of boxes behind a diagonal
+// facade stays. Outside structure cells only snapped facades and flattened road decals
 // survive, so nothing tall is drawn that the car could drive through
 if (uSnap > 0.5) {
   if (vSnapped > 0.001 && vSnapped < 0.999) discard;
-  if (vSnapped > 0.999 && abs(vSnapFaceS - vSnapFace) > 0.5) discard;
+  if (vSnapped > 0.999 && abs(vSnapFaceS - vSnapFace) > 60.0) discard;
   if (vSnapped < 0.999 && vClutterStructure < 0.5 && vClutterFlat < 0.999) discard;
 }
 `;
@@ -261,8 +271,8 @@ function groundTexture(hf: Heightfield): DataTexture {
   return tex;
 }
 
-function idTexture(ids: Float32Array, n: number): DataTexture {
-  const tex = new DataTexture(ids, n, n, RedFormat, FloatType);
+function idTexture(data: Float32Array, n: number): DataTexture {
+  const tex = new DataTexture(data, n, n, RGFormat, FloatType);
   tex.minFilter = tex.magFilter = NearestFilter;
   tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
   tex.needsUpdate = true;
@@ -280,8 +290,9 @@ function maskTexture(cells: Uint8Array, n: number): DataTexture {
 
 /**
  * Cell -> collider index + 1 (0 = none), the box's footprint cells plus a
- * one-cell ring so a facade standing in the inset gap outside the box still
- * finds it. Footprint cells win over a neighbour's ring.
+ * SNAP_RING_CELLS ring so a facade standing well outside its carved box still
+ * finds it. Footprint cells win over a neighbour's ring, nearer rings over
+ * farther ones.
  */
 export function snapIdGrid(boxes: readonly BuildingCollider[], grid: Grid): Float32Array {
   const { n, cell, half } = grid;
@@ -303,8 +314,18 @@ export function snapIdGrid(boxes: readonly BuildingCollider[], grid: Grid): Floa
     }
   };
   fill(0, true);
-  fill(1, false);
+  for (let r = 1; r <= SNAP_RING_CELLS; r++) fill(r, false);
   return ids;
+}
+
+/** Interleave the id map with the OSM road mask (1 = road corridor) into RG texels. */
+function snapIdData(ids: Float32Array, roads: Uint8Array | null): Float32Array {
+  const data = new Float32Array(ids.length * 2);
+  for (let c = 0; c < ids.length; c++) {
+    data[c * 2] = ids[c]!;
+    data[c * 2 + 1] = roads && roads[c] === 1 ? 1 : 0;
+  }
+  return data;
 }
 
 function snapBoxTexture(boxes: readonly BuildingCollider[]): DataTexture {
@@ -347,7 +368,7 @@ export class TileClutterFilter {
     this.uMask = { value: maskTexture(structure, n) };
     this.uField = { value: new Vector2(ground.size, ground.segs) };
     this.uRise = { value: CLUTTER_RISE_M * riseScale };
-    this.uSnapIds = { value: idTexture(new Float32Array(1), 1) };
+    this.uSnapIds = { value: idTexture(new Float32Array(2), 1) };
     this.uSnapBoxes = { value: snapBoxTexture([]) };
   }
 
@@ -373,11 +394,14 @@ export class TileClutterFilter {
     this.uSnapTop.value = on ? 1 : 0;
   }
 
-  /** The colliders were rebuilt: refresh the cell -> box map and box bounds the snap reads. */
-  setSnapBoxes(boxes: readonly BuildingCollider[], grid: Grid): void {
+  /**
+   * The colliders were rebuilt: refresh the cell -> box map and box bounds the snap reads.
+   * `roads` is the OSM corridor mask on the same grid (kerb-height geometry there is parked cars).
+   */
+  setSnapBoxes(boxes: readonly BuildingCollider[], grid: Grid, roads: Uint8Array | null = null): void {
     this.uSnapIn.value = grid.cell;
     this.uSnapIds.value.dispose();
-    this.uSnapIds.value = idTexture(snapIdGrid(boxes, grid), grid.n);
+    this.uSnapIds.value = idTexture(snapIdData(snapIdGrid(boxes, grid), roads), grid.n);
     this.uSnapBoxes.value.dispose();
     this.uSnapBoxes.value = snapBoxTexture(boxes);
   }

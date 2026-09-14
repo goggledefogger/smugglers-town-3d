@@ -566,6 +566,11 @@ export class TileStreamer {
     return this.roadGrid != null;
   }
 
+  /** OSM road corridor mask on the active grid (1 = road), null until the fetch lands. */
+  get roadMask(): Uint8Array | null {
+    return this.roadGrid?.mask ?? null;
+  }
+
   setExperimentMode(mode: ColliderExperimentMode): void {
     if (this.currentExperiment === mode) return;
     this.currentExperiment = mode;

@@ -464,7 +464,7 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   const sample = (x: number, z: number) => world.terrainProvider.heightfield.sample(x, z);
   const colliders = rawColliders.map(b => anchorCollider(b, sample));
   clutterFilter?.maskChanged();
-  if (clutterFilter && tiles) clutterFilter.setSnapBoxes(colliders, tiles.activeGrid);
+  if (clutterFilter && tiles) clutterFilter.setSnapBoxes(colliders, tiles.activeGrid, tiles.roadMask);
   game.setBuildingColliders(colliders);
   buildingMeshView.update(
     colliders,

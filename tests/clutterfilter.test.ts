@@ -145,15 +145,15 @@ describe('facade snap (Best 3D)', () => {
   const box = (x0: number, z0: number, x1: number, z1: number) =>
     ({ min: new Vector3(x0, 0, z0), max: new Vector3(x1, 20, z1) });
 
-  it('maps footprint cells to the box and a one-cell ring around it', () => {
+  it('maps footprint cells to the box and a two-cell ring around it', () => {
     // inset box inside cells i=2..3, j=2 (x -19..-1, z -19..-11)
     const ids = snapIdGrid([box(-19, -19, -1, -11)], grid);
     expect(ids[2 * N + 2]).toBe(1);
     expect(ids[2 * N + 3]).toBe(1);
     expect(ids[1 * N + 2]).toBe(1); // ring south
-    expect(ids[3 * N + 4]).toBe(1); // ring corner
+    expect(ids[0 * N + 5]).toBe(1); // outer ring corner
     expect(ids[5 * N + 5]).toBe(0);
-    expect(ids[0]).toBe(0);
+    expect(ids[6 * N + 6]).toBe(0);
   });
 
   it('a footprint cell beats a neighbour box ring', () => {
