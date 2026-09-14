@@ -391,6 +391,28 @@ From this raster, two physical surfaces are extracted:
    rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
    driving corridors carve out seamlessly without delaying match start.
 
+### "Painted 3D" Visual Mode (`render/FacadeBaker.ts`)
+
+The collision boxes wearing photographs of the Google 3D Tiles. For every
+wall face of every box, an orthographic camera standing in the street looks
+straight at the face and renders the tiles into that face's rectangle of one
+4096² atlas; the box shader reads the atlas through per-instance rectangle
+attributes (`aRectNX/PX/NZ/PZ`). Only satellite ground and painted boxes are
+drawn in the mode, so nothing can float and no road is ever covered. The face
+camera looks half the gap to the box across the street (capped at 25 m) so
+the far side cannot leak in, and 12 m behind the face for walls standing
+inside their cell-quantized box. Faces are baked nearest the car first under a
+4 ms frame budget, photos survive collider rebuilds for boxes whose bounds did
+not change, and the nearest faces are refreshed every few seconds so tiles
+that refined since show up. Texel size follows the total wall area (about
+1 m downtown). Where the photo saw nothing (alpha 0) the box shows the same
+satellite-toned fill as Best 3D.
+
+"Best 3D" (`render/TileClutterFilter.ts`, `snap`) is the earlier approach:
+tile vertices moved onto the nearest box face so the tiles themselves are the
+walls. It is kept for comparison; its failure modes (shards, walls buried in
+overlapping boxes, bare faces) are what Painted 3D was built to remove.
+
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
 "Game 3D" mode renders the exact extracted physical geometry:
