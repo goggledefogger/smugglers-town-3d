@@ -9,7 +9,7 @@ const base = new URL(process.env.E2E_URL ?? 'http://localhost:5173/');
 const artifacts = resolve(process.env.MAP_OBJECTS_ARTIFACT_DIR ?? '.playwright-mcp/map-objects');
 const real = process.env.MAP_OBJECTS_REAL === '1';
 const modes = [
-  'VIEW: REAL 3D', 'VIEW: MAP + OBJECTS', 'VIEW: BAKED FACADES', 'VIEW: MASKED 3D TILES',
+  'VIEW: REAL 3D', 'VIEW: MAP + OBJECTS', 'VIEW: METROPOLIS', 'VIEW: BAKED FACADES', 'VIEW: MASKED 3D TILES',
   'VIEW: BEST 3D', 'VIEW: PROJECTED (3D TILES)', 'VIEW: PROJECTED (2D MAPS)',
   'VIEW: TEXTURED 3D', 'VIEW: TEXTURED (PLANAR)', 'VIEW: ARCADE 3D',
 ];

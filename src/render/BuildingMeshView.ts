@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects' | 'baked-facades';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects' | 'baked-facades' | 'metropolis';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -31,6 +31,9 @@ varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
 varying float vBuildingHeight;
+varying vec2 vLocalXZ;
+varying vec2 vBuildingFootprint;
+varying vec3 vBuildingCenter;
 `;
 
 const VERTEX_BODY_BUILDING = `
@@ -45,9 +48,14 @@ vWorldPos = (modelMatrix * bWorldPos).xyz;
 vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
 vBuildingNormal = normal;
 vLocalNormY = position.y + 0.5;
+vLocalXZ = position.xz;
 vBuildingHeight = 1.0;
+vBuildingFootprint = vec2(10.0, 10.0);
+vBuildingCenter = vWorldPos;
 #ifdef USE_INSTANCING
   vBuildingHeight = length(instanceMatrix[1].xyz);
+  vBuildingFootprint = vec2(length(instanceMatrix[0].xyz), length(instanceMatrix[2].xyz));
+  vBuildingCenter = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xyz;
 #endif
 `;
 
@@ -64,10 +72,136 @@ varying vec3 vBuildingNormal;
 varying float vIsRoof;
 varying float vLocalNormY;
 varying float vBuildingHeight;
+varying vec2 vLocalXZ;
+varying vec2 vBuildingFootprint;
+varying vec3 vBuildingCenter;
 `;
 
 const FRAGMENT_BODY_BUILDING = `
-if (uHasTexture > 0.5 && uTextureStyle > 4.5) {
+if (uHasTexture > 0.5 && uTextureStyle > 6.5) {
+  if (vIsRoof < 0.5) {
+    float belowRoof = (1.0 - vLocalNormY) * vBuildingHeight;
+    float heightAboveGround = vLocalNormY * vBuildingHeight;
+    float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
+
+    // Deterministic per-building spatial seed
+    vec2 cellCoord = floor(vBuildingCenter.xz / 8.0);
+    float bSeed = fract(sin(dot(cellCoord, vec2(12.9898, 78.233))) * 43758.5453);
+
+    // Architectural Typologies
+    vec3 baseWallColor;
+    float isTower = step(38.0, vBuildingHeight);
+    float isMidRise = step(16.0, vBuildingHeight) * (1.0 - isTower);
+    float isLowRise = (1.0 - isTower) * (1.0 - isMidRise);
+
+    if (isTower > 0.5) {
+      // Skyscraper: modern reflective glass curtain wall & polished steel
+      vec3 towerGlassA = vec3(0.15, 0.22, 0.32); // deep sapphire curtain wall
+      vec3 towerGlassB = vec3(0.13, 0.16, 0.20); // smoked obsidian glass
+      vec3 towerGlassC = vec3(0.20, 0.25, 0.28); // titanium steel
+      baseWallColor = bSeed < 0.35 ? towerGlassA : (bSeed < 0.70 ? towerGlassB : towerGlassC);
+    } else if (isMidRise > 0.5) {
+      // Mid-Rise: warm limestone, architectural precast concrete, travertine
+      vec3 limestone = vec3(0.55, 0.50, 0.43);
+      vec3 concrete = vec3(0.46, 0.47, 0.49);
+      vec3 sandMasonry = vec3(0.50, 0.44, 0.38);
+      baseWallColor = bSeed < 0.35 ? limestone : (bSeed < 0.70 ? concrete : sandMasonry);
+    } else {
+      // Low-Rise: warm brick, historic brownstone, stucco
+      vec3 redBrick = vec3(0.48, 0.25, 0.19);
+      vec3 brownstone = vec3(0.41, 0.33, 0.27);
+      vec3 warmStucco = vec3(0.50, 0.47, 0.42);
+      baseWallColor = bSeed < 0.45 ? redBrick : (bSeed < 0.75 ? brownstone : warmStucco);
+    }
+
+    // Story and window bay grid
+    float storyHeight = isTower > 0.5 ? 3.6 : 3.2;
+    float bayWidth = isTower > 0.5 ? 2.2 : 2.8;
+    vec2 bays = vec2(wallU / bayWidth, belowRoof / storyHeight);
+    vec2 roomCoord = floor(bays);
+    vec2 edge = abs(fract(bays) - 0.5);
+    vec2 aa = max(fwidth(bays), vec2(0.001));
+
+    // Antialiased window aperture
+    vec2 apertureTarget = isTower > 0.5 ? vec2(0.38, 0.34) : vec2(0.28, 0.24);
+    vec2 aperture = 1.0 - smoothstep(apertureTarget - aa, apertureTarget + aa, edge);
+    float windows = aperture.x * aperture.y;
+    windows *= 1.0 - smoothstep(0.15, 0.5, max(aa.x, aa.y));
+    windows *= step(5.5, vBuildingHeight) * step(0.4, belowRoof);
+
+    // View angle and distance attenuation to eliminate Moiré and grazing flicker
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    float viewDot = clamp(abs(dot(vBuildingNormal, viewDir)), 0.0, 1.0);
+    float dist = length(vWorldPos - cameraPosition);
+    float distFade = 1.0 - smoothstep(140.0, 320.0, dist);
+    float angleFade = smoothstep(0.10, 0.35, viewDot);
+    windows *= distFade * angleFade;
+
+    // Room interior lighting
+    float roomHash = fract(sin(dot(roomCoord + cellCoord * 17.0, vec2(37.17, 73.91))) * 43758.5453);
+    vec3 warmLight = vec3(1.0, 0.85, 0.55);
+    vec3 coolLight = vec3(0.75, 0.90, 1.0);
+    vec3 darkGlass = mix(vec3(0.07, 0.10, 0.14), vec3(0.14, 0.20, 0.28), clamp(1.0 - belowRoof / vBuildingHeight, 0.0, 1.0));
+
+    vec3 windowColor;
+    float isLit = 0.0;
+    if (roomHash > 0.68) {
+      windowColor = warmLight * (0.85 + 0.25 * sin(roomHash * 25.0));
+      isLit = 1.0;
+    } else if (roomHash > 0.54) {
+      windowColor = coolLight * 0.90;
+      isLit = 0.75;
+    } else {
+      windowColor = darkGlass;
+    }
+
+    // Window mullions (structural crossbar in window pane)
+    float mullionX = 1.0 - smoothstep(0.03 - aa.x, 0.03 + aa.x, abs(edge.x - 0.22));
+    windowColor = mix(windowColor, baseWallColor * 0.7, mullionX * 0.6);
+
+    // Ambient Occlusion: roof eave & contact plinth
+    float contact = smoothstep(0.0, 0.12, vLocalNormY);
+    float eave = smoothstep(0.0, 0.6, belowRoof);
+    vec3 wallColor = mix(diffuseColor.rgb, baseWallColor, 0.85) * mix(0.72, 1.0, contact) * mix(0.82, 1.0, eave);
+
+    // Driving Eye-Level: Ground-Floor Storefronts & Lobbies (heightAboveGround < 4.2m)
+    float isStorefront = (1.0 - step(4.2, heightAboveGround)) * step(0.65, heightAboveGround);
+    if (isStorefront > 0.5) {
+      // Large commercial glass bay
+      vec2 storeBays = vec2(wallU / 3.6, heightAboveGround / 4.2);
+      vec2 storeEdge = abs(fract(storeBays) - 0.5);
+      vec2 storeAA = max(fwidth(storeBays), vec2(0.001));
+      vec2 storeAp = 1.0 - smoothstep(vec2(0.38, 0.32) - storeAA, vec2(0.38, 0.32) + storeAA, storeEdge);
+      float storeGlass = storeAp.x * storeAp.y * distFade * angleFade;
+      vec3 storeGlow = vec3(0.96, 0.82, 0.58) * 0.85;
+      wallColor = mix(wallColor, storeGlow, storeGlass * 0.85);
+      totalEmissiveRadiance += storeGlow * storeGlass * 0.40;
+    }
+
+    // Foundation Plinth (anchoring building into terrain at heightAboveGround < 0.65m)
+    float isPlinth = 1.0 - step(0.65, heightAboveGround);
+    vec3 plinthTone = vec3(0.18, 0.19, 0.21);
+    wallColor = mix(wallColor, plinthTone, isPlinth * 0.90);
+
+    // Corner Edge AO for Drift Readability at 180 km/h
+    float cornerDist = (abs(vBuildingNormal.z) > 0.5)
+      ? (0.5 - abs(vLocalXZ.x)) * vBuildingFootprint.x
+      : (0.5 - abs(vLocalXZ.y)) * vBuildingFootprint.y;
+    float cornerAO = smoothstep(0.0, 0.65, cornerDist);
+    wallColor *= mix(0.70, 1.0, cornerAO);
+
+    // Combine wall and window
+    if (isStorefront < 0.5 && isPlinth < 0.5) {
+      diffuseColor.rgb = mix(wallColor, windowColor, windows * 0.78);
+      totalEmissiveRadiance += windowColor * windows * isLit * 0.35;
+    } else {
+      diffuseColor.rgb = wallColor;
+    }
+
+    // Baked ambient fill keeps shaded facades readable beside sunlit aerial imagery
+    totalEmissiveRadiance += diffuseColor.rgb * 0.22;
+  }
+} else if (uHasTexture > 0.5 && uTextureStyle > 4.5) {
   if (vIsRoof < 0.5) {
     float belowRoof = (1.0 - vLocalNormY) * vBuildingHeight;
     float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
@@ -252,13 +386,21 @@ if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 4.5) {
 }
 `;
 
-// Three applies lighting and tone mapping before output color-space conversion
-// Aerial roofs already contain daylight, so replace them after tone mapping but before fog/output conversion
 const FRAGMENT_MAP_ROOF = `
 if (uHasTexture > 0.5 && uTextureStyle > 4.5 && uHasSatellite > 0.5 && vIsRoof > 0.5) {
   vec2 roofUV = vec2(vWorldPos.x / uMapSize + 0.5, 0.5 - vWorldPos.z / uMapSize);
   if (all(greaterThanEqual(roofUV, vec2(0.0))) && all(lessThanEqual(roofUV, vec2(1.0)))) {
-    gl_FragColor.rgb = texture2D(uSatelliteMap, roofUV).rgb;
+    vec3 satRoof = texture2D(uSatelliteMap, roofUV).rgb;
+    if (uTextureStyle > 6.5) {
+      // Metropolis mode: frame the satellite roof with an architectural parapet border
+      float edgeDist = min((0.5 - abs(vLocalXZ.x)) * vBuildingFootprint.x, (0.5 - abs(vLocalXZ.y)) * vBuildingFootprint.y);
+      float isParapet = 1.0 - smoothstep(0.55, 0.75, edgeDist);
+      vec3 parapetTone = vec3(0.24, 0.25, 0.27);
+      float innerShadow = smoothstep(0.70, 1.40, edgeDist);
+      gl_FragColor.rgb = mix(satRoof * mix(0.75, 1.0, innerShadow), parapetTone, isParapet);
+    } else {
+      gl_FragColor.rgb = satRoof;
+    }
   }
 }
 `;
@@ -376,7 +518,9 @@ export class BuildingMeshView {
 
   setTextureStyle(style: BuildingTextureStyle): void {
     this._style = style;
-    if (style === 'baked-facades') {
+    if (style === 'metropolis') {
+      this.uTextureStyle.value = 7.0;
+    } else if (style === 'baked-facades') {
       this.uTextureStyle.value = 6.0;
     } else if (style === 'map-objects') {
       this.uTextureStyle.value = 5.0;

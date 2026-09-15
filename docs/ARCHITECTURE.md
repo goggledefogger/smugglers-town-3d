@@ -407,17 +407,31 @@ From this raster, physical surfaces and structures are extracted:
    rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
    driving corridors carve out seamlessly without delaying match start.
 
-### Visual Modes & "Map + Objects" (`render/BuildingMeshView.ts`)
+### Visual Modes, "Map + Objects" & "Metropolis" (`render/BuildingMeshView.ts`)
 To bridge the gap between photogrammetry visual fidelity and collision geometry,
 the engine supports switchable visual modes via `BuildingMeshView.ts`:
 
-- **Game 3D (`arcade`)**: Pure extruded collision boxes with height-based arcade
-  palettes (skyscrapers, mid-rise, residential) and flat shading. Serves as both
-  a stylized visual option and the primary QA diagnostic view with 100%
-  collision-visual parity.
-- **Best 3D (`textured`)**: Two-pass screen-space projection copying camera-view
-  tile pixels onto collision geometry. Rich in detail but subject to screen-space
-  stretching on vertical walls and incurs an extra offscreen scene render pass.
+- **Metropolis (`metropolis`)**: Flagship single-pass hybrid visual mode synthesizing
+  satellite imagery with a living architectural facade system:
+  - **Architectural Typologies**: Dynamically classifies structures into glass curtain-wall
+    skyscrapers (deep sapphire/obsidian reflective glass with aluminum mullions),
+    commercial mid-rise blocks (warm limestone, precast concrete, and travertine),
+    and warm low-rise brick/brownstone residential buildings.
+  - **Living Windows & Interior Illumination**: Deterministic per-room hashes illuminate
+    ~30% of windows with warm tungsten light and ~15% with cool office fluorescent light,
+    surrounded by reflective glass and thin structural mullions. Procedural distance
+    ($140\text{m} \dots 320\text{m}$) and grazing view-angle ($\text{viewDot} < 0.35$)
+    attenuation completely eliminate high-frequency Moiré and pixel strobing.
+  - **Street-Level Storefronts**: Eye-level commercial storefronts ($0.65\text{m} \dots 4.2\text{m}$)
+    with warm interior boutique lighting and lobby displays, anchored by a solid
+    foundation plinth ($0\text{m} \dots 0.65\text{m}$) with contact AO.
+  - **Architectural Roof Parapets**: Rooftop satellite imagery is framed by a crisp
+    architectural parapet coping rim ($< 0.75\text{m}$ perimeter) with an inner drop
+    shadow, eliminating raw satellite edge clipping.
+  - **Corner Edge AO for Drift Playability**: Vertical corner edge ambient occlusion
+    darkening ensures razor-sharp spatial awareness when drifting around corners at 180 km/h.
+  - **Zero Multi-Pass Overhead**: 100% single-pass rendering with zero offscreen textures
+    or extra scene passes, maintaining 60/120 FPS on mobile and integrated GPUs.
 - **Map + Objects (`map-objects`)**: Single-pass hybrid visual mode combining
   aerial satellite imagery on horizontal surfaces (ground plane and unlit roofs)
   with clean, camera-stable masonry walls and subtle antialiased windows on
@@ -429,12 +443,17 @@ the engine supports switchable visual modes via `BuildingMeshView.ts`:
     eliminating "floating square" deck slabs.
   - **Anti-Flicker Geometry & Shading**: Depth bias (`polygonOffset`) is removed
     to eliminate coplanar z-fighting with shadows and adjoining faces. Procedural
-    window apertures feature distance attenuation ($140\text{m} \dots 320\text{m}$)
-    and grazing view-angle fade ($\text{viewDot} < 0.35$), eliminating high-frequency
-    Moiré and pixel scintillation.
+    window apertures feature distance and angle attenuation.
   - **Double-Buffered Mesh Swaps**: Updated instance meshes are attached to the
     scene *before* retiring and disposing previous meshes, preventing 1-frame
     visual gaps during background tile streaming.
+- **Game 3D (`arcade`)**: Pure extruded collision boxes with height-based arcade
+  palettes (skyscrapers, mid-rise, residential) and flat shading. Serves as both
+  a stylized visual option and the primary QA diagnostic view with 100%
+  collision-visual parity.
+- **Best 3D (`textured`)**: Two-pass screen-space projection copying camera-view
+  tile pixels onto collision geometry. Rich in detail but subject to screen-space
+  stretching on vertical walls and incurs an extra offscreen scene render pass.
 
 ### Street clutter filter (`render/TileClutterFilter.ts`)
 
@@ -478,7 +497,7 @@ patterns:
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
 | **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
-| **D. Single-Pass "Map + Objects"** *(Hybrid Aerial + Procedural)* | Render satellite imagery on ground and unlit roofs; render procedural masonry walls with antialiased windows and bridge piers on collision boxes. | Single-pass GPU budget (no offscreen pass), camera-stable vertical walls, grounded overpasses, eliminates floating clutter, crisp aerial roofs. | Walls are stylized rather than photographic; landmark silhouettes simplified to extruded boxes. | **Implemented** in `BuildingMeshView.ts`; active in PR #33. |
+| **D. Single-Pass Hybrid: "Map + Objects" & "Metropolis"** *(Aerial + Procedural Architecture)* | Single-pass hybrid: satellite ground and unlit roofs combined with procedural architectural facades, illuminated windows, active storefronts, parapet trim, and grounded piers on collision geometry. | High performance (single-pass, zero offscreen passes), camera-stable walls, living illuminated windows, grounded bridges, no floating box clutter, crisp aerial roofs. | Walls are procedural rather than photo-textured; landmark silhouettes simplified to extruded boxes. | **Implemented** in `BuildingMeshView.ts`; accessible as `VIEW: MAP + OBJECTS` and `VIEW: METROPOLIS`. |
 | **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.85 reach padding. |
 | **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 

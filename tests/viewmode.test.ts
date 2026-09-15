@@ -123,6 +123,9 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('map-objects');
     expect(view.getTextureStyle()).toBe('map-objects');
 
+    view.setTextureStyle('metropolis');
+    expect(view.getTextureStyle()).toBe('metropolis');
+
     view.setTextureStyle('planar');
     expect(view.getTextureStyle()).toBe('planar');
 
@@ -134,7 +137,7 @@ describe('BuildingMeshView', () => {
     view.setTilesTexture(null, new Vector2(1920, 1080));
   });
 
-  it('keeps map-object geometry and live shader uniforms stable across texture and mode changes', () => {
+  it('keeps map-object and metropolis geometry and live shader uniforms stable across texture and mode changes', () => {
     const view = new BuildingMeshView();
     const collider = { min: new Vector3(0, 0, 0), max: new Vector3(12, 20, 12) };
     view.update([collider]);
@@ -157,6 +160,9 @@ describe('BuildingMeshView', () => {
     expect(shader.uniforms.uHasSatellite!.value).toBe(1);
     expect(shader.uniforms.uSatelliteMap!.value).toBe(satellite);
     expect(shader.uniforms.uMapSize!.value).toBe(200);
+
+    view.setTextureStyle('metropolis');
+    expect(shader.uniforms.uTextureStyle!.value).toBe(7);
 
     view.setTexture(null, 100);
     expect(shader.uniforms.uHasSatellite!.value).toBe(0);

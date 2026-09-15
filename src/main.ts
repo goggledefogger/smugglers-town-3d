@@ -176,7 +176,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'metropolis' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -191,13 +191,13 @@ const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatte
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
-  clutterBtn.hidden = !clutterFilter || viewMode === 'map-objects' || viewMode === 'baked-facades';
+  clutterBtn.hidden = !clutterFilter || viewMode === 'metropolis' || viewMode === 'map-objects' || viewMode === 'baked-facades';
   clutterBtn.classList.toggle('active', clutterMode !== 'off');
   clutterText.textContent = CLUTTER_LABEL[clutterMode];
 }
 
 function cycleClutterMode(): void {
-  if (!clutterFilter || viewMode === 'map-objects' || viewMode === 'baked-facades') return;
+  if (!clutterFilter || viewMode === 'metropolis' || viewMode === 'map-objects' || viewMode === 'baked-facades') return;
   clutterMode = clutterFilter.cycleMode();
   if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   updateClutterUi();
@@ -252,7 +252,9 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
-  if (viewMode === 'map-objects') {
+  if (viewMode === 'metropolis') {
+    viewModeText.textContent = 'VIEW: METROPOLIS';
+  } else if (viewMode === 'map-objects') {
     viewModeText.textContent = 'VIEW: MAP + OBJECTS';
   } else if (viewMode === 'baked-facades') {
     viewModeText.textContent = 'VIEW: BAKED FACADES';
@@ -280,7 +282,8 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
-  const isMapObjects = mode === 'map-objects' || mode === 'baked-facades';
+  const isMetropolis = mode === 'metropolis';
+  const isMapObjects = mode === 'map-objects' || mode === 'baked-facades' || isMetropolis;
   facadeBaker.group.visible = mode === 'baked-facades';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
   const isProjectingTiles = isProjected3dTiles || isBest3d;
@@ -332,6 +335,10 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
 
   if (mode === 'game3d') {
     buildingMeshView.setMode('arcade');
+  } else if (isMetropolis) {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('metropolis');
+    buildingMeshView.setTilesTexture(null);
   } else if (isMapObjects) {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle(mode === 'baked-facades' ? 'baked-facades' : 'map-objects');
@@ -364,6 +371,8 @@ function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
     setViewMode('map-objects');
   } else if (viewMode === 'map-objects') {
+    setViewMode('metropolis');
+  } else if (viewMode === 'metropolis') {
     setViewMode('baked-facades');
   } else if (viewMode === 'baked-facades') {
     setViewMode('masked-tiles');
@@ -497,7 +506,7 @@ function rebuildViews(): void {
   for (const actor of world.vehicles) {
     const view = new VehicleView(
       actor, () => world.terrainProvider.heightfield,
-      (x, z) => viewMode === 'photoreal' || viewMode === 'map-objects' || viewMode === 'baked-facades' ? groundShade.shadeAt(x, z) : 1
+      (x, z) => viewMode === 'photoreal' || viewMode === 'metropolis' || viewMode === 'map-objects' || viewMode === 'baked-facades' ? groundShade.shadeAt(x, z) : 1
     );
     vehicleViews.push(view);
     renderer.scene.add(view.group);
