@@ -1162,9 +1162,22 @@ export function collidersFromRasters(
     // Border cells (within GROUND_K = 60m of the map edge) have ground[c] === NO_DATA.
     // We intentionally do NOT fall back to terrainTop here: on steep slopes, terrainTop
     // disagrees with tile elevation at the edges, which would flag steep hillsides as false buildings.
-    if (t === NO_DATA || g === NO_DATA || t - g < rise) return false;
+    if (t === NO_DATA || g === NO_DATA) return false;
     const terr = terrainTop[c];
-    if (terr !== undefined && terr !== NO_DATA && t - terr < rise) return false;
+    const l = low[c];
+
+    // Standard structure above ground/terrain datum
+    const normalBuilding = (t - g >= rise) && (terr === undefined || terr === NO_DATA || t - terr >= rise);
+    // Waterfront / watercraft / low-depression structure:
+    // When 3D mesh geometry extends down into water or low ground well below morphological opening g
+    // (which was dilated from a nearby riverbank, cliff, or quay wall):
+    const waterfrontBuilding = (
+      l !== undefined && l !== Infinity && l !== NO_DATA &&
+      (t - l >= rise) &&
+      (l < g - 2.0 || (terr !== undefined && terr !== NO_DATA && l < terr - 2.0))
+    );
+
+    if (!normalBuilding && !waterfrontBuilding) return false;
     if (isDeck[c] || isRamp[c]) return false;
     // Exempt gradual driveable terrain (slopes, hillsides, knolls, road embankments)
     if (isDriveableGround[c]) return false;
@@ -1203,38 +1216,50 @@ export function collidersFromRasters(
     i1: number;
     j0: number;
     j1: number;
-    hasSouth: boolean;
-    hasNorth: boolean;
+    hasSouth?: boolean;
+    hasNorth?: boolean;
+    isFreestanding?: boolean;
   }
   const boxes: BoxExtent[] = [];
   let above = new Map<number, BoxExtent>();
+  const HEIGHT_TIER_STEP_M = 7.0;
 
   for (let j = 0; j < n; j++) {
     const z0 = -half + j * cell;
     const row = new Map<number, BoxExtent>();
-    let start = -1, hi = -Infinity, lo = Infinity;
+    let start = -1, hi = -Infinity, lo = Infinity, runTop = 0;
     for (let i = 0; i <= n; i++) {
       const c = j * n + i;
-      if (i < n && isBuilding(c)) {
+      const bld = i < n && isBuilding(c);
+      const t = bld ? top[c]! : -Infinity;
+      const heightStep = start >= 0 && bld && Math.abs(t - runTop) >= HEIGHT_TIER_STEP_M;
+
+      if (bld && !heightStep) {
         if (start < 0) {
           start = i;
           hi = -Infinity;
           lo = Infinity;
+          runTop = t;
         }
-        hi = Math.max(hi, top[c]!);
+        hi = Math.max(hi, t);
+        runTop = (runTop + t) * 0.5;
         const gC = getGroundY(c);
+        const lC = low[c];
+        const baseGround = (lC !== undefined && lC !== Infinity && lC !== NO_DATA && lC < gC)
+          ? lC
+          : gC;
         // When an overhead structure has confirmed open driving clearance below (e.g. elevated canopy,
         // skybridge, or viaduct), elevate its floor so vehicles can drive cleanly underneath
         const cellFloor = hasGroundClearance(c, gC, top[c]!)
           ? gC + thresholds.clearanceDriveMaxM + 1.0
-          : gC;
+          : baseGround;
         lo = Math.min(lo, cellFloor);
         continue;
       }
       if (start < 0) continue;
       const key = start * (n + 1) + i;
       const prev = above.get(key);
-      if (prev) {
+      if (prev && Math.abs(prev.b.max.y - hi) < HEIGHT_TIER_STEP_M) {
         prev.b.max.z = z0 + cell;
         prev.b.max.y = Math.max(prev.b.max.y, hi);
         prev.b.min.y = Math.min(prev.b.min.y, lo - 1);
@@ -1249,7 +1274,22 @@ export function collidersFromRasters(
         boxes.push(ext);
         row.set(key, ext);
       }
-      start = -1;
+      if (bld && heightStep) {
+        start = i;
+        hi = t;
+        runTop = t;
+        const gC = getGroundY(c);
+        const lC = low[c];
+        const baseGround = (lC !== undefined && lC !== Infinity && lC !== NO_DATA && lC < gC)
+          ? lC
+          : gC;
+        const cellFloor = hasGroundClearance(c, gC, top[c]!)
+          ? gC + thresholds.clearanceDriveMaxM + 1.0
+          : baseGround;
+        lo = cellFloor;
+      } else {
+        start = -1;
+      }
     }
     above = row;
   }
@@ -1261,7 +1301,8 @@ export function collidersFromRasters(
   // buildings are solid with zero gaps, zero cracks, and zero isolated pillars.
   // Freestanding 1-cell columns (isolated piers/towers with no building neighbors on all 4 sides)
   // get a 2.8m inset to snugly hug structural supports.
-  for (const { b, i0, i1, j0, j1 } of boxes) {
+  for (const boxExt of boxes) {
+    const { b, i0, i1, j0, j1 } = boxExt;
     let touchSouth = false, bordersRoadSouth = false;
     if (j0 > 0) {
       for (let i = i0; i < i1; i++) {
@@ -1297,9 +1338,12 @@ export function collidersFromRasters(
 
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
-    const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
+    const isFreestanding = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
+    boxExt.hasSouth = touchSouth;
+    boxExt.hasNorth = touchNorth;
+    boxExt.isFreestanding = isFreestanding;
 
-    const streetInset = isIsolatedColumn ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
+    const streetInset = isFreestanding ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
     const roadInset = Math.max(streetInset, 2.5);
 
     const insetWest = bordersRoadWest ? roadInset : streetInset;
@@ -1318,10 +1362,9 @@ export function collidersFromRasters(
   // In road corridors, any isolated 1-cell column is an artifact (utility pole / overhead wire / tree)
   // and must be pruned to keep roadways 100% driveable.
   return boxes
-    .filter(({ b, i0, i1, j0, j1 }) => {
-      const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1);
-      if (isIsolatedColumn) {
-        // Any isolated column that touches or borders a road corridor is pruned
+    .filter(({ b, i0, i1, j0, j1, isFreestanding }) => {
+      if (isFreestanding) {
+        // Any freestanding isolated column that touches or borders a road corridor is pruned
         if (roadMask) {
           for (let j = Math.max(0, j0 - 1); j <= Math.min(n - 1, j1); j++) {
             for (let i = Math.max(0, i0 - 1); i <= Math.min(n - 1, i1); i++) {
