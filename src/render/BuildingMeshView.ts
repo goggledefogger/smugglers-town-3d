@@ -664,29 +664,8 @@ export class BuildingMeshView {
       });
 
       if (deckIndices.length > 0) {
-        // Collect support piers for elevated spans above terrain
-        const piers: { x: number; topY: number; bottomY: number; z: number }[] = [];
         const THICKNESS = 1.4;
-
-        if (sampleGround) {
-          for (let idx = 0; idx < deckIndices.length; idx++) {
-            const c = deckIndices[idx]!;
-            const i = c % n;
-            const j = Math.floor(c / n);
-            const x = -half + (i + 0.5) * cell;
-            const z = -half + (j + 0.5) * cell;
-            const topY = deckGrid[c]!;
-            const gy = sampleGround(x, z);
-            const clearance = (topY - THICKNESS) - gy;
-            // For spans elevated > 3.0m above ground, drop a solid support pier
-            // (every 2 cells along the span to avoid over-crowding)
-            if (clearance > 3.0 && ((i + j) % 2 === 0)) {
-              piers.push({ x, topY: topY - THICKNESS, bottomY: gy - 1.0, z });
-            }
-          }
-        }
-
-        const totalDeckInstances = deckIndices.length + piers.length;
+        const totalDeckInstances = deckIndices.length;
         const deckMesh = new InstancedMesh(this.boxGeo, this.deckMat, totalDeckInstances);
         deckMesh.castShadow = false;
         deckMesh.receiveShadow = true;
@@ -703,16 +682,6 @@ export class BuildingMeshView {
           _scale.set(cell, THICKNESS, cell);
           _mat.compose(_pos, _quat, _scale);
           deckMesh.setMatrixAt(idx, _mat);
-        }
-
-        for (let pIdx = 0; pIdx < piers.length; pIdx++) {
-          const pier = piers[pIdx]!;
-          const pierHeight = Math.max(0.5, pier.topY - pier.bottomY);
-          const py = pier.bottomY + pierHeight / 2;
-          _pos.set(pier.x, py, pier.z);
-          _scale.set(cell * 0.35, pierHeight, cell * 0.35);
-          _mat.compose(_pos, _quat, _scale);
-          deckMesh.setMatrixAt(deckIndices.length + pIdx, _mat);
         }
 
         deckMesh.instanceMatrix.needsUpdate = true;

@@ -393,23 +393,32 @@ From this raster, physical surfaces and structures are extracted:
    Neighbor-aware horizontal insetting insets exterior street faces by 1.0 m to
    prevent 10 m raster quantization from protruding into street lanes, while
    keeping internal touching faces 100% flush.
+   **Road Corridor Protection & Curbside Insetting**: Faces directly bordering
+   active road corridors receive an expanded 2.5 m retraction buffer, preventing
+   staircase quantization from protruding into street lanes or crosswalks.
    **Clutter Pruning**: Isolated single-cell low-rise structures ($< 8.5\text{ m}$
-   rise) are filtered out. This suppresses bottomless box pop-up over flat
-   satellite ground (eliminating small tree and vehicle bumps), while preserving
-   multi-cell building footprints and tall standalone towers.
+   rise) are filtered out, and any isolated 1-cell column located within or bordering
+   a road corridor is pruned regardless of height, suppressing utility pole, wire,
+   and street tree photogrammetry noise from blocking roadway traffic.
 4. **OSM Road Corridors (`services/osm/roads.ts`)**: In hilly cities, morphological
    opening sags by up to 17 m across crests, misclassifying streets as buildings.
-   Drivable OpenStreetMap road centrelines fetched via Overpass are rasterized
-   into a `roadMask` grid with reach-aware bounding box clearance (`halfWidth + cellSize * 0.85`).
-   Road cells are exempt from building classification, and their driving ground height in
-   `AmortizedGroundBuilder` is pinned directly to the true surface (`Math.min(top, low)`)
-   rather than the sagging estimate. An asynchronous event (`onRoadsLoaded`) dynamically
-   rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
-   driving corridors carve out seamlessly without delaying match start.
+   Drivable OpenStreetMap road centrelines fetched via Overpass (querying vehicular,
+   pedestrian boulevard, busway, and service corridors) are rasterized
+   into a `roadMask` grid with reach-aware bounding box clearance and diagonal aliasing
+   bridging (`reachSlackMultiplier = 0.65`). Road cells are exempt from building classification,
+   and their driving ground height in `AmortizedGroundBuilder` is pinned directly to the true
+   surface (`Math.min(top, low)`) rather than the sagging estimate. An asynchronous event
+   (`onRoadsLoaded`) dynamically rebuilds colliders in a Web Worker as soon as Overpass
+   queries return, ensuring driving corridors carve out seamlessly without delaying match start.
 
-### Visual Modes, "Map + Objects" & "Metropolis" (`render/BuildingMeshView.ts`)
-To bridge the gap between photogrammetry visual fidelity and collision geometry,
-the engine supports switchable visual modes via `BuildingMeshView.ts`:
+### Visual Modes & 1:1 Collision Geometry Alignment (`render/BuildingMeshView.ts`)
+To maintain strict 1:1 parity between what the player sees and what the vehicle physically collides with,
+`BuildingMeshView.ts` renders directly from the exact anchored physics colliders and active deck grid:
+- **Zero Ghost Geometry**: Deck meshes represent only confirmed drivable surfaces; uncollided
+  decorative support piers are eliminated, ensuring players never see phantom structures they
+  can drive straight through.
+- **Architectural Modes**: Supports single-pass stylized shaders (Metropolis, Map + Objects, Best 3D, Arcade 3D)
+  that match underlying physics bounding boxes to within sub-centimeter tolerances.
 
 - **Metropolis (`metropolis`)**: Flagship single-pass hybrid visual mode synthesizing
   satellite imagery with a living architectural facade system:

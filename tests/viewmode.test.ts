@@ -60,7 +60,7 @@ describe('BuildingMeshView', () => {
     expect(view.group.children.length).toBe(0);
   });
 
-  it('generates grounded support piers for elevated bridge decks when ground is sampled', () => {
+  it('renders bridge decks with 1:1 alignment to drivable deck surfaces without uncollided ghost piers', () => {
     const view = new BuildingMeshView();
     const mockGrid: Grid = { n: 4, cell: 10, half: 20 };
     const mockDeckGrid = new Float32Array(16).fill(NO_DATA);
@@ -68,14 +68,13 @@ describe('BuildingMeshView', () => {
     mockDeckGrid[5] = 20.0;
     mockDeckGrid[6] = 20.0;
 
-    // Ground is at Y=2.0 (elevated span clearance > 15m)
     const sampleGround = () => 2.0;
     view.update([], mockDeckGrid, mockGrid, sampleGround);
 
     const deckMesh = (view as any).deckMesh as InstancedMesh;
     expect(deckMesh).toBeDefined();
-    // 2 deck cells + at least 1 pier instance
-    expect(deckMesh.count).toBeGreaterThan(2);
+    // Exactly 2 deck cells matching the drivable deck instances, with no phantom uncollidable columns
+    expect(deckMesh.count).toBe(2);
 
     view.clear();
   });

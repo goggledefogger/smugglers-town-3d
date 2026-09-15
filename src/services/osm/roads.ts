@@ -26,19 +26,20 @@ const log = logger('osm-roads');
  * `width=`/`lanes=` tags override these when present on a way.
  */
 const HIGHWAY_WIDTH_M: Record<string, number> = {
-  motorway: 26,
-  trunk: 22,
-  primary: 18,
-  secondary: 16,
-  tertiary: 14,
-  residential: 12,
-  unclassified: 12,
-  living_street: 10,
-  service: 8,
-  cycleway: 5,
-  pedestrian: 6,
-  path: 5,
-  track: 5
+  motorway: 28,
+  trunk: 24,
+  primary: 22,
+  secondary: 18,
+  tertiary: 16,
+  residential: 14,
+  unclassified: 14,
+  living_street: 12,
+  service: 10,
+  cycleway: 6,
+  pedestrian: 18,
+  busway: 18,
+  path: 6,
+  track: 6
 };
 
 const NON_DRIVABLE_HIGHWAYS = new Set([
@@ -86,8 +87,10 @@ export interface RoadMaskInput {
 }
 
 const OVERPASS_ENDPOINTS = [
-  'https://overpass-api.de/api/interpreter',
-  'https://overpass.kumi.systems/api/interpreter'
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://lz4.overpass-api.de/api/interpreter',
+  'https://z.overpass-api.de/api/interpreter',
+  'https://overpass-api.de/api/interpreter'
 ] as const;
 // Kumi rate-limits requests without one (429); a meaningful UA is standard
 // practice for OSM API consumers anyway
@@ -101,49 +104,67 @@ const USER_AGENT = 'smugglers-town-3d/0.1 (game map pipeline; github.com/goggled
  */
 export async function fetchRoadPolylines(
   input: RoadMaskInput,
-  timeoutMs = 20000
+  timeoutMs = 25000
 ): Promise<{ east: number; north: number; widthM: number }[][] | null> {
   const { lat, lon, halfM } = input;
-  const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(halfM)}`;
+  // Bound query to playable radius (1100m = 2.2km square) to keep Overpass response fast (< 3s)
+  const targetHalfM = Math.min(halfM, 1100);
+  const cacheKey = `${lat.toFixed(5)},${lon.toFixed(5)},${Math.round(targetHalfM)}`;
   if (cacheKey === roadCache.key) return roadCache.polys;
-  const dLat = (halfM / 111_320) * 1.05;
-  const cosLat = Math.max(0.0001, Math.cos((lat * Math.PI) / 180));
-  const dLon = (halfM / (111_320 * cosLat)) * 1.05;
-  const bbox = `${(lat - dLat).toFixed(6)},${(lon - dLon).toFixed(6)},${(lat + dLat).toFixed(6)},${(lon + dLon).toFixed(6)}`;
-  // Query drivable roadway and designated multi-use path classes; pure footways, stairs,
-  // and indoor passages are filtered out by isDrivableWay so they do not punch holes through building atriums
-  const query = `[out:json][timeout:25];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|cycleway|pedestrian|path|track)"](${bbox});out geom tags;`;
+
+  // Try target radius first; if it fails/times out, try focused radius (650m)
+  const radii = [targetHalfM];
+  if (targetHalfM > 650) radii.push(650);
 
   let data: OverpassResponse | null = null;
-  const endpointTimeoutMs = Math.min(Math.floor(timeoutMs / OVERPASS_ENDPOINTS.length), 10000);
-  const headers: Record<string, string> = { Accept: 'application/json' };
+  const headers: Record<string, string> = {};
   if (typeof navigator === 'undefined') {
     headers['User-Agent'] = USER_AGENT;
   }
-  for (const endpoint of OVERPASS_ENDPOINTS) {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), endpointTimeoutMs);
-    try {
-      const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
-        signal: controller.signal,
-        headers
-      });
-      if (!res.ok) {
-        log.warn('overpass http ' + res.status, { endpoint });
-        continue;
+
+  const cosLat = Math.max(0.0001, Math.cos((lat * Math.PI) / 180));
+  let lastBbox = '';
+
+  for (const radius of radii) {
+    const dLat = (radius / 111_320) * 1.05;
+    const dLon = (radius / (111_320 * cosLat)) * 1.05;
+    const bbox = `${(lat - dLat).toFixed(6)},${(lon - dLon).toFixed(6)},${(lat + dLat).toFixed(6)},${(lon + dLon).toFixed(6)}`;
+    lastBbox = bbox;
+    const query = `[out:json][timeout:15];way["highway"~"^(motorway|trunk|primary|secondary|tertiary|residential|unclassified|living_street|service|pedestrian|cycleway|busway)"](${bbox});out geom tags;`;
+
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      const controller = new AbortController();
+      const endpointTimeoutMs = Math.min(15000, timeoutMs);
+      const timer = setTimeout(() => controller.abort(), endpointTimeoutMs);
+      try {
+        const res = await fetch(`${endpoint}?data=${encodeURIComponent(query)}`, {
+          signal: controller.signal,
+          headers
+        });
+        if (!res.ok) {
+          log.warn('overpass http ' + res.status, { endpoint });
+          continue;
+        }
+        const text = await res.text();
+        if (text.startsWith('<')) {
+          log.warn('overpass returned xml error', { endpoint, snippet: text.slice(0, 100) });
+          continue;
+        }
+        data = JSON.parse(text) as OverpassResponse;
+        if (data && data.elements && data.elements.length > 0) break;
+      } catch (e) {
+        log.warn('overpass fetch failed', { endpoint, error: String(e).slice(0, 120) });
+      } finally {
+        clearTimeout(timer);
       }
-      data = (await res.json()) as OverpassResponse;
-      if (data) break;
-    } catch (e) {
-      log.warn('overpass fetch failed', { endpoint, error: String(e).slice(0, 120) });
-    } finally {
-      clearTimeout(timer);
     }
+    if (data && data.elements && data.elements.length > 0) break;
   }
+
   if (!data) return null;
   const ways = (data.elements ?? []).filter(el => el.type === 'way' && el.geometry && el.geometry.length >= 2 && isDrivableWay(el.tags));
   if (ways.length === 0) {
-    log.warn('overpass returned no highway ways', { bbox });
+    log.warn('overpass returned no highway ways', { bbox: lastBbox });
     return null;
   }
 
@@ -162,7 +183,7 @@ export async function fetchRoadPolylines(
     }
     out.push(pts);
   }
-  log.info('osm roads fetched', { ways: out.length, bbox });
+  log.info('osm roads fetched', { ways: out.length, bbox: lastBbox });
   roadCache.key = cacheKey;
   roadCache.polys = out;
   return out;
@@ -206,7 +227,7 @@ export interface RoadGrid {
 export function rasterizeRoads(
   polylines: readonly { east: number; north: number; widthM: number }[][],
   grid: { cell: number; half: number; n: number },
-  reachSlackMultiplier = 0.5
+  reachSlackMultiplier = 0.65
 ): RoadGrid {
   const { cell, half, n } = grid;
   const mask = new Uint8Array(n * n);

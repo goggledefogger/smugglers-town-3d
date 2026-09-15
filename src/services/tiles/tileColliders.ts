@@ -1171,6 +1171,23 @@ export function collidersFromRasters(
     // OSM says a road runs through here: the crest error of the opening-based
     // ground estimate is exactly the false wall this corridor was severed by
     if (roadExempt(roadMask, c)) return false;
+    if (roadMask) {
+      const cx = c % n;
+      const cz = Math.floor(c / n);
+      let roadNeighbors = 0;
+      if (cx > 0 && roadMask.mask[c - 1]) roadNeighbors++;
+      if (cx < n - 1 && roadMask.mask[c + 1]) roadNeighbors++;
+      if (cz > 0 && roadMask.mask[c - n]) roadNeighbors++;
+      if (cz < n - 1 && roadMask.mask[c + n]) roadNeighbors++;
+      // Cell is surrounded by road corridor or trapped between opposing road lanes (diagonal aliasing)
+      if (
+        roadNeighbors >= 3 ||
+        (cx > 0 && cx < n - 1 && roadMask.mask[c - 1] && roadMask.mask[c + 1]) ||
+        (cz > 0 && cz < n - 1 && roadMask.mask[c - n] && roadMask.mask[c + n])
+      ) {
+        return false;
+      }
+    }
     return true;
   };
 
@@ -1186,9 +1203,12 @@ export function collidersFromRasters(
     i1: number;
     j0: number;
     j1: number;
+    hasSouth: boolean;
+    hasNorth: boolean;
   }
   const boxes: BoxExtent[] = [];
   let above = new Map<number, BoxExtent>();
+
   for (let j = 0; j < n; j++) {
     const z0 = -half + j * cell;
     const row = new Map<number, BoxExtent>();
@@ -1235,59 +1255,84 @@ export function collidersFromRasters(
   }
 
   // Neighbor-aware horizontal insetting:
-  // Inset exterior faces that border open streets or non-building cells by 1.0m to prevent
+  // Inset exterior faces that border open streets or non-building cells by thresholds.insetExteriorStreetM to prevent
   // 10m quantization steps from protruding into roadway lanes.
   // Internal faces between adjacent building cells remain 100% flush (0m inset) so contiguous
   // buildings are solid with zero gaps, zero cracks, and zero isolated pillars.
   // Freestanding 1-cell columns (isolated piers/towers with no building neighbors on all 4 sides)
   // get a 2.8m inset to snugly hug structural supports.
   for (const { b, i0, i1, j0, j1 } of boxes) {
-    let touchSouth = false;
+    let touchSouth = false, bordersRoadSouth = false;
     if (j0 > 0) {
       for (let i = i0; i < i1; i++) {
-        if (isBuilding((j0 - 1) * n + i)) { touchSouth = true; break; }
+        const c = (j0 - 1) * n + i;
+        if (isBuilding(c)) touchSouth = true;
+        if (roadMask && roadMask.mask[c]) bordersRoadSouth = true;
       }
     }
-    let touchNorth = false;
+    let touchNorth = false, bordersRoadNorth = false;
     if (j1 < n) {
       for (let i = i0; i < i1; i++) {
-        if (isBuilding(j1 * n + i)) { touchNorth = true; break; }
+        const c = j1 * n + i;
+        if (isBuilding(c)) touchNorth = true;
+        if (roadMask && roadMask.mask[c]) bordersRoadNorth = true;
       }
     }
-    let touchWest = false;
+    let touchWest = false, bordersRoadWest = false;
     if (i0 > 0) {
       for (let j = j0; j < j1; j++) {
-        if (isBuilding(j * n + (i0 - 1))) { touchWest = true; break; }
+        const c = j * n + (i0 - 1);
+        if (isBuilding(c)) touchWest = true;
+        if (roadMask && roadMask.mask[c]) bordersRoadWest = true;
       }
     }
-    let touchEast = false;
+    let touchEast = false, bordersRoadEast = false;
     if (i1 < n) {
       for (let j = j0; j < j1; j++) {
-        if (isBuilding(j * n + i1)) { touchEast = true; break; }
+        const c = j * n + i1;
+        if (isBuilding(c)) touchEast = true;
+        if (roadMask && roadMask.mask[c]) bordersRoadEast = true;
       }
     }
 
     const width = b.max.x - b.min.x;
     const depth = b.max.z - b.min.z;
     const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1) && !touchSouth && !touchNorth && !touchWest && !touchEast;
-    const insetMax = isIsolatedColumn ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
-    const insetX = Math.min(insetMax, Math.max(0, (width - 2) / 2));
-    const insetZ = Math.min(insetMax, Math.max(0, (depth - 2) / 2));
 
-    if (!touchWest) b.min.x += insetX;
-    if (!touchEast) b.max.x -= insetX;
-    if (!touchSouth) b.min.z += insetZ;
-    if (!touchNorth) b.max.z -= insetZ;
+    const streetInset = isIsolatedColumn ? thresholds.insetIsolatedColumnM : thresholds.insetExteriorStreetM;
+    const roadInset = Math.max(streetInset, 2.5);
+
+    const insetWest = bordersRoadWest ? roadInset : streetInset;
+    const insetEast = bordersRoadEast ? roadInset : streetInset;
+    const insetSouth = bordersRoadSouth ? roadInset : streetInset;
+    const insetNorth = bordersRoadNorth ? roadInset : streetInset;
+
+    if (!touchWest || bordersRoadWest) b.min.x += Math.min(insetWest, Math.max(0, (width - 2) / 2));
+    if (!touchEast || bordersRoadEast) b.max.x -= Math.min(insetEast, Math.max(0, (width - 2) / 2));
+    if (!touchSouth || bordersRoadSouth) b.min.z += Math.min(insetSouth, Math.max(0, (depth - 2) / 2));
+    if (!touchNorth || bordersRoadNorth) b.max.z -= Math.min(insetNorth, Math.max(0, (depth - 2) / 2));
   }
 
   // Filter out isolated single-cell low-rise clutter (trees, small bumps, vehicles).
   // Real buildings have multi-cell footprints or are prominent towers (>= 8.5m rise).
+  // In road corridors, any isolated 1-cell column is an artifact (utility pole / overhead wire / tree)
+  // and must be pruned to keep roadways 100% driveable.
   return boxes
     .filter(({ b, i0, i1, j0, j1 }) => {
       const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1);
-      const height = b.max.y - b.min.y;
-      if (isIsolatedColumn && height < 8.5) {
-        return false;
+      if (isIsolatedColumn) {
+        // Any isolated column that touches or borders a road corridor is pruned
+        if (roadMask) {
+          for (let j = Math.max(0, j0 - 1); j <= Math.min(n - 1, j1); j++) {
+            for (let i = Math.max(0, i0 - 1); i <= Math.min(n - 1, i1); i++) {
+              if (roadMask.mask[j * n + i]) return false;
+            }
+          }
+        }
+        const height = b.max.y - b.min.y;
+        if (height < 8.5) {
+          return false;
+        }
       }
       return true;
     })
