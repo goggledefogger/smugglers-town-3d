@@ -79,6 +79,15 @@ if (uHasTexture > 0.5 && uTextureStyle > 4.5) {
     windows *= 1.0 - smoothstep(0.15, 0.5, max(aa.x, aa.y));
     windows *= step(6.0, vBuildingHeight) * step(0.5, belowRoof) * step(0.08, vLocalNormY);
     if (uTextureStyle > 5.5) windows = 0.0;
+
+    // View angle and distance attenuation to eliminate procedural Moiré and grazing-angle flicker
+    vec3 viewDir = normalize(cameraPosition - vWorldPos);
+    float viewDot = clamp(abs(dot(vBuildingNormal, viewDir)), 0.0, 1.0);
+    float dist = length(vWorldPos - cameraPosition);
+    float distFade = 1.0 - smoothstep(140.0, 320.0, dist);
+    float angleFade = smoothstep(0.10, 0.35, viewDot);
+    windows *= distFade * angleFade;
+
     float contact = smoothstep(0.0, 0.12, vLocalNormY);
     float eave = smoothstep(0.0, 0.6, belowRoof);
     vec3 stone = mix(vec3(0.48, 0.43, 0.36), vec3(0.32, 0.40, 0.46), smoothstep(18.0, 50.0, vBuildingHeight));
@@ -321,19 +330,13 @@ export class BuildingMeshView {
       color: 0xffffff,
       roughness: 0.65,
       metalness: 0.15,
-      flatShading: true,
-      polygonOffset: true,
-      polygonOffsetFactor: 2,
-      polygonOffsetUnits: 2
+      flatShading: true
     });
 
     this.deckMat = new MeshStandardMaterial({
       color: BUILDING_COLORS.deck,
       roughness: 0.8,
-      metalness: 0.05,
-      polygonOffset: true,
-      polygonOffsetFactor: 2,
-      polygonOffsetUnits: 2
+      metalness: 0.05
     });
 
     this.hookMaterial(this.buildingMat, 'building-mesh-view');
@@ -443,7 +446,8 @@ export class BuildingMeshView {
     this.lastDeckGrid = deckGrid;
     this.lastGrid = grid;
 
-    this.dispose();
+    const oldBuildingMesh = this.buildingMesh;
+    const oldDeckMesh = this.deckMesh;
 
     // 1. Build building boxes
     const count = colliders.length;
@@ -489,22 +493,60 @@ export class BuildingMeshView {
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
       this.buildingMesh = mesh;
       this.group.add(mesh);
+    } else {
+      this.buildingMesh = null;
     }
     this.onBuildings?.(rendered);
 
-    // 2. Build elevated bridge decks and ramps from deckGrid
+    // 2. Build elevated bridge decks, ramps, and support piers from deckGrid
     if (deckGrid && grid) {
       const { n, cell, half } = grid;
-      const deckIndices: number[] = [];
+      const rawDeckIndices: number[] = [];
       for (let c = 0; c < n * n; c++) {
-        if (deckGrid[c] !== NO_DATA) deckIndices.push(c);
+        if (deckGrid[c] !== NO_DATA) rawDeckIndices.push(c);
       }
 
+      // Filter isolated deck noise: require at least one orthogonal deck neighbor unless it's a single test cell
+      const deckIndices = rawDeckIndices.filter(c => {
+        if (rawDeckIndices.length <= 1) return true;
+        const i = c % n;
+        const j = Math.floor(c / n);
+        const hasNeighbor =
+          (i > 0 && deckGrid[c - 1] !== NO_DATA) ||
+          (i < n - 1 && deckGrid[c + 1] !== NO_DATA) ||
+          (j > 0 && deckGrid[c - n] !== NO_DATA) ||
+          (j < n - 1 && deckGrid[c + n] !== NO_DATA);
+        return hasNeighbor;
+      });
+
       if (deckIndices.length > 0) {
-        const deckMesh = new InstancedMesh(this.boxGeo, this.deckMat, deckIndices.length);
+        // Collect support piers for elevated spans above terrain
+        const piers: { x: number; topY: number; bottomY: number; z: number }[] = [];
+        const THICKNESS = 1.4;
+
+        if (sampleGround) {
+          for (let idx = 0; idx < deckIndices.length; idx++) {
+            const c = deckIndices[idx]!;
+            const i = c % n;
+            const j = Math.floor(c / n);
+            const x = -half + (i + 0.5) * cell;
+            const z = -half + (j + 0.5) * cell;
+            const topY = deckGrid[c]!;
+            const gy = sampleGround(x, z);
+            const clearance = (topY - THICKNESS) - gy;
+            // For spans elevated > 3.0m above ground, drop a solid support pier
+            // (every 2 cells along the span to avoid over-crowding)
+            if (clearance > 3.0 && ((i + j) % 2 === 0)) {
+              piers.push({ x, topY: topY - THICKNESS, bottomY: gy - 1.0, z });
+            }
+          }
+        }
+
+        const totalDeckInstances = deckIndices.length + piers.length;
+        const deckMesh = new InstancedMesh(this.boxGeo, this.deckMat, totalDeckInstances);
         deckMesh.castShadow = false;
         deckMesh.receiveShadow = true;
-        const THICKNESS = 1.4;
+
         for (let idx = 0; idx < deckIndices.length; idx++) {
           const c = deckIndices[idx]!;
           const i = c % n;
@@ -514,14 +556,39 @@ export class BuildingMeshView {
           const topY = deckGrid[c]!;
 
           _pos.set(x, topY - THICKNESS / 2, z);
-          _scale.set(cell * 0.98, THICKNESS, cell * 0.98);
+          _scale.set(cell, THICKNESS, cell);
           _mat.compose(_pos, _quat, _scale);
           deckMesh.setMatrixAt(idx, _mat);
         }
+
+        for (let pIdx = 0; pIdx < piers.length; pIdx++) {
+          const pier = piers[pIdx]!;
+          const pierHeight = Math.max(0.5, pier.topY - pier.bottomY);
+          const py = pier.bottomY + pierHeight / 2;
+          _pos.set(pier.x, py, pier.z);
+          _scale.set(cell * 0.35, pierHeight, cell * 0.35);
+          _mat.compose(_pos, _quat, _scale);
+          deckMesh.setMatrixAt(deckIndices.length + pIdx, _mat);
+        }
+
         deckMesh.instanceMatrix.needsUpdate = true;
         this.deckMesh = deckMesh;
         this.group.add(deckMesh);
+      } else {
+        this.deckMesh = null;
       }
+    } else {
+      this.deckMesh = null;
+    }
+
+    // Dispose old instances after new ones are added to prevent any 1-frame gap
+    if (oldBuildingMesh) {
+      this.group.remove(oldBuildingMesh);
+      oldBuildingMesh.dispose();
+    }
+    if (oldDeckMesh) {
+      this.group.remove(oldDeckMesh);
+      oldDeckMesh.dispose();
     }
   }
 

@@ -1009,6 +1009,24 @@ export function collidersFromRasters(
     }
   }
 
+  // Prune isolated single-cell deck noise (elevated spans must be continuous ribbons)
+  if (outDeckGrid) {
+    for (let c = 0; c < n * n; c++) {
+      if (!isDeck[c]) continue;
+      const cx = c % n;
+      const cz = Math.floor(c / n);
+      const hasDeckNeighbor =
+        (cx > 0 && isDeck[c - 1]) ||
+        (cx < n - 1 && isDeck[c + 1]) ||
+        (cz > 0 && isDeck[c - n]) ||
+        (cz < n - 1 && isDeck[c + n]);
+      if (!hasDeckNeighbor) {
+        isDeck[c] = 0;
+        outDeckGrid[c] = NO_DATA;
+      }
+    }
+  }
+
   // Find terminal boundary cells of elevated decks to seed approach ramps
   for (let c = 0; c < n * n; c++) {
     if (!isDeck[c]) continue;
@@ -1262,7 +1280,18 @@ export function collidersFromRasters(
     if (!touchNorth) b.max.z -= insetZ;
   }
 
-  return boxes.map(e => e.b);
+  // Filter out isolated single-cell low-rise clutter (trees, small bumps, vehicles).
+  // Real buildings have multi-cell footprints or are prominent towers (>= 8.5m rise).
+  return boxes
+    .filter(({ b, i0, i1, j0, j1 }) => {
+      const isIsolatedColumn = (i1 - i0 === 1) && (j1 - j0 === 1);
+      const height = b.max.y - b.min.y;
+      if (isIsolatedColumn && height < 8.5) {
+        return false;
+      }
+      return true;
+    })
+    .map(e => e.b);
 }
 
 /** Colliders straight from a group of meshes (tests and one-shot use). */

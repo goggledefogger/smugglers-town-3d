@@ -60,6 +60,43 @@ describe('BuildingMeshView', () => {
     expect(view.group.children.length).toBe(0);
   });
 
+  it('generates grounded support piers for elevated bridge decks when ground is sampled', () => {
+    const view = new BuildingMeshView();
+    const mockGrid: Grid = { n: 4, cell: 10, half: 20 };
+    const mockDeckGrid = new Float32Array(16).fill(NO_DATA);
+    // Continuous bridge deck across cells 5 and 6 at 20m height
+    mockDeckGrid[5] = 20.0;
+    mockDeckGrid[6] = 20.0;
+
+    // Ground is at Y=2.0 (elevated span clearance > 15m)
+    const sampleGround = () => 2.0;
+    view.update([], mockDeckGrid, mockGrid, sampleGround);
+
+    const deckMesh = (view as any).deckMesh as InstancedMesh;
+    expect(deckMesh).toBeDefined();
+    // 2 deck cells + at least 1 pier instance
+    expect(deckMesh.count).toBeGreaterThan(2);
+
+    view.clear();
+  });
+
+  it('double-buffers mesh swaps during update without leaving empty frames', () => {
+    const view = new BuildingMeshView();
+    const mockColliders: BuildingCollider[] = [
+      { min: new Vector3(0, 0, 0), max: new Vector3(10, 20, 10) }
+    ];
+    view.update(mockColliders);
+    expect(view.group.children.length).toBe(1);
+
+    const nextColliders: BuildingCollider[] = [
+      { min: new Vector3(10, 0, 10), max: new Vector3(20, 25, 20) }
+    ];
+    view.update(nextColliders);
+    // Exactly 1 new mesh in the group, old one removed cleanly
+    expect(view.group.children.length).toBe(1);
+    view.clear();
+  });
+
   it('supports switching between arcade and textured modes and styles', () => {
     const view = new BuildingMeshView();
     expect(view.getMode()).toBe('arcade');

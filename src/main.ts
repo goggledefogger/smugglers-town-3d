@@ -24,6 +24,8 @@ import { CameraRig } from './render/CameraRig.ts';
 import { AudioManager } from './audio/AudioManager.ts';
 import { Vector3 } from 'three';
 
+const _camDirScratch = new Vector3();
+
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
 import { PMREMGenerator, type Texture, type Material, type Mesh, type PlaneGeometry } from 'three';
@@ -1240,7 +1242,8 @@ function frame(now: number): void {
     simTime += dt;
     const player = world.player?.body ?? null;
     if (tiles && player) {
-      tiles.update(player.pos, now);
+      renderer.camera.getWorldDirection(_camDirScratch);
+      tiles.update(player.pos, now, _camDirScratch, player.vel);
       // refined tiles change the building footprints; rebuild at most every 1.5 s
       if (tiles.collidersDirty && now - colliderRefreshAt > 1500) {
         colliderRefreshAt = now;
@@ -1282,7 +1285,10 @@ function frame(now: number): void {
     audio.update(dt, null, null, null, false);
     if (introEl.isConnected) {
       showroom.update(dt, window.innerWidth, window.innerHeight);
-      if (tiles) tiles.update(renderer.camera.position, now);
+      if (tiles) {
+        renderer.camera.getWorldDirection(_camDirScratch);
+        tiles.update(renderer.camera.position, now, _camDirScratch);
+      }
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
   }

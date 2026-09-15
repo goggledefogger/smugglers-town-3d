@@ -651,5 +651,51 @@ describe('one shared ground', () => {
     // Underneath the bridge, no false building colliders should block the roadway
     expect(colliders).toHaveLength(0);
   });
+
+  it('prunes isolated 1-cell low-rise clutter but preserves tall towers and multi-cell footprints', () => {
+    const top = flat(0), low = flat(0);
+    // 1. Isolated 1-cell low-rise bump (4.5m tall at col 10, row 10)
+    top[10 * N + 10] = 4.5;
+    low[10 * N + 10] = 0;
+
+    // 2. Isolated 1-cell tall tower (25m tall at col 20, row 20)
+    top[20 * N + 20] = 25.0;
+    low[20 * N + 20] = 0;
+
+    // 3. Multi-cell low-rise structure (4.5m tall at cols 30..31, row 30)
+    top[30 * N + 30] = 4.5;
+    low[30 * N + 30] = 0;
+    top[30 * N + 31] = 4.5;
+    low[30 * N + 31] = 0;
+
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+
+    // The isolated 4.5m bump must be pruned
+    const hasLowBump = colliders.some(b => b.max.y < 8.0 && b.max.x <= -grid.half + 11 * grid.cell && b.min.x >= -grid.half + 9 * grid.cell);
+    expect(hasLowBump).toBe(false);
+
+    // The tall tower must be preserved
+    const hasTower = colliders.some(b => b.max.y >= 20.0);
+    expect(hasTower).toBe(true);
+
+    // The multi-cell low-rise structure must be preserved
+    const hasMultiCell = colliders.some(b => b.max.y >= 4.0 && b.max.x > 16.0);
+    expect(hasMultiCell).toBe(true);
+  });
+
+  it('prunes isolated single-cell deck noise without neighbors from outDeckGrid', () => {
+    const top = flat(0), low = flat(0);
+    // Isolated thin deck cell at column 10, row 10
+    top[10 * N + 10] = 15.0;
+    low[10 * N + 10] = 13.5;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Isolated deck cell must not survive into deckGrid
+    expect(deckGrid[10 * N + 10]).toBe(NO_DATA);
+  });
 });
 
