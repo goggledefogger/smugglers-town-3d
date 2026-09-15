@@ -28,6 +28,7 @@ import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicleMeshes.ts';
 import { PMREMGenerator, type Texture, type Material, type Mesh, type PlaneGeometry } from 'three';
 import { patchDetailGrain } from './render/DetailGrain.ts';
+import { FacadeBaker } from './render/FacadeBaker.ts';
 import { GroundShade } from './render/GroundShade.ts';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
@@ -161,16 +162,19 @@ let colliderRefreshAt = 0;
 let colliderGeneration = 0;
 let footprintPaintAt = -Infinity;
 let groundBuilder: AmortizedGroundBuilder | null = null;
-const buildingMeshView = new BuildingMeshView();
+const facadeBaker = new FacadeBaker(renderer.renderer);
+renderer.scene.add(facadeBaker.group);
+const buildingMeshView = new BuildingMeshView(boxes => facadeBaker.setBuildings(boxes, tiles?.activeGrid.cell ?? 10));
 renderer.scene.add(buildingMeshView.group);
 buildingMeshView.visible = false;
 if (typeof window !== 'undefined') {
   (window as any).__buildingMeshView = buildingMeshView;
+  (window as any).__facadeBaker = facadeBaker;
   (window as any).__terrainMesh = terrainMesh;
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'map-objects' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -185,13 +189,13 @@ const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatte
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
-  clutterBtn.hidden = !clutterFilter || viewMode === 'map-objects';
+  clutterBtn.hidden = !clutterFilter || viewMode === 'map-objects' || viewMode === 'baked-facades';
   clutterBtn.classList.toggle('active', clutterMode !== 'off');
   clutterText.textContent = CLUTTER_LABEL[clutterMode];
 }
 
 function cycleClutterMode(): void {
-  if (!clutterFilter) return;
+  if (!clutterFilter || viewMode === 'map-objects' || viewMode === 'baked-facades') return;
   clutterMode = clutterFilter.cycleMode();
   if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   updateClutterUi();
@@ -201,6 +205,7 @@ clutterBtn?.addEventListener('click', cycleClutterMode);
 
 /** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
 function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
+  facadeBaker.setSources(streamer.group);
   (window as any).__tiles = streamer; // scripts/clutter-shots.mjs teleports onto a road cell through this
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
@@ -247,6 +252,8 @@ function updateViewModeUi(): void {
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
   if (viewMode === 'map-objects') {
     viewModeText.textContent = 'VIEW: MAP + OBJECTS';
+  } else if (viewMode === 'baked-facades') {
+    viewModeText.textContent = 'VIEW: BAKED FACADES';
   } else if (viewMode === 'best-3d') {
     viewModeText.textContent = 'VIEW: BEST 3D';
   } else if (viewMode === 'game3d') {
@@ -271,7 +278,8 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
-  const isMapObjects = mode === 'map-objects';
+  const isMapObjects = mode === 'map-objects' || mode === 'baked-facades';
+  facadeBaker.group.visible = mode === 'baked-facades';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
   const isProjectingTiles = isProjected3dTiles || isBest3d;
   const isProjected2dMaps = mode === 'projected-2d-maps';
@@ -324,7 +332,7 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
     buildingMeshView.setMode('arcade');
   } else if (isMapObjects) {
     buildingMeshView.setMode('textured');
-    buildingMeshView.setTextureStyle('map-objects');
+    buildingMeshView.setTextureStyle(mode === 'baked-facades' ? 'baked-facades' : 'map-objects');
     buildingMeshView.setTilesTexture(null);
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
@@ -354,6 +362,8 @@ function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
     setViewMode('map-objects');
   } else if (viewMode === 'map-objects') {
+    setViewMode('baked-facades');
+  } else if (viewMode === 'baked-facades') {
     setViewMode('masked-tiles');
   } else if (viewMode === 'masked-tiles') {
     setViewMode('best-3d');
@@ -485,7 +495,7 @@ function rebuildViews(): void {
   for (const actor of world.vehicles) {
     const view = new VehicleView(
       actor, () => world.terrainProvider.heightfield,
-      (x, z) => viewMode === 'photoreal' || viewMode === 'map-objects' ? groundShade.shadeAt(x, z) : 1
+      (x, z) => viewMode === 'photoreal' || viewMode === 'map-objects' || viewMode === 'baked-facades' ? groundShade.shadeAt(x, z) : 1
     );
     vehicleViews.push(view);
     renderer.scene.add(view.group);
@@ -499,6 +509,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 }
 
 function clearTiles(): void {
+  facadeBaker.clear();
   footprintPaintAt = -Infinity;
   game.setSurfaceProvider(undefined);
   groundBuilder = null;
@@ -1278,6 +1289,7 @@ function frame(now: number): void {
   if (viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   }
+  if (viewMode === 'baked-facades') facadeBaker.update(renderer.camera, now);
   renderer.render();
   requestAnimationFrame(frame);
 }

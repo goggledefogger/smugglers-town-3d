@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects' | 'baked-facades';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -78,6 +78,7 @@ if (uHasTexture > 0.5 && uTextureStyle > 4.5) {
     float windows = aperture.x * aperture.y;
     windows *= 1.0 - smoothstep(0.15, 0.5, max(aa.x, aa.y));
     windows *= step(6.0, vBuildingHeight) * step(0.5, belowRoof) * step(0.08, vLocalNormY);
+    if (uTextureStyle > 5.5) windows = 0.0;
     float contact = smoothstep(0.0, 0.12, vLocalNormY);
     float eave = smoothstep(0.0, 0.6, belowRoof);
     vec3 stone = mix(vec3(0.48, 0.43, 0.36), vec3(0.32, 0.40, 0.46), smoothstep(18.0, 50.0, vBuildingHeight));
@@ -309,7 +310,7 @@ export class BuildingMeshView {
   private readonly buildingMat: MeshStandardMaterial;
   private readonly deckMat: MeshStandardMaterial;
 
-  constructor() {
+  constructor(private readonly onBuildings?: (colliders: readonly BuildingCollider[]) => void) {
     this.group.visible = false;
     this.dummyTex = new DataTexture(new Uint8Array([100, 110, 120, 255]), 1, 1, RGBAFormat, UnsignedByteType);
     this.dummyTex.needsUpdate = true;
@@ -372,7 +373,9 @@ export class BuildingMeshView {
 
   setTextureStyle(style: BuildingTextureStyle): void {
     this._style = style;
-    if (style === 'map-objects') {
+    if (style === 'baked-facades') {
+      this.uTextureStyle.value = 6.0;
+    } else if (style === 'map-objects') {
       this.uTextureStyle.value = 5.0;
     } else if (style === 'best-3d') {
       this.uTextureStyle.value = 4.0;
@@ -444,6 +447,7 @@ export class BuildingMeshView {
 
     // 1. Build building boxes
     const count = colliders.length;
+    const rendered: BuildingCollider[] = [];
     if (count > 0) {
       const mesh = new InstancedMesh(this.boxGeo, this.buildingMat, count);
       mesh.castShadow = false; // Perf: avoid rendering thousands of instances in shadow pass
@@ -452,6 +456,7 @@ export class BuildingMeshView {
       for (let i = 0; i < count; i++) {
         const raw = colliders[i]!;
         const b = anchorCollider(raw, sampleGround);
+        rendered.push(b);
         const cx = (b.min.x + b.max.x) / 2;
         const cz = (b.min.z + b.max.z) / 2;
         const minY = b.min.y;
@@ -485,6 +490,7 @@ export class BuildingMeshView {
       this.buildingMesh = mesh;
       this.group.add(mesh);
     }
+    this.onBuildings?.(rendered);
 
     // 2. Build elevated bridge decks and ramps from deckGrid
     if (deckGrid && grid) {
@@ -521,6 +527,10 @@ export class BuildingMeshView {
 
   clear(): void {
     this.dispose();
+    this.lastColliders = [];
+    this.lastDeckGrid = undefined;
+    this.lastGrid = undefined;
+    this.onBuildings?.([]);
   }
 
   dispose(): void {

@@ -113,7 +113,7 @@ Truck between two towers if you try.
 
 ### View Modes
 
-Press `V` / `G` to cycle **Real 3D**, **Map + Objects**, **Masked 3D Tiles**, **Best 3D**, **Projected (3D Tiles)**, **Projected (2D Maps)**, **Textured 3D**, **Textured (Planar)**, and **Arcade 3D**.
+Press `V` / `G` to cycle **Real 3D**, **Map + Objects**, **Baked Facades**, **Masked 3D Tiles**, **Best 3D**, **Projected (3D Tiles)**, **Projected (2D Maps)**, **Textured 3D**, **Textured (Planar)**, and **Arcade 3D**.
 
 **Map + Objects** is the recommended simple alternative to projection: satellite
 ground and unlit satellite roofs, with opaque, lit masonry walls and subtle
@@ -132,6 +132,20 @@ Verify the mode with `node scripts/verify-map-objects.mjs` while the dev server 
 running. This exercises desktop/mobile input, render passes, geometry invariance,
 and actual roof/wall pixels. `MAP_OBJECTS_REAL=1` adds a live SF relocation using
 `MAP_OBJECTS_KEY`, `GOOGLE_MAPS_API_KEY`, or the local ignored `.sm-key.txt`.
+
+**Baked Facades** is experimental. It copies real photographic wall detail from
+the loaded 3D tiles into building-fixed atlas textures, so the imagery is stable
+under camera movement instead of projected from the driving camera. It fills a
+small bounded atlas (64 slots, 256px, no mipmaps) with clean unlit bake proxies
+and shows the result as alpha-tested overlays on the collision boxes, keeping a
+solid fallback where no matching wall was found.
+
+It is not yet a finished look. Downtown San Francisco verification found the
+atlas holds real facade pixels, but only 88 of 1,024,000 screen pixels changed at
+the reported street-level camera, because the fixed slab is too narrow for
+diagonal walls reconstructed as axis-aligned boxes and because the test camera
+sat inside collision geometry. Correspondence and overlay visibility still need
+work. See [`docs/baked-facades-spec.md`](docs/baked-facades-spec.md).
 
 ### Diagnostics & Collider Experiments
 

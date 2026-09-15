@@ -9,7 +9,7 @@ const base = new URL(process.env.E2E_URL ?? 'http://localhost:5173/');
 const artifacts = resolve(process.env.MAP_OBJECTS_ARTIFACT_DIR ?? '.playwright-mcp/map-objects');
 const real = process.env.MAP_OBJECTS_REAL === '1';
 const modes = [
-  'VIEW: REAL 3D', 'VIEW: MAP + OBJECTS', 'VIEW: MASKED 3D TILES',
+  'VIEW: REAL 3D', 'VIEW: MAP + OBJECTS', 'VIEW: BAKED FACADES', 'VIEW: MASKED 3D TILES',
   'VIEW: BEST 3D', 'VIEW: PROJECTED (3D TILES)', 'VIEW: PROJECTED (2D MAPS)',
   'VIEW: TEXTURED 3D', 'VIEW: TEXTURED (PLANAR)', 'VIEW: ARCADE 3D',
 ];
@@ -224,7 +224,7 @@ async function runCase(name, viewport, isReal) {
       // Streaming legitimately rebuilds city geometry; use the desert for invariance
       if (!isReal) assert.ok(await page.evaluate(() => window.__mapObjectsProbe.unchanged()),
         `mode switch changed geometry/colliders at ${modes[i % modes.length]}`);
-      if (i === 3) {
+      if (modes[i % modes.length] === 'VIEW: BEST 3D') {
         const frames = await page.evaluate(() => window.__mapObjectsProbe.frames.slice(-5));
         assert.ok(frames.every(f => f.renders === 2 && f.targets >= 2),
           'Best 3D positive control must detect the offscreen pass and target bindings');
