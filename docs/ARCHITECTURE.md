@@ -342,10 +342,23 @@ are glTF Y-up with the ECEF placement baked into the node matrix, so
 `glbPlacement` is `tileTransformChain` × a +90° X rotation.
 
 `TileStreamer` owns the loaded tiles. After the initial load it keeps
-refining around the player: every 250 ms it picks the nearest tile that is
-too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
-640 m) and swaps it for its children, one swap at a time, up to a tile cap.
-There is no coarsening — evict far tiles first if memory ever bites.
+refining around the player: every 250 ms (or profile-configured interval) it
+evaluates candidate tiles that are too coarse for their distance (`STREAM_LOD`:
+8 m tiles within 360 m, 16 m to 640 m) and swaps them for children, up to
+the profile tile cap (`maxTiles`).
+
+To load distant viewable 3D structures sooner without blowing memory budgets or
+stalling mobile/older devices, `TileStreamer.update` incorporates:
+- **Velocity Lookahead**: Offsets the refinement focus position forward along
+  the vehicle's velocity vector (up to 120 m ahead at high speeds).
+- **Camera View-Direction Scoring**: Candidate tiles are scored by distance
+  discounted by view-cone alignment (`score = d - 180 * Math.max(0, dot)`).
+  Tiles directly in front of the camera receive priority refinement over tiles
+  behind the player.
+- **Strict Profile Safety**: Refinement batch size (`refineBatchSize`), interval,
+  and maximum active tile caps are governed by `resolutionProfiles.ts` (e.g. 50
+  tiles on low/mobile vs. 550 on high), ensuring low-spec hardware never exceeds
+  its memory or draw-call budget.
 
 ### `services/tiles/tileColliders.ts` — one ground & 2.5D deckGrid
 A Google 3D tile is one merged photogrammetry mesh (ground + buildings + trees
@@ -360,7 +373,7 @@ max filter at a 60 m radius, wider than a block) implemented row-by-row in
 `AmortizedGroundBuilder` with a 1.5 ms per-frame budget to avoid streaming frame
 freezes.
 
-From this raster, two physical surfaces are extracted:
+From this raster, physical surfaces and structures are extracted:
 1. **The Shared Ground** (`groundField`): The tile street surface where tiles
    exist, the opened base under buildings, and the elevation-grid terrain where
    tiles do not, box-filtered once. `TileStreamer.groundHeightfield()` turns it
@@ -369,16 +382,21 @@ From this raster, two physical surfaces are extracted:
 2. **The 2.5D Deck Grid** (`deckGrid`): Elevated spans meeting narrow-ribbon
    geometry (`isNarrowSpan`, `isRoadwayRibbon`) with confirmed open vertical
    clearance underneath (`hasGroundClearance`) are classified as drivable decks.
-   Terminal boundaries trace descending slopes down to ground level to connect
-   solid approach ramps (e.g. Brooklyn Bridge earthen approaches).
-   `Tileset.surfaceElevation()` evaluates this bilinearly in $O(1)$ time with zero
-   allocations and zero raycasts.
+   Isolated single-cell deck noise without orthogonal deck neighbors is pruned
+   to guarantee continuous spans. Terminal boundaries trace descending slopes
+   down to ground level to connect solid approach ramps (e.g. Brooklyn Bridge
+   earthen approaches). `Tileset.surfaceElevation()` evaluates this bilinearly
+   in $O(1)$ time with zero allocations and zero raycasts.
 3. **Building Colliders**: Cells standing $\ge 3.5\text{ m}$ above the base that
    are neither decks nor gradual driveable terrain (flood-filled by
    `isDriveableGround` to preserve slopes and knolls) merge into solid AABBs.
    Neighbor-aware horizontal insetting insets exterior street faces by 1.0 m to
    prevent 10 m raster quantization from protruding into street lanes, while
    keeping internal touching faces 100% flush.
+   **Clutter Pruning**: Isolated single-cell low-rise structures ($< 8.5\text{ m}$
+   rise) are filtered out. This suppresses bottomless box pop-up over flat
+   satellite ground (eliminating small tree and vehicle bumps), while preserving
+   multi-cell building footprints and tall standalone towers.
 4. **OSM Road Corridors (`services/osm/roads.ts`)**: In hilly cities, morphological
    opening sags by up to 17 m across crests, misclassifying streets as buildings.
    Drivable OpenStreetMap road centrelines fetched via Overpass are rasterized
@@ -389,15 +407,34 @@ From this raster, two physical surfaces are extracted:
    rebuilds colliders in a Web Worker as soon as Overpass queries return, ensuring
    driving corridors carve out seamlessly without delaying match start.
 
-### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
-To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
-"Game 3D" mode renders the exact extracted physical geometry:
-- Instanced, extruded building boxes with height-based arcade palette (skyscrapers,
-  mid-rise, residential).
-- Instanced bridge deck slabs from `deckGrid`.
-- Crisp 10 m grid terrain mesh.
-This mode serves as both an arcade visual option and the primary QA diagnostic view:
-what you see is physically what you hit by construction, with zero invisible walls.
+### Visual Modes & "Map + Objects" (`render/BuildingMeshView.ts`)
+To bridge the gap between photogrammetry visual fidelity and collision geometry,
+the engine supports switchable visual modes via `BuildingMeshView.ts`:
+
+- **Game 3D (`arcade`)**: Pure extruded collision boxes with height-based arcade
+  palettes (skyscrapers, mid-rise, residential) and flat shading. Serves as both
+  a stylized visual option and the primary QA diagnostic view with 100%
+  collision-visual parity.
+- **Best 3D (`textured`)**: Two-pass screen-space projection copying camera-view
+  tile pixels onto collision geometry. Rich in detail but subject to screen-space
+  stretching on vertical walls and incurs an extra offscreen scene render pass.
+- **Map + Objects (`map-objects`)**: Single-pass hybrid visual mode combining
+  aerial satellite imagery on horizontal surfaces (ground plane and unlit roofs)
+  with clean, camera-stable masonry walls and subtle antialiased windows on
+  vertical faces.
+  - **Single-Pass Rendering**: Zero extra scene passes, zero offscreen textures,
+    and zero duplicate imagery fetches.
+  - **Grounded Support Piers**: Elevated bridge decks and ramps with $> 3.0\text{m}$
+    clearance drop solid structural piers down to the terrain (`sampleGround`),
+    eliminating "floating square" deck slabs.
+  - **Anti-Flicker Geometry & Shading**: Depth bias (`polygonOffset`) is removed
+    to eliminate coplanar z-fighting with shadows and adjoining faces. Procedural
+    window apertures feature distance attenuation ($140\text{m} \dots 320\text{m}$)
+    and grazing view-angle fade ($\text{viewDot} < 0.35$), eliminating high-frequency
+    Moiré and pixel scintillation.
+  - **Double-Buffered Mesh Swaps**: Updated instance meshes are attached to the
+    scene *before* retiring and disposing previous meshes, preventing 1-frame
+    visual gaps during background tile streaming.
 
 ### Street clutter filter (`render/TileClutterFilter.ts`)
 
@@ -441,6 +478,7 @@ patterns:
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
 | **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
+| **D. Single-Pass "Map + Objects"** *(Hybrid Aerial + Procedural)* | Render satellite imagery on ground and unlit roofs; render procedural masonry walls with antialiased windows and bridge piers on collision boxes. | Single-pass GPU budget (no offscreen pass), camera-stable vertical walls, grounded overpasses, eliminates floating clutter, crisp aerial roofs. | Walls are stylized rather than photographic; landmark silhouettes simplified to extruded boxes. | **Implemented** in `BuildingMeshView.ts`; active in PR #33. |
 | **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.85 reach padding. |
 | **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 
@@ -620,6 +658,13 @@ fixed:
   uses `compileAsync`, which polls `KHR_parallel_shader_compile`, and hides
   the object until every program is ready. `scripts/hitch-profile.mjs`
   attributes long frames like that one function by function.
+- **Directional tile streamer lookahead**: `TileStreamer` offsets its focus
+  position along the vehicle velocity vector (up to 120 m) and prioritizes
+  candidate tiles aligned with the camera's view vector (`score = d - 180 * Math.max(0, dot)`).
+  This pulls upcoming distant structures into view earlier during high-speed
+  driving without increasing active tile caps or refinement batch sizes,
+  preserving memory and frametime stability on mobile and lower-tier hardware
+  (`resolutionProfiles.ts`).
 - Remaining known costs: tile rasterization on the main thread, ground-builder
   completion (~15-25 ms), and satellite patch decode (~10 ms each).
 
