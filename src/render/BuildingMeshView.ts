@@ -12,7 +12,6 @@ import {
 } from 'three';
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import type { Grid } from '../services/tiles/tileColliders.ts';
-import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
@@ -443,7 +442,6 @@ export function anchorCollider(
 export class BuildingMeshView {
   readonly group = new Group();
   private buildingMesh: InstancedMesh | null = null;
-  private deckMesh: InstancedMesh | null = null;
   private wireframeMesh: LineSegments | null = null;
   private readonly boxGeo = new BoxGeometry(1, 1, 1);
 
@@ -459,7 +457,6 @@ export class BuildingMeshView {
 
   // Modern arcade architectural materials
   private readonly buildingMat: MeshStandardMaterial;
-  private readonly deckMat: MeshStandardMaterial;
 
   constructor(private readonly onBuildings?: (colliders: readonly BuildingCollider[]) => void) {
     this.group.visible = false;
@@ -475,14 +472,7 @@ export class BuildingMeshView {
       flatShading: true
     });
 
-    this.deckMat = new MeshStandardMaterial({
-      color: BUILDING_COLORS.deck,
-      roughness: 0.8,
-      metalness: 0.05
-    });
-
     this.hookMaterial(this.buildingMat, 'building-mesh-view');
-    this.hookMaterial(this.deckMat, 'deck-mesh-view');
   }
 
   private hookMaterial(mat: MeshStandardMaterial, cacheKey: string): void {
@@ -563,35 +553,34 @@ export class BuildingMeshView {
   }
 
   private lastColliders: readonly BuildingCollider[] = [];
-  private lastDeckGrid: Float32Array | undefined;
-  private lastGrid: Grid | undefined;
 
   /**
    * Refresh building heights when the terrain heightfield refines in the background.
    */
   refreshHeights(sampleGround: (x: number, z: number) => number): void {
     if (this.lastColliders.length > 0) {
-      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround);
+      this.update(this.lastColliders, undefined, undefined, sampleGround);
     }
   }
 
   /**
-   * Rebuild instances from the exact active colliders and deck grid.
+   * Rebuild instances from the exact active physical colliders.
    * If sampleGround is provided, each building box is firmly anchored into the terrain
    * with multi-point footprint sampling so buildings never hover on steep hills.
+   *
+   * Guarantees 100% 1:1 parity between visual geometry and physical collisions:
+   * every box rendered is an active physical collider. Stale uncollided floating
+   * slabs (deckMesh) have been eliminated.
    */
   update(
     colliders: readonly BuildingCollider[],
-    deckGrid?: Float32Array,
-    grid?: Grid,
+    _deckGrid?: Float32Array,
+    _grid?: Grid,
     sampleGround?: (x: number, z: number) => number
   ): void {
     this.lastColliders = colliders;
-    this.lastDeckGrid = deckGrid;
-    this.lastGrid = grid;
 
     const oldBuildingMesh = this.buildingMesh;
-    const oldDeckMesh = this.deckMesh;
 
     // 1. Build building boxes
     const count = colliders.length;
@@ -642,74 +631,16 @@ export class BuildingMeshView {
     }
     this.onBuildings?.(rendered);
 
-    // 2. Build elevated bridge decks, ramps, and support piers from deckGrid
-    if (deckGrid && grid) {
-      const { n, cell, half } = grid;
-      const rawDeckIndices: number[] = [];
-      for (let c = 0; c < n * n; c++) {
-        if (deckGrid[c] !== NO_DATA) rawDeckIndices.push(c);
-      }
-
-      // Filter isolated deck noise: require at least one orthogonal deck neighbor unless it's a single test cell
-      const deckIndices = rawDeckIndices.filter(c => {
-        if (rawDeckIndices.length <= 1) return true;
-        const i = c % n;
-        const j = Math.floor(c / n);
-        const hasNeighbor =
-          (i > 0 && deckGrid[c - 1] !== NO_DATA) ||
-          (i < n - 1 && deckGrid[c + 1] !== NO_DATA) ||
-          (j > 0 && deckGrid[c - n] !== NO_DATA) ||
-          (j < n - 1 && deckGrid[c + n] !== NO_DATA);
-        return hasNeighbor;
-      });
-
-      if (deckIndices.length > 0) {
-        const THICKNESS = 1.4;
-        const totalDeckInstances = deckIndices.length;
-        const deckMesh = new InstancedMesh(this.boxGeo, this.deckMat, totalDeckInstances);
-        deckMesh.castShadow = false;
-        deckMesh.receiveShadow = true;
-
-        for (let idx = 0; idx < deckIndices.length; idx++) {
-          const c = deckIndices[idx]!;
-          const i = c % n;
-          const j = Math.floor(c / n);
-          const x = -half + (i + 0.5) * cell;
-          const z = -half + (j + 0.5) * cell;
-          const topY = deckGrid[c]!;
-
-          _pos.set(x, topY - THICKNESS / 2, z);
-          _scale.set(cell, THICKNESS, cell);
-          _mat.compose(_pos, _quat, _scale);
-          deckMesh.setMatrixAt(idx, _mat);
-        }
-
-        deckMesh.instanceMatrix.needsUpdate = true;
-        this.deckMesh = deckMesh;
-        this.group.add(deckMesh);
-      } else {
-        this.deckMesh = null;
-      }
-    } else {
-      this.deckMesh = null;
-    }
-
     // Dispose old instances after new ones are added to prevent any 1-frame gap
     if (oldBuildingMesh) {
       this.group.remove(oldBuildingMesh);
       oldBuildingMesh.dispose();
-    }
-    if (oldDeckMesh) {
-      this.group.remove(oldDeckMesh);
-      oldDeckMesh.dispose();
     }
   }
 
   clear(): void {
     this.dispose();
     this.lastColliders = [];
-    this.lastDeckGrid = undefined;
-    this.lastGrid = undefined;
     this.onBuildings?.([]);
   }
 
@@ -718,11 +649,6 @@ export class BuildingMeshView {
       this.group.remove(this.buildingMesh);
       this.buildingMesh.dispose();
       this.buildingMesh = null;
-    }
-    if (this.deckMesh) {
-      this.group.remove(this.deckMesh);
-      this.deckMesh.dispose();
-      this.deckMesh = null;
     }
     if (this.wireframeMesh) {
       this.group.remove(this.wireframeMesh);

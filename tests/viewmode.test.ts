@@ -23,7 +23,7 @@ describe('BuildingMeshView', () => {
     expect(view.visible).toBe(false);
   });
 
-  it('builds instanced meshes from active colliders and deckGrid', () => {
+  it('builds instanced meshes with 1:1 parity from active colliders without floating deck squares', () => {
     const view = new BuildingMeshView();
     const mockColliders: BuildingCollider[] = [
       {
@@ -49,18 +49,19 @@ describe('BuildingMeshView', () => {
     const mockDeckGrid = new Float32Array(16).fill(NO_DATA);
     mockDeckGrid[5] = 12.5; // elevated deck cell
 
+    // Even if deckGrid is passed, BuildingMeshView renders only the active colliders (zero floating squares)
     view.update(mockColliders, mockDeckGrid, mockGrid);
-    expect(view.group.children.length).toBe(2); // 1 building mesh + 1 deck mesh
+    expect(view.group.children.length).toBe(1); // 1 building mesh, zero deck mesh
     expect((view as any).buildingMesh.castShadow).toBe(false);
     expect((view as any).buildingMesh.receiveShadow).toBe(true);
-    expect((view as any).deckMesh.castShadow).toBe(false);
-    expect((view as any).deckMesh.receiveShadow).toBe(true);
+    expect((view as any).buildingMesh.count).toBe(3);
+    expect((view as any).deckMesh).toBeUndefined();
 
     view.clear();
     expect(view.group.children.length).toBe(0);
   });
 
-  it('renders bridge decks with 1:1 alignment to drivable deck surfaces without uncollided ghost piers', () => {
+  it('guarantees 1:1 collider parity with zero uncollided ghost objects or floating slabs', () => {
     const view = new BuildingMeshView();
     const mockGrid: Grid = { n: 4, cell: 10, half: 20 };
     const mockDeckGrid = new Float32Array(16).fill(NO_DATA);
@@ -69,12 +70,12 @@ describe('BuildingMeshView', () => {
     mockDeckGrid[6] = 20.0;
 
     const sampleGround = () => 2.0;
+    // When there are no colliders, no phantom deck mesh or ghost columns are created
     view.update([], mockDeckGrid, mockGrid, sampleGround);
 
-    const deckMesh = (view as any).deckMesh as InstancedMesh;
-    expect(deckMesh).toBeDefined();
-    // Exactly 2 deck cells matching the drivable deck instances, with no phantom uncollidable columns
-    expect(deckMesh.count).toBe(2);
+    expect((view as any).buildingMesh).toBeNull();
+    expect((view as any).deckMesh).toBeUndefined();
+    expect(view.group.children.length).toBe(0);
 
     view.clear();
   });
