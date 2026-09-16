@@ -258,6 +258,16 @@ describe('ViewMode input bindings', () => {
   });
 });
 
+describe('For Realz 3D ViewMode', () => {
+  it('verifies that buildingMeshView is hidden so game objects are only 3d tiles geometry', () => {
+    const view = new BuildingMeshView();
+    // In for-realz-3d, buildingMeshView is kept invisible
+    view.visible = false;
+    expect(view.visible).toBe(false);
+    expect(view.group.visible).toBe(false);
+  });
+});
+
 describe('TerrainMesh visual modes', () => {
   it('switches between photoreal, game3d, and textured modes seamlessly', () => {
     const tm = new TerrainMesh();

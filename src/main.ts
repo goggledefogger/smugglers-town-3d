@@ -176,7 +176,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'metropolis' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'best-3d-stretched' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'for-realz-3d' | 'metropolis' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'best-3d-stretched' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -216,6 +216,9 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   if (viewMode === 'masked-tiles') {
     clutterFilter.mode = 'hidden';
     clutterMode = 'hidden';
+  } else if (viewMode === 'for-realz-3d') {
+    clutterFilter.mode = 'swept';
+    clutterMode = 'swept';
   } else if (viewMode === 'photoreal') {
     clutterFilter.mode = 'off';
     clutterMode = 'off';
@@ -262,6 +265,8 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: BEST 3D';
   } else if (viewMode === 'best-3d-stretched') {
     viewModeText.textContent = 'VIEW: BEST 3D STRETCHED V2';
+  } else if (viewMode === 'for-realz-3d') {
+    viewModeText.textContent = 'VIEW: FOR REALZ 3D';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
   } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
@@ -282,6 +287,7 @@ function updateViewModeUi(): void {
 function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): void {
   viewMode = mode;
   const isRawPhotoreal = mode === 'photoreal';
+  const isForRealz = mode === 'for-realz-3d';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
   const isBest3dStretched = mode === 'best-3d-stretched';
@@ -291,17 +297,19 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
   const isProjectingTiles = isProjected3dTiles || isBest3d || isBest3dStretched;
   const isProjected2dMaps = mode === 'projected-2d-maps';
-  const hasTiles = isRawPhotoreal || isMaskedTiles || isProjectingTiles;
+  const hasTiles = isRawPhotoreal || isForRealz || isMaskedTiles || isProjectingTiles;
 
   if (tiles) {
     tiles.group.visible = hasTiles;
     if (isProjectingTiles) {
       tiles.group.traverse(o => o.layers.set(1));
+    } else {
+      tiles.group.traverse(o => o.layers.set(0));
     }
   }
   renderer.setProjecting3dTiles(isProjectingTiles);
 
-  if (isRawPhotoreal || isMaskedTiles) {
+  if (isRawPhotoreal || isForRealz || isMaskedTiles) {
     renderer.camera.layers.enable(1);
   } else {
     renderer.camera.layers.disable(1);
@@ -309,6 +317,9 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
 
   if (clutterFilter) {
     if (isMaskedTiles || isProjectingTiles) {
+      clutterFilter.mode = 'swept';
+      clutterMode = 'swept';
+    } else if (isForRealz) {
       clutterFilter.mode = 'swept';
       clutterMode = 'swept';
     } else if (isRawPhotoreal) {
@@ -320,7 +331,7 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
 
   if (groundStreamer) {
     groundStreamer.group.visible = true;
-    if (isRawPhotoreal || isMaskedTiles) {
+    if (isRawPhotoreal || isForRealz || isMaskedTiles) {
       groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
     } else {
       groundStreamer.underTiles = true;
@@ -329,9 +340,9 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
 
   terrainMesh.setMode(mode === 'game3d' ? 'game3d' : 'photoreal');
 
-  // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
+  // In photoreal, for-realz-3d, and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
   // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
-  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles);
+  buildingMeshView.visible = !(isRawPhotoreal || isForRealz || isMaskedTiles);
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   buildingMeshView.setTexture(satTex, config.world.mapHalf * 2);
@@ -376,6 +387,8 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
 
 function toggleViewMode(): void {
   if (viewMode === 'photoreal') {
+    setViewMode('for-realz-3d');
+  } else if (viewMode === 'for-realz-3d') {
     setViewMode('map-objects');
   } else if (viewMode === 'map-objects') {
     setViewMode('metropolis');
@@ -515,7 +528,7 @@ function rebuildViews(): void {
   for (const actor of world.vehicles) {
     const view = new VehicleView(
       actor, () => world.terrainProvider.heightfield,
-      (x, z) => viewMode === 'photoreal' || viewMode === 'metropolis' || viewMode === 'map-objects' || viewMode === 'baked-facades' ? groundShade.shadeAt(x, z) : 1
+      (x, z) => viewMode === 'photoreal' || viewMode === 'for-realz-3d' || viewMode === 'metropolis' || viewMode === 'map-objects' || viewMode === 'baked-facades' ? groundShade.shadeAt(x, z) : 1
     );
     vehicleViews.push(view);
     renderer.scene.add(view.group);
@@ -784,7 +797,7 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(groundStreamer.group);
           }
           if (tiles) {
-            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
+            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'for-realz-3d' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
@@ -877,7 +890,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(groundStreamer.group);
     }
     if (tiles) {
-      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
+      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'for-realz-3d' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
