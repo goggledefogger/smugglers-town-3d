@@ -120,6 +120,9 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('best-3d');
     expect(view.getTextureStyle()).toBe('best-3d');
 
+    view.setTextureStyle('best-3d-stretched');
+    expect(view.getTextureStyle()).toBe('best-3d-stretched');
+
     view.setTextureStyle('map-objects');
     expect(view.getTextureStyle()).toBe('map-objects');
 
@@ -154,6 +157,8 @@ describe('BuildingMeshView', () => {
     view.setTextureStyle('best-3d');
     view.setTilesTexture(tiles);
     expect(shader.uniforms.uTextureStyle!.value).toBe(4);
+    view.setTextureStyle('best-3d-stretched');
+    expect(shader.uniforms.uTextureStyle!.value).toBeCloseTo(4.2);
     view.setTextureStyle('map-objects');
     view.setTexture(satellite, 200);
     expect(shader.uniforms.uTextureStyle!.value).toBe(5);

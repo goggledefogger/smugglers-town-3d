@@ -15,7 +15,7 @@ import type { Grid } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
-export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'map-objects' | 'baked-facades' | 'metropolis';
+export type BuildingTextureStyle = 'planar' | 'hybrid' | 'projected-2d' | 'projected-3d' | 'projected' | 'best-3d' | 'best-3d-stretched' | 'map-objects' | 'baked-facades' | 'metropolis';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -381,6 +381,39 @@ if (uHasTexture > 0.5 && uTextureStyle > 2.5 && uTextureStyle < 4.5) {
   vec4 tileSample = texture2D(uTilesMap, screenUV);
   if (tileSample.a > 0.04) {
     gl_FragColor.rgb = tileSample.rgb;
+  } else if (uTextureStyle > 4.1) {
+    // Best 3D Stretched v2: Expand / stretch authentic 3D tile colors into the transparency sections of objects (trees, irregular facades)
+    vec2 texel = 1.0 / uResolution;
+    vec3 accumColor = vec3(0.0);
+    float accumWeight = 0.0;
+    float closestDist = 999.0;
+    vec3 nearestColor = vec3(0.0);
+
+    // 8 radial search directions
+    for (float dirIdx = 0.0; dirIdx < 8.0; dirIdx += 1.0) {
+      float angle = dirIdx * 0.78539816339; // pi / 4
+      vec2 dir = vec2(cos(angle), sin(angle)) * texel;
+      for (float s = 1.0; s <= 10.0; s += 1.0) {
+        float distPx = s * s * 1.3; // expands up to 130px smoothly
+        if (distPx > closestDist * 1.6) break;
+        vec4 sSample = texture2D(uTilesMap, screenUV + dir * distPx);
+        if (sSample.a > 0.05) {
+          float w = 1.0 / (distPx * distPx);
+          accumColor += sSample.rgb * w;
+          accumWeight += w;
+          if (distPx < closestDist) {
+            closestDist = distPx;
+            nearestColor = sSample.rgb;
+          }
+          break; // Found edge along this ray
+        }
+      }
+    }
+
+    if (accumWeight > 0.0) {
+      vec3 filledColor = mix(nearestColor, accumColor / accumWeight, 0.35);
+      gl_FragColor.rgb = filledColor;
+    }
   }
 }
 `;
@@ -514,6 +547,8 @@ export class BuildingMeshView {
       this.uTextureStyle.value = 6.0;
     } else if (style === 'map-objects') {
       this.uTextureStyle.value = 5.0;
+    } else if (style === 'best-3d-stretched') {
+      this.uTextureStyle.value = 4.2;
     } else if (style === 'best-3d') {
       this.uTextureStyle.value = 4.0;
     } else if (style === 'projected-3d') {

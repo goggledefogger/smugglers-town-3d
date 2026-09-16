@@ -176,7 +176,7 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'metropolis' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
+export type ViewMode = 'photoreal' | 'metropolis' | 'map-objects' | 'baked-facades' | 'masked-tiles' | 'best-3d' | 'best-3d-stretched' | 'projected-3d-tiles' | 'projected-2d-maps' | 'projected-3d' | 'game3d-textured' | 'game3d' | 'game3d-planar' | 'game3d-hybrid';
 let viewMode: ViewMode = 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
@@ -260,6 +260,8 @@ function updateViewModeUi(): void {
     viewModeText.textContent = 'VIEW: BAKED FACADES';
   } else if (viewMode === 'best-3d') {
     viewModeText.textContent = 'VIEW: BEST 3D';
+  } else if (viewMode === 'best-3d-stretched') {
+    viewModeText.textContent = 'VIEW: BEST 3D STRETCHED V2';
   } else if (viewMode === 'game3d') {
     viewModeText.textContent = 'VIEW: ARCADE 3D';
   } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
@@ -282,11 +284,12 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = mode === 'best-3d';
+  const isBest3dStretched = mode === 'best-3d-stretched';
   const isMetropolis = mode === 'metropolis';
   const isMapObjects = mode === 'map-objects' || mode === 'baked-facades' || isMetropolis;
   facadeBaker.group.visible = mode === 'baked-facades';
   const isProjected3dTiles = mode === 'projected-3d-tiles' || mode === 'projected-3d';
-  const isProjectingTiles = isProjected3dTiles || isBest3d;
+  const isProjectingTiles = isProjected3dTiles || isBest3d || isBest3dStretched;
   const isProjected2dMaps = mode === 'projected-2d-maps';
   const hasTiles = isRawPhotoreal || isMaskedTiles || isProjectingTiles;
 
@@ -346,6 +349,10 @@ function setViewMode(mode: ViewMode, isReal = world.terrainProvider.isReal): voi
   } else if (mode === 'game3d-planar') {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('planar');
+  } else if (isBest3dStretched) {
+    buildingMeshView.setMode('textured');
+    buildingMeshView.setTextureStyle('best-3d-stretched');
+    buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   } else if (isBest3d) {
     buildingMeshView.setMode('textured');
     buildingMeshView.setTextureStyle('best-3d');
@@ -379,6 +386,8 @@ function toggleViewMode(): void {
   } else if (viewMode === 'masked-tiles') {
     setViewMode('best-3d');
   } else if (viewMode === 'best-3d') {
+    setViewMode('best-3d-stretched');
+  } else if (viewMode === 'best-3d-stretched') {
     setViewMode('projected-3d-tiles');
   } else if (viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     setViewMode('projected-2d-maps');
@@ -775,7 +784,7 @@ async function openOnline(type: number): Promise<void> {
             renderer.scene.add(groundStreamer.group);
           }
           if (tiles) {
-            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
+            tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
             renderer.scene.add(tiles.group);
           }
           // one ground for everything, cut from the tiles — same as single player
@@ -868,7 +877,7 @@ relocateBarEl.onSearch = async (q, key) => {
       renderer.scene.add(groundStreamer.group);
     }
     if (tiles) {
-      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
+      tiles.group.visible = viewMode === 'photoreal' || viewMode === 'masked-tiles' || viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d';
       renderer.scene.add(tiles.group);
     }
     swapTerrainMesh(terrain);
@@ -1301,7 +1310,7 @@ function frame(now: number): void {
       if (groundStreamer) groundStreamer.update(renderer.camera.position, now);
     }
   }
-  if (viewMode === 'best-3d' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
+  if (viewMode === 'best-3d' || viewMode === 'best-3d-stretched' || viewMode === 'projected-3d-tiles' || viewMode === 'projected-3d') {
     buildingMeshView.setTilesTexture(renderer.getTilesTexture(), renderer.getResolution());
   }
   if (viewMode === 'baked-facades') facadeBaker.update(renderer.camera, now);
