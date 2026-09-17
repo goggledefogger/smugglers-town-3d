@@ -42,6 +42,12 @@ const FILL_TARGET = 0.7;
 const TEXEL_MIN = 0.35, TEXEL_MAX = 2.0;
 /** After everything is painted, the nearest walls are refreshed this often (ms) to pick up refined tiles. */
 const REFRESH_MS = 4000;
+/**
+ * Walls baked per frame at most. The CPU budget cannot see the GPU: each
+ * bake draws every loaded tile once more, and a downtown frame that queued
+ * six of them read 50 ms even though the CPU side sat under 4
+ */
+const MAX_WALLS_PER_FRAME = 2;
 
 export interface AtlasRect { x: number; y: number; w: number; h: number }
 
@@ -372,11 +378,12 @@ export class FacadeBaker {
   }
 
   /** Bake pending walls nearest the camera first, within `budgetMs` of wall clock. */
-  update(camPos: Vector3, nowMs: number, budgetMs = 4): void {
+  update(camPos: Vector3, nowMs: number, budgetMs = 4, maxWalls = MAX_WALLS_PER_FRAME): void {
     if (this.jobs.length === 0) return;
     this.reorder(camPos);
     const t0 = performance.now();
     let began = false;
+    let baked = 0;
     const begin = () => {
       if (began) return;
       began = true;
@@ -385,7 +392,7 @@ export class FacadeBaker {
       this.hooks.before();
     };
     for (const i of this.order) {
-      if (performance.now() - t0 > budgetMs) break;
+      if (performance.now() - t0 > budgetMs || baked >= maxWalls) break;
       const j = this.jobs[i]!;
       if (j.done) continue;
       if (!j.rect) {
@@ -397,13 +404,14 @@ export class FacadeBaker {
       }
       begin();
       this.bake(j);
+      baked++;
       j.done = true;
       j.bakedAt = nowMs;
       this.landed(j);
     }
     // everything painted: refresh the nearest walls slowly so tiles that refined since show up
     if (!began && this.order.length > 0) {
-      const n = Math.min(6, this.order.length);
+      const n = Math.min(maxWalls, this.order.length);
       for (let k = 0; k < n && performance.now() - t0 < budgetMs; k++) {
         const j = this.jobs[this.order[this.refreshCursor % Math.min(this.order.length, 200)]!]!;
         this.refreshCursor++;

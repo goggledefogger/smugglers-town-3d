@@ -464,6 +464,41 @@ tile vertices moved onto the nearest box face so the tiles themselves are the
 walls. It is kept for comparison; its failure modes (shards, walls buried in
 overlapping boxes, bare faces) are what Painted 3D was built to remove.
 
+### "Painted Metropolis" and "Vector City" (`render/facadeShader.ts`, `render/RoadRibbonView.ts`)
+
+A survey of every mode across four branches (2026-09-17, `scripts/mode-survey.mjs`,
+one street cell at Market & Montgomery) found three failures and nothing else:
+photo blur, which is source magnification and cannot be fetched away; shards
+and floating sheets wherever the tiles themselves are drawn; and procedural
+walls that read as a game. Two things no mode had touched: the road under the
+hood camera is a blurred satellite stain in all of them, and every mode with
+solid collision has box silhouettes. These two modes are the answers.
+
+**Painted Metropolis** is Painted 3D with the Metropolis facade (a procedural
+wall: three typologies by height, story and bay grid, lit rooms, storefront
+glass at eye level, plinth, corner occlusion) wherever the bake saw nothing,
+a faint story grid over the photos it did take so the blur reads as floors,
+and a parapet framing the satellite roofs. One uniform (`uFacade`) on the box
+material; the facade functions are one GLSL string shared with the prisms.
+
+**Vector City** draws no Google tile at all: the Overture prisms wear the
+Metropolis facade, the satellite stays on roofs and ground, and the OSM road
+ways (`Tileset.roadPolylines`, the polylines the collider mask is stamped
+from) become asphalt ribbons draped a hand's breadth over the heightfield,
+resampled every 6 m so they follow the hills, with kerbs, edge lines and a
+dashed centre line on two-way widths. Wider ways sit a few centimetres higher
+so a junction shows the bigger road on top. The ribbons are exactly the
+carved corridors, so the mode doubles as the honest QA view of where the car
+may drive. Before Overture answers, the mode shows the boxes with the facade;
+the footprint load re-applies the mode. The cars keep the photo light rig so
+they composite into the satellite ground.
+
+The baker now bakes at most two walls a frame: its CPU budget could not see
+the GPU, and each bake draws every loaded tile once more, so a downtown frame
+that queued six walls read 50 ms with the CPU side under 4. Best 3D+ (per-cell
+columns) was removed in the same pass; the V key cycles Real 3D, Masked,
+Best 3D, Painted 3D, Painted Metropolis, Footprint 3D, Vector City, Arcade.
+
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
 "Game 3D" mode renders the exact extracted physical geometry:

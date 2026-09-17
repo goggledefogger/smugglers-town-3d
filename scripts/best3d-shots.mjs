@@ -95,7 +95,7 @@ const heading = async yaw => {
 };
 await page.keyboard.press('KeyC'); await page.keyboard.press('KeyC'); // hood cam
 await page.waitForTimeout(300);
-for (const m of ['photoreal', 'best-3d', 'best-3d-plus', 'painted-3d']) {
+for (const m of ['photoreal', 'best-3d', 'painted-3d', 'painted-metro', 'vector-city']) {
   await mode(m);
   for (let k = 0; k < 4; k++) {
     await heading(k * Math.PI / 2);
@@ -104,7 +104,7 @@ for (const m of ['photoreal', 'best-3d', 'best-3d-plus', 'painted-3d']) {
 }
 await page.keyboard.press('KeyC'); // back to chase
 // rooftop overview: drop the car from high up, the chase camera follows from above
-for (const m of ['photoreal', 'best-3d', 'best-3d-plus', 'painted-3d']) {
+for (const m of ['photoreal', 'best-3d', 'painted-3d', 'painted-metro', 'vector-city']) {
   await mode(m);
   await page.evaluate(([x, z]) => {
     const body = window.__game.player.body;

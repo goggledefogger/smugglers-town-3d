@@ -14,6 +14,7 @@ import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import type { Grid } from '../services/tiles/tileColliders.ts';
 import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
+import { FACADE_GLSL } from './facadeShader.ts';
 
 export type BuildingMeshMode = 'arcade' | 'textured';
 
@@ -36,6 +37,10 @@ varying float vIsRoof;
 varying float vLocalNormY;
 varying vec2 vAtlasUV;
 varying float vHasRect;
+varying float vBuildingHeight;
+varying vec2 vLocalXZ;
+varying vec2 vBuildingFootprint;
+varying vec2 vBuildingSeed;
 `;
 
 const VERTEX_BODY_BUILDING = `
@@ -50,6 +55,15 @@ vWorldPos = (modelMatrix * bWorldPos).xyz;
 vIsRoof = normal.y > 0.5 ? 1.0 : 0.0;
 vBuildingNormal = normal;
 vLocalNormY = position.y + 0.5;
+vLocalXZ = position.xz;
+vBuildingHeight = 1.0;
+vBuildingFootprint = vec2(10.0, 10.0);
+vBuildingSeed = floor(vWorldPos.xz / 8.0);
+#ifdef USE_INSTANCING
+  vBuildingHeight = length(instanceMatrix[1].xyz);
+  vBuildingFootprint = vec2(length(instanceMatrix[0].xyz), length(instanceMatrix[2].xyz));
+  vBuildingSeed = floor((modelMatrix * vec4(instanceMatrix[3].xyz, 1.0)).xz / 8.0);
+#endif
 // Painted 3D: each wall face's photo lives in an atlas rectangle (x, y, w, h in atlas UV,
 // w < 0 = not painted). u runs the way the face camera's right vector runs: +z on the -x
 // face, -z on +x, -x on -z, +x on +z; v is height
@@ -68,6 +82,7 @@ const FRAGMENT_PARS_BUILDING = `
 uniform sampler2D uSatelliteMap;
 uniform sampler2D uAtlas;
 uniform float uUseAtlas;
+uniform float uFacade;
 uniform float uMapSize;
 uniform float uHasTexture;
 varying vec3 vWorldPos;
@@ -76,7 +91,11 @@ varying float vIsRoof;
 varying float vLocalNormY;
 varying vec2 vAtlasUV;
 varying float vHasRect;
-`;
+varying float vBuildingHeight;
+varying vec2 vLocalXZ;
+varying vec2 vBuildingFootprint;
+varying vec2 vBuildingSeed;
+` + FACADE_GLSL;
 
 /**
  * Textured (Best 3D) look: the roof is the satellite image, the walls are an
@@ -93,8 +112,9 @@ if (uHasTexture > 0.5) {
     0.5 - vWorldPos.z / uMapSize
   );
   vec4 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0));
+  float edgeDist = min((0.5 - abs(vLocalXZ.x)) * vBuildingFootprint.x, (0.5 - abs(vLocalXZ.y)) * vBuildingFootprint.y);
   if (vIsRoof > 0.5) {
-    bestFill = sat.rgb;
+    bestFill = uFacade > 0.5 ? metroRoof(sat.rgb, edgeDist) : sat.rgb;
   } else {
     float faceLight = abs(vBuildingNormal.z) > 0.5 ? 0.94 : 0.86;
     if (vBuildingNormal.y < -0.5) faceLight = 0.5;
@@ -105,9 +125,19 @@ if (uHasTexture > 0.5) {
     // brightness of a photographed concrete wall
     bestFill = mix(vec3(0.21, 0.20, 0.19), sat.rgb, 0.35) * faceLight * verticalAO;
     // Painted 3D: the face's photo where the bake saw tiles, the fill where it saw nothing
+    bool painted = false;
     if (uUseAtlas > 0.5 && vHasRect > 0.5) {
       vec4 photo = texture2D(uAtlas, vAtlasUV);
-      if (photo.a > 0.5) bestFill = photo.rgb;
+      if (photo.a > 0.5) { bestFill = photo.rgb; painted = true; }
+    }
+    // Painted Metropolis: the procedural facade where there is no photo, its grid over the photo where there is
+    if (uFacade > 0.5) {
+      float wallU = abs(vBuildingNormal.z) > 0.5 ? vWorldPos.x : vWorldPos.z;
+      float hAbove = vLocalNormY * vBuildingHeight;
+      float cornerDist = abs(vBuildingNormal.z) > 0.5 ? (0.5 - abs(vLocalXZ.x)) * vBuildingFootprint.x : (0.5 - abs(vLocalXZ.y)) * vBuildingFootprint.y;
+      bestFill = painted
+        ? photoDetail(bestFill, wallU, hAbove, vBuildingHeight, vBuildingNormal, vWorldPos)
+        : metroWall(wallU, hAbove, vBuildingHeight, vBuildingNormal, vWorldPos, vBuildingSeed, cornerDist);
     }
   }
   diffuseColor.rgb = bestFill;
@@ -215,6 +245,7 @@ export class BuildingMeshView {
   // Material uniforms for texture projection
   private readonly uHasTexture = { value: 0.0 };
   private readonly uUseAtlas = { value: 0.0 };
+  private readonly uFacade = { value: 0.0 };
   private readonly uMapSize = { value: 5600.0 };
   private readonly dummyTex: DataTexture;
   private readonly uSatelliteMap: { value: Texture };
@@ -263,6 +294,7 @@ export class BuildingMeshView {
     mat.onBeforeCompile = (shader: WebGLProgramParametersWithUniforms) => {
       shader.uniforms.uHasTexture = this.uHasTexture;
       shader.uniforms.uUseAtlas = this.uUseAtlas;
+      shader.uniforms.uFacade = this.uFacade;
       shader.uniforms.uAtlas = this.uAtlas;
       shader.uniforms.uSatelliteMap = this.uSatelliteMap;
       shader.uniforms.uMapSize = this.uMapSize;
@@ -295,6 +327,15 @@ export class BuildingMeshView {
     this.uUseAtlas.value = tex ? 1.0 : 0.0;
   }
 
+  /** Painted Metropolis: the procedural facade on unpainted walls, its grid over painted ones, parapets on roofs. */
+  setFacade(on: boolean): void {
+    this.uFacade.value = on ? 1.0 : 0.0;
+  }
+
+  get facade(): boolean {
+    return this.uFacade.value > 0.5;
+  }
+
   /**
    * A face's photo landed in the atlas: give box `i`'s face its rectangle
    * (texels, atlas `size` square). Face order: -x, +x, -z, +z.
@@ -325,7 +366,7 @@ export class BuildingMeshView {
    */
   refreshHeights(sampleGround: (x: number, z: number) => number): void {
     if (this.lastColliders.length > 0) {
-      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround, this.lastTopGrid);
+      this.update(this.lastColliders, this.lastDeckGrid, this.lastGrid, sampleGround);
     }
   }
 
@@ -338,16 +379,13 @@ export class BuildingMeshView {
     colliders: readonly BuildingCollider[],
     deckGrid?: Float32Array,
     grid?: Grid,
-    sampleGround?: (x: number, z: number) => number,
-    topGrid?: Float32Array
+    sampleGround?: (x: number, z: number) => number
   ): void {
     this.lastColliders = colliders;
     this.lastDeckGrid = deckGrid;
     this.lastGrid = grid;
-    this.lastTopGrid = topGrid;
 
     this.dispose();
-    if (topGrid && grid) this.buildColumns(colliders, topGrid, grid, sampleGround);
 
     // 1. Build building boxes
     const count = colliders.length;
@@ -401,7 +439,6 @@ export class BuildingMeshView {
       }
       mesh.instanceMatrix.needsUpdate = true;
       if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      mesh.visible = !this._columns;
       this.buildingMesh = mesh;
       this.group.add(mesh);
     }
@@ -440,74 +477,6 @@ export class BuildingMeshView {
     }
   }
 
-  /**
-   * Best 3D+: the same collider volumes cut into one column per grid cell,
-   * each only as tall as the photogrammetry in that cell. A box merged along
-   * a row of cells rises to its tallest member everywhere; the columns give
-   * the low buildings in the run their real roofline while every outer face
-   * stays exactly where the collider's is, so the snapped facades still land.
-   */
-  private buildColumns(
-    colliders: readonly BuildingCollider[],
-    topGrid: Float32Array,
-    grid: Grid,
-    sampleGround?: (x: number, z: number) => number
-  ): void {
-    const { n, cell, half } = grid;
-    const cellIndex = (v: number) => Math.min(n - 1, Math.max(0, Math.floor((v + half) / cell)));
-    const anchored = colliders.map(b => anchorCollider(b, sampleGround));
-    let count = 0;
-    for (const b of anchored) {
-      count += (cellIndex(b.max.x - 1e-3) - cellIndex(b.min.x) + 1) * (cellIndex(b.max.z - 1e-3) - cellIndex(b.min.z) + 1);
-    }
-    if (count === 0) return;
-    const mesh = new InstancedMesh(this.boxGeo, this.buildingMat, count);
-    mesh.castShadow = false;
-    mesh.receiveShadow = true;
-    let k = 0;
-    for (const b of anchored) {
-      const i0 = cellIndex(b.min.x), i1 = cellIndex(b.max.x - 1e-3);
-      const j0 = cellIndex(b.min.z), j1 = cellIndex(b.max.z - 1e-3);
-      for (let j = j0; j <= j1; j++) {
-        for (let i = i0; i <= i1; i++) {
-          const x0 = Math.max(b.min.x, -half + i * cell), x1 = Math.min(b.max.x, -half + (i + 1) * cell);
-          const z0 = Math.max(b.min.z, -half + j * cell), z1 = Math.min(b.max.z, -half + (j + 1) * cell);
-          const t = topGrid[j * n + i]!;
-          // a cell with no photogrammetry top of its own (a prop, a carved edge) keeps the box height
-          const top = t !== NO_DATA && t > b.min.y + 0.5 && t <= b.max.y ? t : b.max.y;
-          const sy = Math.max(0.5, top - b.min.y);
-          _pos.set((x0 + x1) / 2, b.min.y + sy / 2, (z0 + z1) / 2);
-          _scale.set(Math.max(0.2, x1 - x0), sy, Math.max(0.2, z1 - z0));
-          _mat.compose(_pos, _quat, _scale);
-          mesh.setMatrixAt(k, _mat);
-          _color.setHex(sy > 40 ? BUILDING_COLORS.tall : sy > 18 ? BUILDING_COLORS.mid : b.kind === 'prop' ? BUILDING_COLORS.propRock : BUILDING_COLORS.low);
-          mesh.setColorAt(k, _color);
-          k++;
-        }
-      }
-    }
-    mesh.instanceMatrix.needsUpdate = true;
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-    mesh.visible = this._columns;
-    this.columnMesh = mesh;
-    this.group.add(mesh);
-  }
-
-  private _columns = false;
-  private columnMesh: InstancedMesh | null = null;
-  private lastTopGrid: Float32Array | undefined;
-
-  /** Draw the colliders as per-cell roof-height columns (Best 3D+) instead of whole boxes. */
-  get columns(): boolean {
-    return this._columns;
-  }
-
-  set columns(on: boolean) {
-    this._columns = on;
-    if (this.buildingMesh) this.buildingMesh.visible = !on;
-    if (this.columnMesh) this.columnMesh.visible = on;
-  }
-
   clear(): void {
     this.dispose();
   }
@@ -520,11 +489,6 @@ export class BuildingMeshView {
       this.buildingMesh = null;
       this.rects = null;
       this.photoV0 = null;
-    }
-    if (this.columnMesh) {
-      this.group.remove(this.columnMesh);
-      this.columnMesh.dispose();
-      this.columnMesh = null;
     }
     if (this.deckMesh) {
       this.group.remove(this.deckMesh);

@@ -18,6 +18,7 @@ import { TerrainMesh } from './render/TerrainMesh.ts';
 import { BuildingMeshView, anchorCollider } from './render/BuildingMeshView.ts';
 import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
 import { PrismMeshView, type Prism } from './render/PrismMeshView.ts';
+import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
@@ -171,6 +172,10 @@ renderer.scene.add(buildingMeshView.group);
 const prismView = new PrismMeshView();
 renderer.scene.add(prismView.group);
 if (typeof window !== 'undefined') (window as any).__prismView = prismView;
+/** Vector City: the OSM road ways as asphalt ribbons (render/RoadRibbonView.ts). */
+const roadRibbons = new RoadRibbonView();
+renderer.scene.add(roadRibbons.group);
+if (typeof window !== 'undefined') (window as any).__roadRibbons = roadRibbons;
 /** Painted 3D: photos of the tiles baked onto the box faces (render/FacadeBaker.ts). */
 const facadeBaker = new FacadeBaker(renderer.renderer, renderer.scene, {
   tiles: () => tiles?.group ?? null,
@@ -191,14 +196,27 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'best-3d-plus' | 'painted-3d' | 'footprint-3d' | 'game3d';
+export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'painted-3d' | 'painted-metro' | 'footprint-3d' | 'vector-city' | 'game3d';
+/** The V key's order. */
+const VIEW_MODE_CYCLE: readonly ViewMode[] = ['photoreal', 'masked-tiles', 'best-3d', 'painted-3d', 'painted-metro', 'footprint-3d', 'vector-city', 'game3d'];
+const VIEW_MODE_LABEL: Record<ViewMode, string> = {
+  photoreal: 'VIEW: REAL 3D', 'masked-tiles': 'VIEW: MASKED 3D TILES', 'best-3d': 'VIEW: BEST 3D',
+  'painted-3d': 'VIEW: PAINTED 3D', 'painted-metro': 'VIEW: PAINTED METROPOLIS',
+  'footprint-3d': 'VIEW: FOOTPRINT 3D', 'vector-city': 'VIEW: VECTOR CITY', game3d: 'VIEW: ARCADE 3D'
+};
 /** Modes that paint tile photos onto walls and need the baker running each frame. */
-const PAINTS_WALLS: ReadonlySet<ViewMode> = new Set(['painted-3d', 'footprint-3d']);
+const PAINTS_WALLS: ReadonlySet<ViewMode> = new Set(['painted-3d', 'painted-metro', 'footprint-3d']);
+/** Modes that draw the collider boxes with photos on their faces. */
+const PAINTS_BOXES: ReadonlySet<ViewMode> = new Set(['painted-3d', 'painted-metro']);
+/** Modes that draw the Overture footprint prisms instead of the boxes. */
+const SHOWS_PRISMS: ReadonlySet<ViewMode> = new Set(['footprint-3d', 'vector-city']);
+/** Modes with the Metropolis facade on every wall the photos left bare. */
+const PROCEDURAL_FACADES: ReadonlySet<ViewMode> = new Set(['painted-metro', 'vector-city']);
 let viewMode: ViewMode = 'photoreal';
 /** Modes that draw the Google 3D tiles on screen (raw, masked, or snapped onto the colliders). */
-const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d', 'best-3d-plus']);
-/** Best 3D: tiles snapped onto the collider boxes; "plus" draws the boxes at their per-cell roof heights. */
-const SNAPS_TILES: ReadonlySet<ViewMode> = new Set(['best-3d', 'best-3d-plus']);
+const SHOWS_TILES: ReadonlySet<ViewMode> = new Set(['photoreal', 'masked-tiles', 'best-3d']);
+/** Best 3D: tiles snapped onto the collider boxes. */
+const SNAPS_TILES: ReadonlySet<ViewMode> = new Set(['best-3d']);
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // swept by default: flattens road clutter while keeping kerbside building facades
@@ -254,13 +272,16 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   streamer.onRoadsLoaded = () => {
     log.info('OSM roads arrived in background, refreshing colliders');
     refreshColliders();
+    rebuildRibbons();
     showToast('OSM Road Mask Loaded: Road Corridors Carved');
   };
   streamer.onBuildingsLoaded = () => {
     log.info('building footprints arrived in background, refreshing colliders');
     refreshColliders();
-    if (viewMode === 'footprint-3d' && rebuildPrisms()) facadeBaker.setWalls(prismView.walls);
+    // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
+    if (SHOWS_PRISMS.has(viewMode)) setViewMode(viewMode);
   };
+  rebuildRibbons();
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.group.traverse(o => o.layers.set(1));
@@ -277,21 +298,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
   viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
-  if (viewMode === 'best-3d') {
-    viewModeText.textContent = 'VIEW: BEST 3D';
-  } else if (viewMode === 'best-3d-plus') {
-    viewModeText.textContent = 'VIEW: BEST 3D+';
-  } else if (viewMode === 'painted-3d') {
-    viewModeText.textContent = 'VIEW: PAINTED 3D';
-  } else if (viewMode === 'footprint-3d') {
-    viewModeText.textContent = 'VIEW: FOOTPRINT 3D';
-  } else if (viewMode === 'game3d') {
-    viewModeText.textContent = 'VIEW: ARCADE 3D';
-  } else if (viewMode === 'masked-tiles') {
-    viewModeText.textContent = 'VIEW: MASKED 3D TILES';
-  } else {
-    viewModeText.textContent = 'VIEW: REAL 3D';
-  }
+  viewModeText.textContent = VIEW_MODE_LABEL[viewMode];
 }
 
 function setViewMode(mode: ViewMode): void {
@@ -299,8 +306,9 @@ function setViewMode(mode: ViewMode): void {
   const isRawPhotoreal = mode === 'photoreal';
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = SNAPS_TILES.has(mode);
-  const isPainted = mode === 'painted-3d';
-  const isFootprint = mode === 'footprint-3d';
+  const isPainted = PAINTS_BOXES.has(mode);
+  // a prism mode before Overture answers shows the boxes; the load re-applies the mode
+  const isFootprint = SHOWS_PRISMS.has(mode) && (rebuildPrisms(), prismView.count > 0);
   const hasTiles = SHOWS_TILES.has(mode);
 
   if (tiles) tiles.group.visible = hasTiles;
@@ -339,8 +347,10 @@ function setViewMode(mode: ViewMode): void {
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
   // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
   buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint);
-  buildingMeshView.columns = mode === 'best-3d-plus';
   prismView.visible = isFootprint;
+  roadRibbons.visible = mode === 'vector-city';
+  buildingMeshView.setFacade(PROCEDURAL_FACADES.has(mode));
+  prismView.setFacade(PROCEDURAL_FACADES.has(mode));
 
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;
   if (satTex) {
@@ -350,35 +360,20 @@ function setViewMode(mode: ViewMode): void {
   buildingMeshView.setMode(mode === 'game3d' ? 'arcade' : 'textured');
   buildingMeshView.setAtlas(isPainted ? facadeBaker.texture : null);
   if (satTex) prismView.setTexture(satTex, config.world.mapHalf * 2);
-  prismView.setAtlas(isFootprint ? facadeBaker.texture : null);
+  prismView.setAtlas(mode === 'footprint-3d' ? facadeBaker.texture : null);
   // the baker holds one job list: the box faces or the footprint walls
-  if (isFootprint) {
-    rebuildPrisms();
+  if (mode === 'footprint-3d' && isFootprint) {
     facadeBaker.setWalls(prismView.walls);
   } else if (isPainted) {
     facadeBaker.setColliders(lastColliders);
   }
 
-  renderer.setLightRig((hasTiles || PAINTS_WALLS.has(mode)) && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  renderer.setLightRig((hasTiles || PAINTS_WALLS.has(mode) || mode === 'vector-city') && world.terrainProvider.isReal ? 'photo' : 'arcade');
   updateViewModeUi();
 }
 
 function toggleViewMode(): void {
-  if (viewMode === 'photoreal') {
-    setViewMode('masked-tiles');
-  } else if (viewMode === 'masked-tiles') {
-    setViewMode('best-3d');
-  } else if (viewMode === 'best-3d') {
-    setViewMode('best-3d-plus');
-  } else if (viewMode === 'best-3d-plus') {
-    setViewMode('painted-3d');
-  } else if (viewMode === 'painted-3d') {
-    setViewMode('footprint-3d');
-  } else if (viewMode === 'footprint-3d') {
-    setViewMode('game3d');
-  } else {
-    setViewMode('photoreal');
-  }
+  setViewMode(VIEW_MODE_CYCLE[(VIEW_MODE_CYCLE.indexOf(viewMode) + 1) % VIEW_MODE_CYCLE.length]!);
 }
 
 viewModeBtn?.addEventListener('click', () => {
@@ -512,6 +507,14 @@ function rebuildPrisms(): boolean {
   return true;
 }
 
+/** Vector City streets: the OSM ways draped on the ground the car drives on. */
+function rebuildRibbons(): void {
+  const polys = tiles?.roadPolylines;
+  if (!polys) return;
+  const hf = world.terrainProvider.heightfield;
+  roadRibbons.build(polys, (x, z) => hf.sample(x, z));
+}
+
 function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
   const rawColliders = [...tileBoxes, ...propScatter.colliders];
@@ -520,15 +523,9 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   clutterFilter?.maskChanged();
   if (clutterFilter && tiles) clutterFilter.setSnapBoxes(colliders, tiles.activeGrid, tiles.roadMask);
   game.setBuildingColliders(colliders);
-  buildingMeshView.update(
-    colliders,
-    tiles?.activeDeckGrid,
-    tiles?.activeGrid,
-    sample,
-    tiles?.activeTopGrid
-  );
+  buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
-  if (viewMode === 'painted-3d') {
+  if (PAINTS_BOXES.has(viewMode)) {
     facadeBaker.setColliders(colliders);
   } else if (viewMode === 'footprint-3d' && rebuildPrisms()) {
     facadeBaker.setWalls(prismView.walls);
@@ -571,6 +568,7 @@ function prepareTerrain(terrain: TerrainProvider, rng: () => number = Math.rando
 function clearTiles(): void {
   footprintPaintAt = -Infinity;
   prismView.clear();
+  roadRibbons.clear();
   prismsFor = null;
   game.setSurfaceProvider(undefined);
   groundBuilder = null;
@@ -1329,6 +1327,7 @@ function frame(now: number): void {
         terrainMesh.refresh(world.terrainProvider.heightfield);
         clutterFilter?.groundChanged(world.terrainProvider.heightfield);
         buildingMeshView.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
+        roadRibbons.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
         if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;
       }

@@ -404,6 +404,10 @@ export class TileStreamer {
   get footprints(): readonly Footprint[] | null {
     return this.footprintPolys;
   }
+  /** The OSM road ways (east/north metres from the origin, tagged width), null until Overpass answers. */
+  get roadPolylines(): readonly (readonly { east: number; north: number; widthM: number }[])[] | null {
+    return this.roadPolys;
+  }
   private resolutionMode: Resolution3DMode = 'balanced';
   private lod: LodPolicy = STREAM_LOD;
   private maxTiles = MAX_TILES;

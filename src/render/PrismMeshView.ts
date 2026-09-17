@@ -10,6 +10,7 @@ import {
   RGBAFormat, UnsignedByteType, DoubleSide, type Texture
 } from 'three';
 import type { Wall } from './FacadeBaker.ts';
+import { FACADE_GLSL } from './facadeShader.ts';
 
 export interface Prism {
   /** outer ring, world x,z pairs, closed */
@@ -24,16 +25,22 @@ const VERT = `
 attribute vec2 aWallUV;
 attribute vec4 aRect;
 attribute float aPhotoV0;
+attribute vec4 aWallDims;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec2 vAtlasUV;
 varying float vHasRect;
 varying float vV;
+varying vec3 vWallDims;
+varying vec2 vSeed;
 void main() {
   vec4 wp = modelMatrix * vec4(position, 1.0);
   vWorldPos = wp.xyz;
   vNormal = normal;
   vV = aWallUV.y;
+  // metres along the wall, wall height, wall width; the building's seed cell
+  vWallDims = vec3(aWallUV.x * aWallDims.x, aWallDims.y, aWallDims.x);
+  vSeed = aWallDims.zw;
   // the photo may start part way up the wall (a tower part on a podium)
   vAtlasUV = aRect.xy + vec2(aWallUV.x, (aWallUV.y - aPhotoV0) / max(0.001, 1.0 - aPhotoV0)) * aRect.zw;
   vHasRect = (aRect.z > 0.0 && abs(normal.y) < 0.5 && aWallUV.y >= aPhotoV0) ? 1.0 : 0.0;
@@ -45,26 +52,40 @@ const FRAG = `
 uniform sampler2D uSatelliteMap;
 uniform sampler2D uAtlas;
 uniform float uUseAtlas;
+uniform float uFacade;
 uniform float uMapSize;
 varying vec3 vWorldPos;
 varying vec3 vNormal;
 varying vec2 vAtlasUV;
 varying float vHasRect;
 varying float vV;
+varying vec3 vWallDims;
+varying vec2 vSeed;
+` + FACADE_GLSL + `
 void main() {
   vec2 satUV = vec2(vWorldPos.x / uMapSize + 0.5, 0.5 - vWorldPos.z / uMapSize);
   vec3 sat = texture2D(uSatelliteMap, clamp(satUV, 0.0, 1.0)).rgb;
   vec3 c;
   if (vNormal.y > 0.5) {
+    // ponytail: no parapet on a polygon roof, the triangulation has no edge distance
     c = sat;
   } else {
     float faceLight = 0.86 + 0.08 * abs(vNormal.z);
     float eave = smoothstep(0.92, 1.0, vV);
     float plinth = smoothstep(0.08, 0.0, vV);
     c = mix(vec3(0.21, 0.20, 0.19), sat, 0.35) * faceLight * (1.0 - 0.22 * eave) * (1.0 - 0.32 * plinth);
+    bool painted = false;
     if (uUseAtlas > 0.5 && vHasRect > 0.5) {
       vec4 photo = texture2D(uAtlas, vAtlasUV);
-      if (photo.a > 0.5) c = photo.rgb;
+      if (photo.a > 0.5) { c = photo.rgb; painted = true; }
+    }
+    if (uFacade > 0.5) {
+      float wallU = vWallDims.x;
+      float hAbove = vV * vWallDims.y;
+      float cornerDist = min(wallU, vWallDims.z - wallU);
+      c = painted
+        ? photoDetail(c, wallU, hAbove, vWallDims.y, vNormal, vWorldPos)
+        : metroWall(wallU, hAbove, vWallDims.y, vNormal, vWorldPos, vSeed, cornerDist);
     }
   }
   gl_FragColor = vec4(c, 1.0);
@@ -121,10 +142,20 @@ export class PrismMeshView {
         uSatelliteMap: { value: this.dummyTex },
         uAtlas: { value: this.dummyTex },
         uUseAtlas: { value: 0 },
+        uFacade: { value: 0 },
         uMapSize: { value: 5600 }
       },
       side: DoubleSide
     });
+  }
+
+  /** Vector City: the procedural facade on every unpainted wall. */
+  setFacade(on: boolean): void {
+    this.material.uniforms.uFacade!.value = on ? 1 : 0;
+  }
+
+  get facade(): boolean {
+    return this.material.uniforms.uFacade!.value > 0.5;
   }
 
   get count(): number {
@@ -155,7 +186,16 @@ export class PrismMeshView {
   build(prisms: readonly Prism[]): void {
     this.clear();
     const walls: Wall[] = [];
-    const wallsOf = prisms.map(p => { const w = prismWalls(p); walls.push(...w); return w; });
+    // each wall's building seed cell, so every wall of one prism draws the same facade
+    const seeds: number[] = [];
+    for (const p of prisms) {
+      const w = prismWalls(p);
+      let sx = 0, sz = 0, n = 0;
+      for (let i = 0; i + 3 < p.ring.length; i += 2) { sx += p.ring[i]!; sz += p.ring[i + 1]!; n++; }
+      const seedX = Math.floor(sx / Math.max(1, n) / 8), seedZ = Math.floor(sz / Math.max(1, n) / 8);
+      for (let k = 0; k < w.length; k++) seeds.push(seedX, seedZ);
+      walls.push(...w);
+    }
     // walls first (4 vertices each, so a wall's vertices are i*4..i*4+3), then roofs
     const roofs: { verts: number[]; tris: number[]; y: number }[] = [];
     let roofVerts = 0;
@@ -178,9 +218,14 @@ export class PrismMeshView {
     const nV = nWallV + roofVerts;
     const pos = new Float32Array(nV * 3), nrm = new Float32Array(nV * 3), uv = new Float32Array(nV * 2);
     const rect = new Float32Array(nV * 4).fill(-1), pv0 = new Float32Array(nV);
+    const dims = new Float32Array(nV * 4);
     const idx: number[] = [];
     walls.forEach((w, i) => {
       const width = Math.hypot(w.bx - w.ax, w.bz - w.az);
+      for (let k = 0; k < 4; k++) {
+        const o = (i * 4 + k) * 4;
+        dims[o] = width; dims[o + 1] = w.y1 - w.y0; dims[o + 2] = seeds[i * 2]!; dims[o + 3] = seeds[i * 2 + 1]!;
+      }
       const mx = (w.ax + w.bx) / 2, mz = (w.az + w.bz) / 2;
       // u runs the way the face camera's right vector runs: up x normal
       const rx = w.nz, rz = -w.nx;
@@ -216,13 +261,13 @@ export class PrismMeshView {
     this.photoV0 = new BufferAttribute(pv0, 1);
     geo.setAttribute('aRect', this.rect);
     geo.setAttribute('aPhotoV0', this.photoV0);
+    geo.setAttribute('aWallDims', new BufferAttribute(dims, 4));
     geo.setIndex(idx);
     geo.computeBoundingSphere();
     this.mesh = new Mesh(geo, this.material);
     this.mesh.frustumCulled = false;
     this.group.add(this.mesh);
     this.walls = walls;
-    void wallsOf;
   }
 
   set visible(v: boolean) {
