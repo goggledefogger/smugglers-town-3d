@@ -426,11 +426,19 @@ drawn in the mode, so nothing can float and no road is ever covered. The face
 camera looks half the gap to the box across the street (capped at 25 m) so
 the far side cannot leak in, and 12 m behind the face for walls standing
 inside their cell-quantized box. Faces are baked nearest the car first under a
-4 ms frame budget, photos survive collider rebuilds for boxes whose bounds did
-not change, and the nearest faces are refreshed every few seconds so tiles
-that refined since show up. Texel size follows the total wall area (about
-1 m downtown). Where the photo saw nothing (alpha 0) the box shows the same
-satellite-toned fill as Best 3D.
+4 ms frame budget and at most two walls a frame, and the nearest faces are
+refreshed every few seconds so tiles that refined since show up, drawn over
+the old photo rather than into a cleared rectangle so a tile mid-refinement
+never blanks a wall. A photo is keyed by its wall plane, span and top
+(`faceKey`), not the box's bottom: the ground under a box moves as the
+heightfield refines, and a key on it lost every photo in the field each tile
+load. The atlas layout is only thrown away when the wall area changes by a
+quarter (a relocation); a full atlas stops taking walls rather than
+restarting coarser, and a ground refinement's rebuilt box mesh gets its
+rectangles back through `replay`. `faceReach` runs through a `BoxIndex`
+(50 m buckets): every face against every box was 150 ms a rebuild downtown.
+Texel size follows the total wall area (about 1 m downtown). Where the photo
+saw nothing (alpha 0) the box shows the same satellite-toned fill as Best 3D.
 
 ### "Footprint 3D" Visual Mode (`render/PrismMeshView.ts`, `services/overture/buildings.ts`)
 

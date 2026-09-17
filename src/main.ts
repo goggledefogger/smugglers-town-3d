@@ -272,7 +272,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   streamer.onRoadsLoaded = () => {
     log.info('OSM roads arrived in background, refreshing colliders');
     refreshColliders();
-    rebuildRibbons();
+    if (viewMode === 'vector-city') rebuildRibbons();
     showToast('OSM Road Mask Loaded: Road Corridors Carved');
   };
   streamer.onBuildingsLoaded = () => {
@@ -281,7 +281,6 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
     if (SHOWS_PRISMS.has(viewMode)) setViewMode(viewMode);
   };
-  rebuildRibbons();
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.group.traverse(o => o.layers.set(1));
@@ -349,6 +348,8 @@ function setViewMode(mode: ViewMode): void {
   buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint);
   prismView.visible = isFootprint;
   roadRibbons.visible = mode === 'vector-city';
+  // built on first entry, not when the roads land: draping 2,000 ways is a frame's worth of work
+  if (mode === 'vector-city' && roadRibbons.vertexCount === 0) rebuildRibbons();
   buildingMeshView.setFacade(PROCEDURAL_FACADES.has(mode));
   prismView.setFacade(PROCEDURAL_FACADES.has(mode));
 
@@ -501,7 +502,7 @@ function rebuildPrisms(): boolean {
     }
     // a metre into the ground on the low side so a hillside never shows under the wall
     const y0 = p.minHeight > 0 ? ground + p.minHeight : gMin - 1;
-    prisms.push({ ring: p.ring, holes: p.holes, y0, y1: ground + p.minHeight + height });
+    prisms.push({ ring: p.ring, holes: p.holes, y0, y1: ground + p.minHeight + height, part: p.part });
   }
   prismView.build(prisms);
   return true;
@@ -1327,6 +1328,8 @@ function frame(now: number): void {
         terrainMesh.refresh(world.terrainProvider.heightfield);
         clutterFilter?.groundChanged(world.terrainProvider.heightfield);
         buildingMeshView.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
+        // the rebuilt box mesh starts with no rectangles: without this every photo vanished until the next tile load
+        if (PAINTS_BOXES.has(viewMode)) facadeBaker.replay();
         roadRibbons.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
         if (groundStreamer) groundStreamer.refresh();
         groundBuilder = null;

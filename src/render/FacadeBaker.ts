@@ -36,8 +36,8 @@ const IN_EXACT_M = 3;
 const MAX_FACE_PX = 768;
 /** Shelf rows are this granular in texels; keeps packing simple. */
 const ROW_STEP = 16;
-/** Atlas fill target when choosing the texel size (m per texel) from the total wall area. */
-const FILL_TARGET = 0.7;
+/** Atlas fill target when choosing the texel size (m per texel) from the total wall area; shelf packing wastes the rest. */
+const FILL_TARGET = 0.5;
 /** Texel size bounds (m). */
 const TEXEL_MIN = 0.35, TEXEL_MAX = 2.0;
 /** After everything is painted, the nearest walls are refreshed this often (ms) to pick up refined tiles. */
@@ -82,9 +82,17 @@ interface WallJob {
 
 const FACE_NORMAL: readonly [number, number, number][] = [[-1, 0, 0], [1, 0, 0], [0, 0, -1], [0, 0, 1]];
 
-/** Key identical boxes across collider rebuilds so their photos survive. */
-export function boxKey(b: BuildingCollider): string {
-  return `${b.min.x.toFixed(1)},${b.min.y.toFixed(1)},${b.min.z.toFixed(1)}|${b.max.x.toFixed(1)},${b.max.y.toFixed(1)},${b.max.z.toFixed(1)}`;
+/**
+ * Key a wall plane across collider rebuilds so its photo survives: the face's
+ * plane, its span and its top. Not the box's bottom: the ground under a box
+ * moves as the heightfield refines, and a key on it lost every photo in the
+ * field each time. The photo's own bottom rounds to 2 m so a small ground
+ * shift keeps the rect (stretched by at most that much).
+ */
+export function faceKey(b: BuildingCollider, face: WallFace, bottom: number): string {
+  const plane = face === 0 ? b.min.x : face === 1 ? b.max.x : face === 2 ? b.min.z : b.max.z;
+  const s0 = face < 2 ? b.min.z : b.min.x, s1 = face < 2 ? b.max.z : b.max.x;
+  return `${face}:${plane.toFixed(1)}:${s0.toFixed(1)}-${s1.toFixed(1)}:${b.max.y.toFixed(1)}:${Math.round(bottom / 2) * 2}`;
 }
 
 export function wallKey(w: Wall): string {
@@ -109,7 +117,7 @@ export interface FaceReach { out: number; bottom: number }
  * strip) does not count: it would have declared a whole 60 m wall internal,
  * and it simply shows up in the photo as foreground.
  */
-export function faceReach(boxes: readonly BuildingCollider[], i: number, face: WallFace): FaceReach {
+export function faceReach(boxes: readonly BuildingCollider[], i: number, face: WallFace, candidates?: readonly number[]): FaceReach {
   const a = boxes[i]!;
   const along = face < 2 ? a.max.z - a.min.z : a.max.x - a.min.x;
   const coverAndGap = (b: BuildingCollider): [number, number] => {
@@ -118,9 +126,10 @@ export function faceReach(boxes: readonly BuildingCollider[], i: number, face: W
     }
     return [Math.min(a.max.x, b.max.x) - Math.max(a.min.x, b.min.x), face === 2 ? a.min.z - b.max.z : b.min.z - a.max.z];
   };
+  const ks = candidates ?? boxes.map((_, k) => k);
   // flush neighbours hide the face up to the tallest of their roofs
   let bottom = a.min.y;
-  for (let k = 0; k < boxes.length; k++) {
+  for (const k of ks) {
     if (k === i) continue;
     const b = boxes[k]!;
     if (b.max.y < a.min.y + 1) continue;
@@ -130,7 +139,7 @@ export function faceReach(boxes: readonly BuildingCollider[], i: number, face: W
   }
   if (bottom >= a.max.y - 2) return { out: 0, bottom: a.max.y };
   let gap = Infinity;
-  for (let k = 0; k < boxes.length; k++) {
+  for (const k of ks) {
     if (k === i) continue;
     const b = boxes[k]!;
     if (b.max.y < bottom + 1) continue;
@@ -139,6 +148,43 @@ export function faceReach(boxes: readonly BuildingCollider[], i: number, face: W
     if (g >= 0.5 && g < gap) gap = g;
   }
   return { out: Math.min(MAX_OUT_M, Math.max(2, gap / 2)), bottom };
+}
+
+/**
+ * Boxes bucketed on a coarse grid, so a face only tests the boxes that could
+ * be flush against it or across the street from it. Every face against every
+ * box was 120 M tests a rebuild downtown, 150 ms on the frame each tile load.
+ */
+export class BoxIndex {
+  private readonly cells = new Map<number, number[]>();
+  private readonly cell: number;
+  constructor(private readonly boxes: readonly BuildingCollider[], cell = 50) {
+    this.cell = cell;
+    boxes.forEach((b, k) => {
+      for (let j = Math.floor(b.min.z / cell); j <= Math.floor(b.max.z / cell); j++) {
+        for (let i = Math.floor(b.min.x / cell); i <= Math.floor(b.max.x / cell); i++) {
+          const key = i * 100003 + j;
+          let list = this.cells.get(key);
+          if (!list) this.cells.set(key, list = []);
+          list.push(k);
+        }
+      }
+    });
+  }
+
+  /** Indices of every box within `pad` metres of box `i`'s bounds (itself included, duplicates removed). */
+  near(i: number, pad: number): number[] {
+    const a = this.boxes[i]!;
+    const cell = this.cell;
+    const seen = new Set<number>();
+    for (let j = Math.floor((a.min.z - pad) / cell); j <= Math.floor((a.max.z + pad) / cell); j++) {
+      for (let x = Math.floor((a.min.x - pad) / cell); x <= Math.floor((a.max.x + pad) / cell); x++) {
+        const list = this.cells.get(x * 100003 + j);
+        if (list) for (const k of list) seen.add(k);
+      }
+    }
+    return [...seen];
+  }
 }
 
 /** Spatial hash cell for wallReaches (m). */
@@ -260,6 +306,8 @@ export class FacadeBaker {
   private orderFor = new Vector3(Infinity, Infinity, Infinity);
   private refreshCursor = 0;
   private full = false;
+  /** a new layout: the whole atlas is cleared before the first bake into it */
+  private needsClear = true;
 
   constructor(
     private readonly renderer: WebGLRenderer,
@@ -287,18 +335,22 @@ export class FacadeBaker {
 
   /**
    * Swap the job list for a new one: photos of walls with the same key
-   * survive, the texel size follows the total wall area (so a whole downtown
-   * fits the atlas), and a layout that ran out of room restarts coarser.
+   * survive, and the texel size follows the total wall area (so a whole
+   * downtown fits the atlas). The layout is only thrown away, photos and all,
+   * when the area changed by a quarter (a relocation, not a tile load): the
+   * old rule wiped the atlas on every collider rebuild while driving, and a
+   * full atlas restarting coarser wiped it again a few seconds later. A full
+   * atlas now just stops taking new walls; the nearest were packed first.
    */
   private relayout(area: number, build: (kept: Map<string, WallJob>) => WallJob[]): void {
     const kept = new Map<string, WallJob>();
     for (const j of this.jobs) if (j.done && j.rect) kept.set(j.key, j);
-    let texel = Math.min(TEXEL_MAX, Math.max(TEXEL_MIN, Math.sqrt(area / (ATLAS_SIZE * ATLAS_SIZE * FILL_TARGET))));
-    if (this.full) texel = Math.max(texel, this.texel * 1.25);
-    if (Math.abs(texel - this.texel) > 0.05 || this.full) {
+    const texel = Math.min(TEXEL_MAX, Math.max(TEXEL_MIN, Math.sqrt(area / (ATLAS_SIZE * ATLAS_SIZE * FILL_TARGET))));
+    if (this.jobs.length === 0 || Math.abs(texel - this.texel) > this.texel * 0.25) {
       this.texel = texel;
       this.packer = new ShelfPacker(ATLAS_SIZE);
       this.full = false;
+      this.needsClear = true;
       kept.clear();
     }
     this.jobs = build(kept);
@@ -311,10 +363,13 @@ export class FacadeBaker {
     // texel size from the area that will actually be photographed: internal faces never are
     const reaches: FaceReach[] = [];
     let area = 0;
+    const index = new BoxIndex(boxes);
     for (let i = 0; i < boxes.length; i++) {
       const b = boxes[i]!;
+      // a box across a gap wider than twice the cap changes nothing: out is capped there
+      const near = index.near(i, MAX_OUT_M * 2 + 1);
       for (let f = 0; f < 4; f++) {
-        const reach = faceReach(boxes, i, f as WallFace);
+        const reach = faceReach(boxes, i, f as WallFace, near);
         reaches.push(reach);
         if (reach.out > 0) area += (f < 2 ? b.max.z - b.min.z : b.max.x - b.min.x) * Math.max(0, b.max.y - reach.bottom);
       }
@@ -328,7 +383,7 @@ export class FacadeBaker {
           const along = face < 2 ? b.max.z - b.min.z : b.max.x - b.min.x;
           const reach = reaches[i * 4 + f]!;
           const n = FACE_NORMAL[face]!;
-          const key = `${boxKey(b)}:${face}`;
+          const key = faceKey(b, face, reach.bottom);
           const prev = kept.get(key);
           jobs.push({
             kind: 'box', owner: i, face, key,
@@ -363,6 +418,11 @@ export class FacadeBaker {
     }));
   }
 
+  /** The box mesh was rebuilt (a ground refinement): hand every painted face its rectangle again. */
+  replay(): void {
+    for (const j of this.jobs) if (j.done) this.landed(j);
+  }
+
   private reorder(camPos: Vector3): void {
     if (camPos.distanceTo(this.orderFor) < 40) return;
     this.orderFor.copy(camPos);
@@ -390,6 +450,13 @@ export class FacadeBaker {
       this.renderer.getClearColor(this._clear);
       this._clearAlpha = this.renderer.getClearAlpha();
       this.hooks.before();
+      if (this.needsClear) {
+        this.needsClear = false;
+        this.atlas.scissorTest = false;
+        this.renderer.setRenderTarget(this.atlas);
+        this.renderer.setClearColor(0x000000, 0);
+        this.renderer.clear(true, true, false);
+      }
     };
     for (const i of this.order) {
       if (performance.now() - t0 > budgetMs || baked >= maxWalls) break;
@@ -449,7 +516,9 @@ export class FacadeBaker {
     this.atlas.scissorTest = true;
     this.renderer.setRenderTarget(this.atlas);
     this.renderer.setClearColor(0x000000, 0);
-    this.renderer.clear(true, true, false);
+    // a refresh keeps the old photo under the new one: a tile evicted or mid-refinement
+    // would otherwise blank the wall for a few seconds and it flickered between photo and fill
+    this.renderer.clear(!j.done, true, false);
     this.renderer.render(this.scene, this.cam);
     this.scene.background = bg;
     if (tiles) tiles.visible = wasVisible;

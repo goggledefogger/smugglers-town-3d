@@ -7,7 +7,7 @@
  */
 import {
   BufferGeometry, BufferAttribute, Group, Mesh, ShaderMaterial, ShapeUtils, Vector2, DataTexture,
-  RGBAFormat, UnsignedByteType, DoubleSide, type Texture
+  RGBAFormat, UnsignedByteType, FrontSide, type Texture
 } from 'three';
 import type { Wall } from './FacadeBaker.ts';
 import { FACADE_GLSL } from './facadeShader.ts';
@@ -19,7 +19,12 @@ export interface Prism {
   /** world y of the wall bottom and the roof */
   readonly y0: number;
   readonly y1: number;
+  /** a building_part: its walls stand a hair outside its building's, which often traces the same outline */
+  readonly part?: boolean;
 }
+
+/** How far a part's walls stand outside the coincident building wall (m), so the two never z-fight. */
+const PART_OUT_M = 0.05;
 
 const VERT = `
 attribute vec2 aWallUV;
@@ -145,7 +150,7 @@ export class PrismMeshView {
         uFacade: { value: 0 },
         uMapSize: { value: 5600 }
       },
-      side: DoubleSide
+      side: FrontSide
     });
   }
 
@@ -189,7 +194,9 @@ export class PrismMeshView {
     // each wall's building seed cell, so every wall of one prism draws the same facade
     const seeds: number[] = [];
     for (const p of prisms) {
-      const w = prismWalls(p);
+      const w = p.part
+        ? prismWalls(p).map(x => ({ ...x, ax: x.ax + x.nx * PART_OUT_M, az: x.az + x.nz * PART_OUT_M, bx: x.bx + x.nx * PART_OUT_M, bz: x.bz + x.nz * PART_OUT_M }))
+        : prismWalls(p);
       let sx = 0, sz = 0, n = 0;
       for (let i = 0; i + 3 < p.ring.length; i += 2) { sx += p.ring[i]!; sz += p.ring[i + 1]!; n++; }
       const seedX = Math.floor(sx / Math.max(1, n) / 8), seedZ = Math.floor(sz / Math.max(1, n) / 8);
@@ -241,7 +248,12 @@ export class PrismMeshView {
         uv[o * 2] = u; uv[o * 2 + 1] = v;
       });
       const b = i * 4;
-      idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      // wound so the front face looks along the outward normal: back faces are culled, which is
+      // what hides a party wall inside its neighbour instead of z-fighting with it
+      // (a, b, c) = (a y0, b y0, b y1): front when (b - a) x up points the way the normal does
+      const ccw = (w.bx - w.ax) * -w.nz + (w.bz - w.az) * w.nx < 0;
+      if (ccw) idx.push(b, b + 1, b + 2, b, b + 2, b + 3);
+      else idx.push(b, b + 2, b + 1, b, b + 3, b + 2);
     });
     let o = nWallV;
     for (const r of roofs) {
@@ -251,7 +263,13 @@ export class PrismMeshView {
         nrm[o * 3 + 1] = 1;
         o++;
       }
-      for (const t of r.tris) idx.push(base + t);
+      // roof triangles face up whatever way the ring runs
+      for (let t = 0; t + 2 < r.tris.length; t += 3) {
+        const a = r.tris[t]! * 2, c1 = r.tris[t + 1]! * 2, c2 = r.tris[t + 2]! * 2;
+        const cross = (r.verts[c1]! - r.verts[a]!) * (r.verts[c2 + 1]! - r.verts[a + 1]!) - (r.verts[c1 + 1]! - r.verts[a + 1]!) * (r.verts[c2]! - r.verts[a]!);
+        if (cross < 0) idx.push(base + r.tris[t]!, base + r.tris[t + 1]!, base + r.tris[t + 2]!);
+        else idx.push(base + r.tris[t]!, base + r.tris[t + 2]!, base + r.tris[t + 1]!);
+      }
     }
     const geo = new BufferGeometry();
     geo.setAttribute('position', new BufferAttribute(pos, 3));

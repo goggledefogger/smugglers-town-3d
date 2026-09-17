@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { Vector3 } from 'three';
-import { faceReach, ShelfPacker, boxKey } from '../src/render/FacadeBaker.ts';
+import { faceReach, ShelfPacker, faceKey, BoxIndex } from '../src/render/FacadeBaker.ts';
 import type { BuildingCollider } from '../src/core/physics/VehicleBody.ts';
 
 const box = (x0: number, z0: number, x1: number, z1: number, h = 30): BuildingCollider =>
@@ -48,9 +48,28 @@ describe('ShelfPacker', () => {
   });
 });
 
-describe('boxKey', () => {
-  it('is stable for equal bounds and differs when a bound moves', () => {
-    expect(boxKey(box(0, 0, 20, 20))).toBe(boxKey(box(0, 0, 20, 20)));
-    expect(boxKey(box(0, 0, 20, 20))).not.toBe(boxKey(box(0, 0, 21, 20)));
+describe('BoxIndex', () => {
+  it('gives faceReach the same answer through the index as against every box', () => {
+    let seed = 7;
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+    const boxes: BuildingCollider[] = [];
+    for (let k = 0; k < 300; k++) {
+      const x = Math.floor(rnd() * 60) * 10 - 300, z = Math.floor(rnd() * 60) * 10 - 300;
+      boxes.push(box(x, z, x + 10 + Math.floor(rnd() * 3) * 10, z + 10 + Math.floor(rnd() * 3) * 10, 5 + rnd() * 60));
+    }
+    const index = new BoxIndex(boxes);
+    for (let i = 0; i < boxes.length; i++) {
+      const near = index.near(i, 51);
+      for (let f = 0; f < 4; f++) expect(faceReach(boxes, i, f as 0 | 1 | 2 | 3, near)).toEqual(faceReach(boxes, i, f as 0 | 1 | 2 | 3));
+    }
+  });
+});
+
+describe('faceKey', () => {
+  it('survives the ground moving under the box and a flush neighbour changing, not the wall plane moving', () => {
+    const anchored = { min: new Vector3(0, -1.4, 0), max: new Vector3(20, 30, 20) };
+    expect(faceKey(box(0, 0, 20, 20), 1, 0.3)).toBe(faceKey(anchored, 1, 0.8));
+    expect(faceKey(box(0, 0, 20, 20), 1, 0)).not.toBe(faceKey(box(0, 0, 21, 20), 1, 0));
+    expect(faceKey(box(0, 0, 20, 20), 0, 0)).not.toBe(faceKey(box(0, 0, 20, 20), 1, 0));
   });
 });
