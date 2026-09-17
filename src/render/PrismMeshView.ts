@@ -7,9 +7,10 @@
  */
 import {
   BufferGeometry, BufferAttribute, Group, Mesh, ShaderMaterial, ShapeUtils, Vector2, DataTexture,
-  RGBAFormat, UnsignedByteType, FrontSide, type Texture
+  RGBAFormat, UnsignedByteType, FrontSide, Vector3, type Texture
 } from 'three';
 import type { Wall } from './FacadeBaker.ts';
+import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import { FACADE_GLSL } from './facadeShader.ts';
 
 export interface Prism {
@@ -124,6 +125,19 @@ export function prismWalls(p: Prism): Wall[] {
     }
   });
   return out;
+}
+
+/**
+ * The prism walls as physics colliders: what the car hits in the footprint
+ * modes is the outline it sees, not the classifier's 10 m box around it.
+ */
+export function wallColliders(walls: readonly Wall[]): BuildingCollider[] {
+  return walls.map(w => ({
+    min: new Vector3(Math.min(w.ax, w.bx), w.y0, Math.min(w.az, w.bz)),
+    max: new Vector3(Math.max(w.ax, w.bx), w.y1, Math.max(w.az, w.bz)),
+    kind: 'building' as const,
+    wall: { ax: w.ax, az: w.az, bx: w.bx, bz: w.bz, nx: w.nx, nz: w.nz }
+  }));
 }
 
 export class PrismMeshView {

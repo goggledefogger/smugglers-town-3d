@@ -17,7 +17,7 @@ import { GameRenderer } from './render/Renderer.ts';
 import { TerrainMesh } from './render/TerrainMesh.ts';
 import { BuildingMeshView, anchorCollider } from './render/BuildingMeshView.ts';
 import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
-import { PrismMeshView, type Prism } from './render/PrismMeshView.ts';
+import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView.ts';
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
@@ -187,6 +187,10 @@ const facadeBaker = new FacadeBaker(renderer.renderer, renderer.scene, {
 });
 /** the colliders as last applied, so switching into Painted 3D can queue their faces */
 let lastColliders: readonly BuildingCollider[] = [];
+/** the tile boxes as last received, so a mode switch can re-apply them against the other physics shape */
+let lastTileBoxes: readonly BuildingCollider[] = [];
+/** the cars currently hit the footprint walls (the prism modes) rather than the boxes */
+let physicsOnWalls = false;
 let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
 if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;
 buildingMeshView.visible = false;
@@ -370,6 +374,8 @@ function setViewMode(mode: ViewMode): void {
   }
 
   renderer.setLightRig((hasTiles || PAINTS_WALLS.has(mode) || mode === 'vector-city') && world.terrainProvider.isReal ? 'photo' : 'arcade');
+  // what the car hits follows what it sees: the outline walls in a prism mode, the boxes elsewhere
+  if (isFootprint !== physicsOnWalls) applyTileColliders(lastTileBoxes);
   updateViewModeUi();
 }
 
@@ -518,17 +524,25 @@ function rebuildRibbons(): void {
 
 function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
+  lastTileBoxes = tileBoxes;
   const rawColliders = [...tileBoxes, ...propScatter.colliders];
   const sample = (x: number, z: number) => world.terrainProvider.heightfield.sample(x, z);
   const colliders = rawColliders.map(b => anchorCollider(b, sample));
   clutterFilter?.maskChanged();
   if (clutterFilter && tiles) clutterFilter.setSnapBoxes(colliders, tiles.activeGrid, tiles.roadMask);
-  game.setBuildingColliders(colliders);
+  const prismsRebuilt = SHOWS_PRISMS.has(viewMode) && rebuildPrisms();
+  physicsOnWalls = SHOWS_PRISMS.has(viewMode) && prismView.count > 0;
+  // a prism mode draws the exact outline, so the cars hit the outline (plus the props);
+  // the classifier's boxes stay behind it for the bots' routes and the blocked-ground checks
+  game.setBuildingColliders(
+    physicsOnWalls ? [...wallColliders(prismView.walls), ...colliders.slice(tileBoxes.length)] : colliders,
+    colliders
+  );
   buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
   if (PAINTS_BOXES.has(viewMode)) {
     facadeBaker.setColliders(colliders);
-  } else if (viewMode === 'footprint-3d' && rebuildPrisms()) {
+  } else if (viewMode === 'footprint-3d' && prismsRebuilt) {
     facadeBaker.setWalls(prismView.walls);
   }
   const satTex = terrainMesh.sourceTexture ?? terrainMesh.texture;

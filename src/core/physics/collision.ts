@@ -105,6 +105,39 @@ export function sphereVsAabb(
   return true;
 }
 
+/** A vertical wall in world space: the segment a→b in x/z with its outward normal. */
+export interface WallSegment {
+  readonly ax: number; readonly az: number; readonly bx: number; readonly bz: number;
+  readonly nx: number; readonly nz: number;
+}
+
+/**
+ * Sphere against a vertical wall standing between y0 and y1 (the footprint
+ * modes, where the walls are the building's real outline). The push is along
+ * the wall's outward normal, so a centre that has crossed the line is thrown
+ * back out rather than through. There is no roof: a car that gets over a
+ * wall drops inside and the nearest wall ejects it.
+ */
+export function sphereVsWall(
+  cx: number, cy: number, cz: number, r: number,
+  w: WallSegment, y0: number, y1: number, out: Contact
+): boolean {
+  if (cy + r <= y0 || cy - r >= y1) return false;
+  const dx = w.bx - w.ax, dz = w.bz - w.az;
+  const len2 = dx * dx + dz * dz;
+  let t = len2 > 1e-9 ? ((cx - w.ax) * dx + (cz - w.az) * dz) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  const ex = cx - (w.ax + t * dx), ez = cz - (w.az + t * dz);
+  if (ex * ex + ez * ez >= r * r) return false;
+  const s = ex * w.nx + ez * w.nz;
+  if (s >= r) return false;
+  out.nx = w.nx;
+  out.ny = 0;
+  out.nz = w.nz;
+  out.push = r - s;
+  return true;
+}
+
 const _a = new Vector3();
 const _b = new Vector3();
 

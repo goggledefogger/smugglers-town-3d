@@ -318,9 +318,14 @@ export class Game {
     return this.terrain;
   }
 
-  setBuildingColliders(c: BuildingCollider[]): void {
-    this.buildingColliders = c;
-    this.nav.rebuild(c);
+  /**
+   * `c` is what the cars hit. `coarse` is what the bots route around and what
+   * counts as blocked ground: the footprint modes hit thin outline walls, and
+   * a building's inside would read as open space to a planner given only those.
+   */
+  setBuildingColliders(c: BuildingCollider[], coarse: BuildingCollider[] = c): void {
+    this.buildingColliders = coarse;
+    this.nav.rebuild(coarse);
     this.fields.clear();
     // spatial hash: a downtown has thousands of boxes and 8 cars × 60 Hz
     // can't afford to test them all

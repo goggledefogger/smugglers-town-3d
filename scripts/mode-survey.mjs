@@ -27,7 +27,7 @@ page.on('console', m => {
 });
 
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
-await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
+await page.evaluate(k => { localStorage.setItem('gmap_key', k); localStorage.setItem('smugglers_audio_muted', 'true'); }, key);
 for (let attempt = 1; attempt <= 3; attempt++) {
   await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
   await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });

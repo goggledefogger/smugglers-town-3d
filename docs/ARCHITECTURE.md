@@ -501,6 +501,17 @@ may drive. Before Overture answers, the mode shows the boxes with the facade;
 the footprint load re-applies the mode. The cars keep the photo light rig so
 they composite into the satellite ground.
 
+In both prism modes the cars hit the outline they see: every prism wall is a
+`BuildingCollider` carrying a `wall` segment, resolved by `sphereVsWall`
+(push along the wall's outward normal, so a centre that crossed the line is
+thrown back out; no roof, a car that gets inside is ejected by the nearest
+wall). The classifier's boxes stay as the second argument of
+`Game.setBuildingColliders` for the bots' routes and the blocked-ground
+checks: a building's inside reads as open space to a planner given only
+thin walls. Without this the classifier's 10 m boxes stopped the car a lane
+short of a prism whose footprint a street tree had widened, and drove it
+through prisms the classifier had missed.
+
 The baker now bakes at most two walls a frame: its CPU budget could not see
 the GPU, and each bake draws every loaded tile once more, so a downtown frame
 that queued six walls read 50 ms with the CPU side under 4. Best 3D+ (per-cell

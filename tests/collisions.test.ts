@@ -3,7 +3,8 @@ import { Vector3, Quaternion } from 'three';
 import { VehicleBody, type BuildingCollider } from '../src/core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES } from '../src/core/physics/vehicleStats.ts';
 import { resolveVehicleCollisions } from '../src/core/physics/vehicleCollisions.ts';
-import { sphereVsAabb, compoundVsCompound, capsuleCollider, sphereCollider, segmentVsAabb, type Contact } from '../src/core/physics/collision.ts';
+import { sphereVsAabb, sphereVsWall, compoundVsCompound, capsuleCollider, sphereCollider, segmentVsAabb, type Contact } from '../src/core/physics/collision.ts';
+import { wallColliders } from '../src/render/PrismMeshView.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 import type { VehicleInput } from '../src/core/physics/vehicleStats.ts';
 
@@ -119,6 +120,35 @@ describe('building AABB resolution', () => {
     v.pos.set(0, 1, -10 + SUV_R + half - 0.3); // centre clear, nose overlapping
     v.step(1 / 60, NO_INPUT, FLAT, [wall]);
     expect(v.pos.z).toBeGreaterThan(-10 + SUV_R + half - 0.05);
+  });
+});
+
+describe('footprint wall resolution', () => {
+  // a diagonal wall from (0,0) to (20,-20) whose outside is the +x/+z side
+  const n = Math.SQRT1_2;
+  const wall = { ax: 0, az: 0, bx: 20, bz: -20, nx: n, nz: n };
+  const hit: Contact = { nx: 0, ny: 0, nz: 0, push: 0 };
+
+  it('pushes out along the outward normal, from either side of the line, and ignores the far end and other floors', () => {
+    expect(sphereVsWall(11, 5, -9, 2, wall, 0, 30, hit)).toBe(true); // 1.41 m outside
+    expect(hit.nx).toBeCloseTo(n); expect(hit.push).toBeCloseTo(2 - 2 * n);
+    expect(sphereVsWall(9, 5, -11, 2, wall, 0, 30, hit)).toBe(true); // 1.41 m inside: thrown back out
+    expect(hit.push).toBeCloseTo(2 + 2 * n);
+    expect(sphereVsWall(15, 5, -5, 2, wall, 0, 30, hit)).toBe(false); // 7 m off the line
+    expect(sphereVsWall(11, 40, -9, 2, wall, 0, 30, hit)).toBe(false); // above the roof
+  });
+
+  it('a car driving at the outline stops at the outline, not at the box that used to stand around it', () => {
+    const [c] = wallColliders([{ ...wall, y0: 0, y1: 30 }]);
+    expect(c!.min.x).toBe(0); expect(c!.max.z).toBe(0);
+    // centre half a metre into the wall's reach, moving into it (sideways to its own nose, like a skid)
+    const s0 = SUV_R - 0.5;
+    const v = makeBody(2, 10 + s0 * n, -10 + s0 * n);
+    v.vel.set(-10, 0, 10);
+    v.step(1 / 60, NO_INPUT, FLAT, [c!]);
+    const s = (v.pos.x + v.pos.z) * n; // signed distance of the centre to the wall line
+    expect(s).toBeGreaterThanOrEqual(SUV_R - 0.05); // pushed back out to the wall, not through it
+    expect(v.vel.x * n + v.vel.z * n).toBeGreaterThan(0); // and bounced off it
   });
 });
 

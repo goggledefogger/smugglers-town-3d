@@ -14,7 +14,7 @@ import { config } from '../../app/config.ts';
 import type { Heightfield } from '../heightfield.ts';
 import type { VehicleInput, VehicleStats } from './vehicleStats.ts';
 import type { Rng } from '../rng.ts';
-import { sphereVsAabb, type Contact, type CollisionLayer } from './collision.ts';
+import { sphereVsAabb, sphereVsWall, type Contact, type CollisionLayer, type WallSegment } from './collision.ts';
 
 /** A single collidable box in world space (a building, a prop). */
 export interface BuildingCollider {
@@ -22,6 +22,8 @@ export interface BuildingCollider {
   readonly max: Vector3;
   /** What it is; the resolver treats every kind the same for now. */
   readonly kind?: CollisionLayer;
+  /** A footprint wall: min/max is only its bounds (for the broad phase), the segment is what the car hits. */
+  readonly wall?: WallSegment;
 }
 
 /** Query an elevated drivable surface (e.g. 3D bridge deck) above the base heightfield. */
@@ -501,7 +503,10 @@ export class VehicleBody {
         // If the obstacle is completely below the driving surface under the vehicle,
         // it is beneath the wheels, not an obstacle blocking travel.
         if (b.max.y <= this.groundY - 0.2) continue;
-        if (!sphereVsAabb(c.x, c.y, c.z, s.r, b.min, b.max, hit)) continue;
+        const touching = b.wall
+          ? sphereVsWall(c.x, c.y, c.z, s.r, b.wall, b.min.y, b.max.y, hit)
+          : sphereVsAabb(c.x, c.y, c.z, s.r, b.min, b.max, hit);
+        if (!touching) continue;
         const push = hit.push + 0.05;
         this.pos.x += hit.nx * push;
         this.pos.y += hit.ny * push;

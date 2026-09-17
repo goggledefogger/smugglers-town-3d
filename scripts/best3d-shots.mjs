@@ -28,7 +28,7 @@ page.on('console', m => {
 });
 
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
-await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
+await page.evaluate(k => { localStorage.setItem('gmap_key', k); localStorage.setItem('smugglers_audio_muted', 'true'); }, key);
 // Overpass times out now and then and the app asks once per load: reload until the road mask lands
 for (let attempt = 1; attempt <= 3; attempt++) {
   await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
