@@ -48,14 +48,21 @@ export class AudioManager {
   }
 
   private loadSettings(): void {
-    if (typeof localStorage === 'undefined') return;
     try {
-      const savedMuted = localStorage.getItem(STORAGE_MUTED_KEY);
-      if (savedMuted !== null) this.isMuted = savedMuted === 'true';
-      const savedVol = localStorage.getItem(STORAGE_VOLUME_KEY);
-      if (savedVol !== null) {
-        const parsed = parseFloat(savedVol);
-        if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) this.volume = parsed;
+      if (typeof window !== 'undefined') {
+        const params = new URLSearchParams(window.location.search);
+        if (params.get('muted') === 'true' || params.get('muted') === '1') {
+          this.isMuted = true;
+        }
+      }
+      if (typeof localStorage !== 'undefined') {
+        const savedMuted = localStorage.getItem(STORAGE_MUTED_KEY);
+        if (savedMuted !== null) this.isMuted = savedMuted === 'true';
+        const savedVol = localStorage.getItem(STORAGE_VOLUME_KEY);
+        if (savedVol !== null) {
+          const parsed = parseFloat(savedVol);
+          if (!isNaN(parsed) && parsed >= 0 && parsed <= 1) this.volume = parsed;
+        }
       }
     } catch {}
   }

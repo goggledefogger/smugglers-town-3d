@@ -362,6 +362,9 @@ interface LoadedTile extends CollectedTile {
 }
 
 const _ecef = new Vector3();
+const _lookahead = new Vector3();
+const _dirEcef = new Vector3();
+const _toNode = new Vector3();
 
 /**
  * Owns the loaded tiles. `loadInitial` fills the field at DEFAULT_LOD; then
@@ -869,12 +872,22 @@ export class TileStreamer {
 
   /**
    * Call every frame with the player's world position. Picks at most one
-   * refinement every 250 ms and never runs two at once.
+   * refinement every refineIntervalMs and never runs two at once.
+   * Optional lookDirection and velocity prioritize tiles ahead along the player's trajectory.
    */
-  update(playerWorld: Vector3, nowMs: number): void {
+  update(playerWorld: Vector3, nowMs: number, lookDirection?: Vector3, velocity?: Vector3): void {
     if (this.inFlight || nowMs - this.lastPickMs < this.refineIntervalMs) return;
     this.lastPickMs = nowMs;
-    const p = _ecef.set(playerWorld.x, playerWorld.y - this.shiftY, playerWorld.z).applyMatrix4(this.worldToEcef);
+
+    // Velocity lookahead: offset focus position along vehicle trajectory (up to 120m)
+    const focusPos = _lookahead.copy(playerWorld);
+    if (velocity && velocity.lengthSq() > 1.0) {
+      const speed = velocity.length();
+      const lookDist = Math.min(120, speed * 2.0);
+      focusPos.addScaledVector(velocity, lookDist / speed);
+    }
+
+    const p = _ecef.set(focusPos.x, focusPos.y - this.shiftY, focusPos.z).applyMatrix4(this.worldToEcef);
 
     // under budget pressure the farthest tile goes, if it is beyond `beyondM`; it is parked, not forgotten
     const evictFarthest = (beyondM: number): boolean => {
@@ -921,26 +934,49 @@ export class TileStreamer {
       }
     }
 
-    const candidates: LoadedTile[] = [];
+    const dirEcef = lookDirection && lookDirection.lengthSq() > 0.01
+      ? _dirEcef.copy(lookDirection).normalize().transformDirection(this.worldToEcef).normalize()
+      : null;
+
+    interface ScoredCandidate {
+      tile: LoadedTile;
+      score: number;
+    }
+    const candidates: ScoredCandidate[] = [];
+
     for (const t of this.tiles) {
       if (t.done) continue;
       const d = nodeDistM(t.node, p);
       if ((t.node.geometricError ?? 0) > allowedErrorM(d, this.lod)) {
-        candidates.push(t);
+        let score = d;
+        if (dirEcef) {
+          const box = t.node.boundingVolume?.box;
+          if (box) {
+            const bx = box[0] ?? 0;
+            const by = box[1] ?? 0;
+            const bz = box[2] ?? 0;
+            _toNode.set(bx - p.x, by - p.y, bz - p.z).normalize();
+            const dot = _toNode.dot(dirEcef);
+            // Tiles in the forward view cone receive a priority score discount (up to 180m closer)
+            score = d - 180 * Math.max(0, dot);
+          }
+        }
+        candidates.push({ tile: t, score });
       }
     }
     if (candidates.length === 0) return;
-    candidates.sort((a, b) => nodeDistM(a.node, p) - nodeDistM(b.node, p));
+    // nearest first, with the forward view cone pulled ahead: the road the car is driving onto refines before the one behind it
+    candidates.sort((a, b) => a.score - b.score);
     // back under budget before refining (a swap adds up to eight children): detail near the
     // player always beats a tile twice as far away, so refinement never starves at the cap
-    const nearD = nodeDistM(candidates[0]!.node, p);
+    const nearD = nodeDistM(candidates[0]!.tile.node, p);
     while (this.tiles.length >= this.maxTiles) {
       if (evictFarthest(Math.max(EVICT_MIN_M, 2 * nearD))) continue;
       // nothing far enough to drop: coarsen the most over-detailed siblings back into their parent
       this.coarsenOne(p);
       return;
     }
-    const batch = candidates.slice(0, this.refineBatchSize);
+    const batch = candidates.slice(0, this.refineBatchSize).map(c => c.tile);
 
     this.inFlight = true;
     Promise.all(batch.map(tile => this.refine(tile).catch(e => {

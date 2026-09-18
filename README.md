@@ -35,7 +35,7 @@ the garage's **Controls** screen.
 | `W` `S` in the air | Pitch the nose down / up |
 | `R` | Reset your car nearby |
 | `C` | Camera: chase, wide, hood |
-| `V` | View mode: Real 3D tiles vs Game 3D colliders |
+| `V` / `G` | Cycle view modes (Map + Objects is the first stop after Real 3D) |
 | `1`–`5` | Change vehicle mid-match |
 
 Gamepad defaults are mapped from the original game's PS2 controller onto the
@@ -111,10 +111,46 @@ Truck between two towers if you try.
 | `npm run serve` | Build and serve through the Firebase emulator, as hosting will |
 | `npm run deploy` | Build and ship to Firebase Hosting |
 
+### View Modes
+
+Press `V` / `G` to cycle **Real 3D**, **Map + Objects**, **Baked Facades**, **Masked 3D Tiles**, **Best 3D**, **Projected (3D Tiles)**, **Projected (2D Maps)**, **Textured 3D**, **Textured (Planar)**, and **Arcade 3D**.
+
+**Map + Objects** is the recommended simple alternative to projection: satellite
+ground and unlit satellite roofs, with opaque, lit masonry walls and subtle
+world-fixed windows. It renders the existing collision boxes and bridge decks,
+so switching views does not change gameplay. Cars also pick up shadows sampled
+from the ground imagery. No offscreen tile render, facade baking, new imagery
+requests, or extra geometry are added.
+
+This deliberately trades photographic facades and landmark silhouettes for
+readability and camera-stable materials. Tiles still stream to extract collision
+geometry; this is not a download-cost optimization. Roofs use the base satellite
+image, not the sharper streamed ground patches. Without imagery, roofs retain
+their solid material. Existing modes and the Real 3D startup default are unchanged.
+
+Verify the mode with `node scripts/verify-map-objects.mjs` while the dev server is
+running. This exercises desktop/mobile input, render passes, geometry invariance,
+and actual roof/wall pixels. `MAP_OBJECTS_REAL=1` adds a live SF relocation using
+`MAP_OBJECTS_KEY`, `GOOGLE_MAPS_API_KEY`, or the local ignored `.sm-key.txt`.
+
+**Baked Facades** is experimental. It copies real photographic wall detail from
+the loaded 3D tiles into building-fixed atlas textures, so the imagery is stable
+under camera movement instead of projected from the driving camera. It fills a
+small bounded atlas (64 slots, 256px, no mipmaps) with clean unlit bake proxies
+and shows the result as alpha-tested overlays on the collision boxes, keeping a
+solid fallback where no matching wall was found.
+
+It is not yet a finished look. Downtown San Francisco verification found the
+atlas holds real facade pixels, but only 88 of 1,024,000 screen pixels changed at
+the reported street-level camera, because the fixed slab is too narrow for
+diagonal walls reconstructed as axis-aligned boxes and because the test camera
+sat inside collision geometry. Correspondence and overlay visibility still need
+work. See [`docs/baked-facades-spec.md`](docs/baked-facades-spec.md).
+
 ### Diagnostics & Collider Experiments
 
 When testing building and road collider generation in real-world locations (e.g. St. Johns Bridge area in Portland or Russian Hill in SF):
-- `V`: Switch between **Real 3D** (photorealistic tiles) and **Game 3D** (instanced physical collider boxes and ground mesh) to visually diagnose any discrepancies between visible roads and physical collisions.
+
 - `F9` or `E` (or HUD button): Cycle live collider experiment modes:
   - **Mode 0: Baseline (10m)** — Standard 10m grid without OSM corridor carving (reproduces false obstacles).
   - **Mode 1: Road-Carve (OSM)** — Reactive Overpass road carving with reach padding (opens street corridors).

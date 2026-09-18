@@ -651,5 +651,121 @@ describe('one shared ground', () => {
     // Underneath the bridge, no false building colliders should block the roadway
     expect(colliders).toHaveLength(0);
   });
+
+  it('prunes isolated 1-cell low-rise clutter but preserves tall towers and multi-cell footprints', () => {
+    const top = flat(0), low = flat(0);
+    // 1. Isolated 1-cell low-rise bump (4.5m tall at col 10, row 10)
+    top[10 * N + 10] = 4.5;
+    low[10 * N + 10] = 0;
+
+    // 2. Isolated 1-cell tower (15 m at col 20, row 20): above the clutter cut, below the
+    //    20 m at which a lone cell with no deck beside it is a phantom facade sliver
+    top[20 * N + 20] = 15.0;
+    low[20 * N + 20] = 0;
+
+    // 3. Multi-cell low-rise structure (4.5m tall at cols 30..31, row 30)
+    top[30 * N + 30] = 4.5;
+    low[30 * N + 30] = 0;
+    top[30 * N + 31] = 4.5;
+    low[30 * N + 31] = 0;
+
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+
+    // The isolated 4.5m bump must be pruned
+    const hasLowBump = colliders.some(b => b.max.y < 8.0 && b.max.x <= -grid.half + 11 * grid.cell && b.min.x >= -grid.half + 9 * grid.cell);
+    expect(hasLowBump).toBe(false);
+
+    // The tall tower must be preserved
+    const hasTower = colliders.some(b => b.max.y >= 12.0);
+    expect(hasTower).toBe(true);
+
+    // The multi-cell low-rise structure must be preserved
+    const hasMultiCell = colliders.some(b => b.max.y >= 4.0 && b.max.x > 16.0);
+    expect(hasMultiCell).toBe(true);
+  });
+
+  it('prunes isolated single-cell deck noise without neighbors from outDeckGrid', () => {
+    const top = flat(0), low = flat(0);
+    // Isolated thin deck cell at column 10, row 10
+    top[10 * N + 10] = 15.0;
+    low[10 * N + 10] = 13.5;
+
+    const terrain = flat(0);
+    const deckGrid = new Float32Array(N * N);
+    collidersFromRasters([raster(top, low)], grid, terrain, 1, deckGrid);
+
+    // Isolated deck cell must not survive into deckGrid
+    expect(deckGrid[10 * N + 10]).toBe(NO_DATA);
+  });
+
+  it('detects waterfront vessels and piers moored against high riverbanks/seawalls', () => {
+    const top = flat(0), low = flat(0), terrain = flat(0);
+    // High riverbank / quay wall at columns 10..14, height 10m
+    for (let j = 10; j <= 25; j++) {
+      for (let i = 10; i <= 14; i++) {
+        top[j * N + i] = 10;
+        low[j * N + i] = 10;
+        terrain[j * N + i] = 10;
+      }
+    }
+    // Moored vessel in the river at columns 15..17, rows 14..20
+    // (hull rests in water at low = 0, deck/cabin is at top = 10.5m)
+    for (let j = 14; j <= 20; j++) {
+      for (let i = 15; i <= 17; i++) {
+        top[j * N + i] = 10.5;
+        low[j * N + i] = 0;
+      }
+    }
+
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+    // Find colliders in the boat's footprint (columns 15..17, rows 14..20)
+    const boatBoxes = colliders.filter(b => {
+      const cx = (b.min.x + b.max.x) / 2;
+      const cz = (b.min.z + b.max.z) / 2;
+      const ci = Math.floor((cx + grid.half) / grid.cell);
+      const cj = Math.floor((cz + grid.half) / grid.cell);
+      return ci >= 15 && ci <= 17 && cj >= 14 && cj <= 20;
+    });
+
+    expect(boatBoxes.length).toBeGreaterThan(0);
+    // Spans the full length of the boat in Z across rows 14..20 (7 cells * 1.5m/cell - insets ≈ 8.5m)
+    const minZ = Math.min(...boatBoxes.map(b => b.min.z));
+    const maxZ = Math.max(...boatBoxes.map(b => b.max.z));
+    expect(maxZ - minZ).toBeGreaterThanOrEqual(8.0);
+    // Accurate height matching the vessel deck
+    const maxTop = Math.max(...boatBoxes.map(b => b.max.y));
+    expect(maxTop).toBeCloseTo(10.5, 1);
+  });
+
+  it('splits distinct architectural height tiers (e.g. 30m tower and 10m podium/boat) into separate boxes', () => {
+    const top = flat(0), low = flat(0);
+    // High-rise tower at columns 10..14, rows 15..17 (height 30m)
+    for (let j = 15; j <= 17; j++) {
+      for (let i = 10; i <= 14; i++) {
+        top[j * N + i] = 30;
+        low[j * N + i] = 0;
+      }
+    }
+    // Attached low-rise podium/deck at columns 15..17, rows 15..17 (height 10m)
+    for (let j = 15; j <= 17; j++) {
+      for (let i = 15; i <= 17; i++) {
+        top[j * N + i] = 10;
+        low[j * N + i] = 0;
+      }
+    }
+
+    const terrain = flat(0);
+    const colliders = collidersFromRasters([raster(top, low)], grid, terrain, 1);
+
+    // Should generate separate boxes for the tower and podium
+    const towerBox = colliders.find(b => b.max.y > 25);
+    const podiumBox = colliders.find(b => b.max.y <= 12 && b.max.y >= 9);
+
+    expect(towerBox).toBeDefined();
+    expect(podiumBox).toBeDefined();
+    expect(towerBox!.max.y).toBeCloseTo(30, 1);
+    expect(podiumBox!.max.y).toBeCloseTo(10, 1);
+  });
 });
 
