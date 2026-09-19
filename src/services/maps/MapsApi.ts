@@ -169,7 +169,7 @@ export function worldPixelToLatLon(x: number, y: number, zoom: number): { lat: n
  * scale 1 (zoom 15 downtown is about 3.8 m per pixel), so a highway is drawn
  * about 19 m wide, an arterial 11 m, a local street 8 m.
  */
-export function roadsUrl(
+function roadsUrl(
   lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 1
 ): string {
   const styles = [
@@ -200,7 +200,7 @@ export function roadsUrl(
  * ground between them, so the outline is the only signal; a flood fill from
  * the roads (footprintsFromOutlines) turns it into a footprint mask.
  */
-export function buildingsUrl(
+function buildingsUrl(
   lat: number, lon: number, apiKey: string, zoom: number, width: number, height: number, scale = 1
 ): string {
   const styles = [
@@ -220,7 +220,7 @@ export function buildingsUrl(
 }
 
 /** A stitched grid of Static Maps tiles; `left`/`top` are the canvas origin in Web Mercator world pixels at `zoom`. */
-export interface StaticGrid {
+interface StaticGrid {
   readonly canvas: HTMLCanvasElement;
   readonly zoom: number;
   readonly scale: number;
@@ -234,7 +234,7 @@ export interface StaticGrid {
  * exactly 640 world pixels apart, so there is no gap and no overlap. 3x3 at
  * zoom 15 is about 7 km across downtown, covering the 5.6 km field.
  */
-export async function fetchStaticGrid(
+async function fetchStaticGrid(
   lat: number,
   lon: number,
   scale: number,

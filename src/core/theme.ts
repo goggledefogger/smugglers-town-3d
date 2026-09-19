@@ -6,7 +6,7 @@
  * aesthetic can be extended, tweaked, or themed cleanly in one place.
  */
 
-export interface ColorTheme {
+interface ColorTheme {
   readonly id: string;
   readonly name: string;
   readonly ui: {

@@ -23,7 +23,7 @@ export const GROUND_LEAN = 46;
 /** Inside this planar distance the beacon beam takes over: shrink and fade. */
 const NEAR_M = 40;
 
-export interface NavOrientation {
+interface NavOrientation {
   /** degrees, fixed: the ground plane the chevron lies on */
   readonly lean: number;
   /** degrees clockwise on screen; +90 means the target is to your right */

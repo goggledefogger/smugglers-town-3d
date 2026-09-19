@@ -18,7 +18,7 @@ import { KeyboardSource } from './KeyboardSource.ts';
 import { GamepadSource } from './GamepadSource.ts';
 import { normalizePadSnapshot } from './gamepadNormalization.ts';
 
-export type CapturedBinding = { device: DeviceKind; binding: Binding };
+type CapturedBinding = { device: DeviceKind; binding: Binding };
 
 export class InputManager {
   readonly bindings: Bindings;

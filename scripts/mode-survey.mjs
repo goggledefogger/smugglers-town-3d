@@ -2,6 +2,8 @@
 // headings plus an aerial, and a 3 s drive frame-time sample per mode.
 //
 //   E2E_URL=http://localhost:5173 MODES=photoreal,map-objects node scripts/mode-survey.mjs outdir
+// MODES takes the ViewMode ids from src/main.ts (photoreal, masked-tiles, best-3d,
+// painted-3d, painted-metro, footprint-3d, vector-city, game3d).
 // Needs the dev server and .sm-key.txt (or SM_KEY_FILE). Frame stats print to stdout;
 // survey every branch by pointing E2E_URL at each worktree's server.
 import { chromium } from 'playwright-core';
@@ -121,7 +123,7 @@ await page.waitForTimeout(300);
 for (const m of MODES) {
   await home();
   await mode(m);
-  if (m === 'painted-3d' || m === 'footprint-3d' || m === 'baked-facades') await page.waitForTimeout(12000);
+  if (m === 'painted-3d' || m === 'footprint-3d') await page.waitForTimeout(12000);
   await heading(landed.yaw); await shot(`${m}-front`);
   await heading(landed.yaw + Math.PI / 2); await shot(`${m}-side`);
 }

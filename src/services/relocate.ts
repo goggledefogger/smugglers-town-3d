@@ -17,7 +17,7 @@ import { GroundStreamer } from './maps/GroundStreamer.ts';
 import { config } from '../app/config.ts';
 import { parseGpsString, findScenarioByCoords } from '../core/geo/testScenarios.ts';
 
-export interface RelocateOptions {
+interface RelocateOptions {
   readonly query: string;
   readonly apiKey: string;
   /** Renderer max anisotropy for tile textures. */
@@ -29,7 +29,7 @@ export interface RelocateOptions {
   readonly onProgress: (message: string) => void;
 }
 
-export interface RelocateResult {
+interface RelocateResult {
   readonly terrain: TerrainProvider;
   /** Null when 3D tiles failed; the terrain still loaded. */
   readonly tiles: TileStreamer | null;

@@ -82,7 +82,7 @@ interface OverpassResponse {
   elements?: (OsmWay & { type: string })[];
 }
 
-export interface RoadMaskInput {
+interface RoadMaskInput {
   readonly lat: number;
   readonly lon: number;
   /** Half-extent of the square to cover, in real metres. */

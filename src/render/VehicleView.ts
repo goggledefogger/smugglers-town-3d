@@ -13,7 +13,7 @@ import {
 } from 'three';
 import type { VehicleActor } from '../app/Game.ts';
 import type { Heightfield } from '../core/heightfield.ts';
-import { buildVehicle, type VehicleMesh } from './vehicleMeshes.ts';
+import { buildVehicle, type VehicleMesh } from './vehicles/index.ts';
 
 export const TEAM_COLORS = [0x44ff66, 0xff5544] as const;
 const WHEELBASE = 2.6;

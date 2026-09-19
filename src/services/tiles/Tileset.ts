@@ -46,13 +46,12 @@ import {
   AmortizedGroundBuilder, TILE_GROUND_GAP, NO_DATA,
   type Grid, type TileRaster, type ColliderExperimentMode, thresholdsForMode
 } from './tileColliders.ts';
+import type { LodPolicy } from './lod.ts';
+export type { LodPolicy };
 import {
-  type Resolution3DMode, type Resolution3DProfile, RESOLUTION_3D_PROFILES, getResolutionProfile
+  type Resolution3DMode, getResolutionProfile
 } from './resolutionProfiles.ts';
-
-export {
-  type Resolution3DMode, type Resolution3DProfile, RESOLUTION_3D_PROFILES, getResolutionProfile
-};
+export type { Resolution3DMode };
 
 export interface TileNode {
   boundingVolume?: { box?: number[] };
@@ -63,16 +62,6 @@ export interface TileNode {
 
 interface TilesetRoot extends TileNode {
   root?: TileNode;
-}
-
-/** Level of detail: the geometricError accepted grows with distance from a center. */
-export interface LodPolicy {
-  /** Finest error accepted (m), used near the center. */
-  readonly minErrorM: number;
-  /** Coarsest error accepted (m), used toward the load radius. */
-  readonly maxErrorM: number;
-  /** Error allowed per meter of distance, between the two clamps. */
-  readonly errorPerMeter: number;
 }
 
 /**
@@ -102,8 +91,6 @@ const COARSEN_RATIO = 2;
 /** Tiles coarser than this never feed the classifier: their giant triangles read as decks and pits. */
 const RASTER_MAX_ERROR_M = 8;
 const CONCURRENCY = 6;
-/** Before play, tiles within visible range of the start are refined to the streaming LOD. */
-export const CORE_RADIUS_M = 500;
 /** ...in rounds of this many refinements. */
 const CORE_REFINE_BATCH = 6;
 const TILE_BASE = 'https://tile.googleapis.com';
@@ -177,7 +164,7 @@ function noteFailure(kind: string, data: unknown): void {
   log.debug(kind, data);
 }
 
-export async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
+async function fetchTilesRoot(apiKey: string): Promise<TilesetRoot> {
   const res = await fetchWithTimeout(TILE_BASE + '/v1/3dtiles/root', { headers: { 'X-Goog-Api-Key': apiKey } });
   if (!res.ok) throw new Error('3D tiles root HTTP ' + res.status);
   return res.json();
@@ -201,7 +188,7 @@ async function fetchSubTileset(url: string, apiKey: string): Promise<TilesetRoot
   }
 }
 
-export interface CollectedTile {
+interface CollectedTile {
   readonly node: TileNode;
   /** session of the tileset this node came from, forwarded to its content fetch */
   readonly session: string | null;
@@ -342,7 +329,7 @@ async function loadTileGlb(
 }
 
 /** Free the GPU resources of a tiles group that has been removed from the scene. */
-export function disposeTiles(group: Object3D): void {
+function disposeTiles(group: Object3D): void {
   group.traverse(obj => {
     const mesh = obj as Mesh;
     if (!mesh.isMesh) return;
@@ -1161,7 +1148,7 @@ export class TileStreamer {
   }
 }
 
-export interface LoadTilesOptions {
+interface LoadTilesOptions {
   readonly lat: number;
   readonly lon: number;
   readonly apiKey: string;

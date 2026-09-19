@@ -13,7 +13,7 @@ const log = logger('ground-streamer');
 /** Concurrent patch fetches. Each costs a Static Maps request and a ~10 ms decode plus upload on arrival. */
 const MAX_IN_FLIGHT = 3;
 
-export interface GroundStreamerOptions {
+interface GroundStreamerOptions {
   readonly apiKey: string;
   readonly center: { lat: number; lon: number };
   readonly heightfield: Heightfield;

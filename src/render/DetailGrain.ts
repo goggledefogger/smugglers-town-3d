@@ -13,11 +13,11 @@ import {
 } from 'three';
 
 /** World metres one repeat of the grain covers. */
-export const GRAIN_REPEAT_M = 6;
+const GRAIN_REPEAT_M = 6;
 /** Albedo modulation at the camera, ± this fraction. */
-export const GRAIN_STRENGTH = 0.28;
+const GRAIN_STRENGTH = 0.28;
 /** Fully on inside the first, gone past the second (metres from the camera). */
-export const GRAIN_FADE_M: readonly [number, number] = [25, 110];
+const GRAIN_FADE_M: readonly [number, number] = [25, 110];
 
 const GRAIN_PARS_VERTEX = `
 varying vec3 vGrainWorld;

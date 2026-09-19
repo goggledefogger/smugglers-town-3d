@@ -5,7 +5,7 @@
 import type { GameEventMap } from '../app/events.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 
-export type PeerId = string;
+type PeerId = string;
 
 /**
  * Bumped whenever the hello changes shape or meaning. A host and a client on
@@ -23,7 +23,7 @@ export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: num
 export interface BodySnap { id: number; p: [number, number, number]; q: [number, number, number, number]; v: [number, number, number]; d: number; g: 0 | 1 }
 
 /** One crate on the wire: id, position, and the body id carrying it. */
-export interface CrateSnap { i: number; p: [number, number, number]; c: number | null; d: 0 | 1 }
+interface CrateSnap { i: number; p: [number, number, number]; c: number | null; d: 0 | 1 }
 
 /** Host → all, ~20 Hz. */
 export interface SnapshotMsg {
@@ -64,7 +64,7 @@ export function decodeMatchMap(v: unknown): MatchMap | null {
 }
 
 /** owner null = bot */
-export interface RosterEntry { id: number; name: string; team: 0 | 1; vehicle: number; owner: PeerId | null }
+interface RosterEntry { id: number; name: string; team: 0 | 1; vehicle: number; owner: PeerId | null }
 
 /** Host → a joining client: everything needed to build the world. */
 export interface HelloMsg {
@@ -80,16 +80,16 @@ export interface HelloMsg {
 }
 
 /** Client → host on connect: which lobby seat this peer is, proven by the seat's token. */
-export interface JoinMsg { t: 'j'; uid: string; token: string }
+interface JoinMsg { t: 'j'; uid: string; token: string }
 
 /**
  * Client → host once its world is built and it can actually play. A city takes
  * tens of seconds to stream, so without this the host starts the clock while a
  * guest is still fetching tiles and that player arrives to a match in progress.
  */
-export interface ReadyMsg { t: 'r' }
+interface ReadyMsg { t: 'r' }
 
-export type NetMsg = InputMsg | SnapshotMsg | EventMsg | HelloMsg | JoinMsg | ReadyMsg;
+type NetMsg = InputMsg | SnapshotMsg | EventMsg | HelloMsg | JoinMsg | ReadyMsg;
 
 const r2 = (n: number): number => Math.round(n * 100) / 100;
 const r4 = (n: number): number => Math.round(n * 10000) / 10000;

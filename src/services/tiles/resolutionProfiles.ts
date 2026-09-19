@@ -1,4 +1,4 @@
-import type { LodPolicy } from './Tileset.ts';
+import type { LodPolicy } from './lod.ts';
 
 export type Resolution3DMode = 'balanced' | 'high' | 'ultra';
 
@@ -89,4 +89,30 @@ export const RESOLUTION_3D_PROFILES: Record<Resolution3DMode, Resolution3DProfil
 
 export function getResolutionProfile(mode: Resolution3DMode): Resolution3DProfile {
   return RESOLUTION_3D_PROFILES[mode] ?? RESOLUTION_3D_PROFILES.balanced;
+}
+
+const STORAGE_KEY = 'stt.res3d';
+
+/**
+ * High, not balanced: the Best 3D facades are the tiles themselves, and at
+ * balanced they blur to flat stone.
+ */
+export const DEFAULT_RESOLUTION_3D: Resolution3DMode = 'high';
+
+const isMode = (v: unknown): v is Resolution3DMode =>
+  typeof v === 'string' && (RESOLUTION_3D_MODES as readonly string[]).includes(v);
+
+/**
+ * The startup mode: an explicit `?res3d=` wins, then the saved choice, then the
+ * default. Both the app and the settings screen read it, so they cannot drift.
+ */
+export function loadResolution3D(urlParam: string | null): Resolution3DMode {
+  if (isMode(urlParam)) return urlParam;
+  if (typeof localStorage === 'undefined') return DEFAULT_RESOLUTION_3D;
+  const saved = localStorage.getItem(STORAGE_KEY);
+  return isMode(saved) ? saved : DEFAULT_RESOLUTION_3D;
+}
+
+export function saveResolution3D(mode: Resolution3DMode): void {
+  if (typeof localStorage !== 'undefined') localStorage.setItem(STORAGE_KEY, mode);
 }

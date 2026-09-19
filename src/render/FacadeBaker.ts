@@ -24,7 +24,7 @@ import {
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 
 /** Wall faces in the order the box shader's rect attributes use. */
-export type WallFace = 0 | 1 | 2 | 3; // -x, +x, -z, +z
+type WallFace = 0 | 1 | 2 | 3; // -x, +x, -z, +z
 export const ATLAS_SIZE = 4096;
 /** Furthest the wall camera stands into the street (m): half a wide avenue. */
 const MAX_OUT_M = 25;
@@ -49,7 +49,7 @@ const REFRESH_MS = 4000;
  */
 const MAX_WALLS_PER_FRAME = 2;
 
-export interface AtlasRect { x: number; y: number; w: number; h: number }
+interface AtlasRect { x: number; y: number; w: number; h: number }
 
 /** A vertical wall segment in world space with its outward normal. */
 export interface Wall {
@@ -103,7 +103,7 @@ export function wallKey(w: Wall): string {
 const BLOCK_COVER = 0.6;
 
 /** Where a face's photo starts (world y) and how far its camera stands out; out 0 = nothing exposed. */
-export interface FaceReach { out: number; bottom: number }
+interface FaceReach { out: number; bottom: number }
 
 /**
  * How far a wall face may look into the street before it would see the box
@@ -281,7 +281,7 @@ export class ShelfPacker {
   }
 }
 
-export interface BakerHooks {
+interface BakerHooks {
   /** the tiles root; hidden in the mode, made visible for each bake */
   readonly tiles: () => Object3D | null;
   /** turn the clutter filter and snap off for the photo, and back after */

@@ -6,7 +6,8 @@ import type { AudioManager } from '../../audio/AudioManager.ts';
 import type { GameEvents } from '../../app/events.ts';
 import { GAMEPAD_BUTTON_NAMES, GAMEPAD_AXIS_NAMES } from '../../input/gamepadNormalization.ts';
 import {
-  type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile
+  type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
+  loadResolution3D, saveResolution3D
 } from '../../services/tiles/resolutionProfiles.ts';
 
 /**
@@ -267,15 +268,12 @@ export class SettingsScreen extends LitElement {
   constructor() {
     super();
     this.listening = null;
-    const savedRes = typeof localStorage !== 'undefined' ? localStorage.getItem('stt.res3d') as Resolution3DMode | null : null;
-    this.resolutionMode = (savedRes && RESOLUTION_3D_MODES.includes(savedRes)) ? savedRes : 'balanced';
+    this.resolutionMode = loadResolution3D(null);
   }
 
   private handleResolutionChange(mode: Resolution3DMode): void {
     this.resolutionMode = mode;
-    if (typeof localStorage !== 'undefined') {
-      localStorage.setItem('stt.res3d', mode);
-    }
+    saveResolution3D(mode);
     this.requestUpdate();
     this.dispatchEvent(new CustomEvent('resolution-change', { detail: { mode }, bubbles: true, composed: true }));
   }

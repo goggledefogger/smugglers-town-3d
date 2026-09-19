@@ -11,7 +11,7 @@ import type { Vec2 } from '../world/OpenSpace.ts';
 
 export type TeamId = 0 | 1;
 
-export interface ScoringConfig {
+interface ScoringConfig {
   readonly scoreGoal: number;
   /** How many crates are in play at once; a fresh set lands when all are home. */
   readonly crateCount: number;
@@ -28,7 +28,7 @@ export const DEFAULT_SCORING: ScoringConfig = {
   transferCooldownS: 0.6
 };
 
-export type MatchEvent =
+type MatchEvent =
   | { type: 'pickup'; vehicle: VehicleBody }
   | { type: 'steal'; attacker: VehicleBody; victim: VehicleBody }
   | { type: 'deliver'; team: TeamId; carrier: VehicleBody }
@@ -208,9 +208,9 @@ export class MatchRules {
 }
 
 /** What a driver should do about the crates right now. */
-export type CrateGoal = 'collect' | 'chase' | 'escort' | 'deliver';
+type CrateGoal = 'collect' | 'chase' | 'escort' | 'deliver';
 
-export interface CrateChoice {
+interface CrateChoice {
   readonly goal: CrateGoal;
   /** The crate this is about, or null when heading home or waiting on a wave. */
   readonly crate: Crate | null;

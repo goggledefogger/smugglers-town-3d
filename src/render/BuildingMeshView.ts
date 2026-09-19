@@ -16,7 +16,7 @@ import { NO_DATA } from '../services/tiles/tileColliders.ts';
 import { BUILDING_COLORS } from '../core/theme.ts';
 import { FACADE_GLSL } from './facadeShader.ts';
 
-export type BuildingMeshMode = 'arcade' | 'textured';
+type BuildingMeshMode = 'arcade' | 'textured';
 
 const _mat = new Matrix4();
 const _pos = new Vector3();
@@ -199,7 +199,7 @@ const DECK_EDGE_CELLS = 2;
  * squares over every street. The physics keeps all of them; a slab the car
  * can never reach is only ever seen.
  */
-export function reachableDecks(
+function reachableDecks(
   deckGrid: Float32Array,
   grid: Grid,
   sampleGround?: (x: number, z: number) => number

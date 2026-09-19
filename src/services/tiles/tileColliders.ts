@@ -387,27 +387,38 @@ export function groundEstimate(top: Float32Array, n: number, k = GROUND_K): Floa
   return ground;
 }
 
+// Split rather than parameterised: the max/min branch sat in the innermost loop
+// over every cell of every raster, which is the hottest path in collider build
 /** Max over all tile rasters on the full grid; -Infinity where no tile has data. */
 function compositeTops(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
-  return composite(rasters, n, true);
-}
-
-/** Min over all tile rasters; +Infinity where no tile has data. */
-function compositeLows(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
-  return composite(rasters, n, false);
-}
-
-function composite(rasters: readonly (TileRaster | null)[], n: number, max: boolean): Float32Array {
-  const out = new Float32Array(n * n).fill(max ? -Infinity : Infinity);
+  const out = new Float32Array(n * n).fill(-Infinity);
   for (const r of rasters) {
     if (!r) continue;
-    const src = max ? r.top : r.low;
+    const src = r.top;
     for (let j = 0; j < r.h; j++) {
       const g = (r.j0 + j) * n + r.i0;
       const l = j * r.w;
       for (let i = 0; i < r.w; i++) {
         const v = src[l + i]!;
-        if (max ? v > out[g + i]! : v < out[g + i]!) out[g + i] = v;
+        if (v > out[g + i]!) out[g + i] = v;
+      }
+    }
+  }
+  return out;
+}
+
+/** Min over all tile rasters; +Infinity where no tile has data. */
+function compositeLows(rasters: readonly (TileRaster | null)[], n: number): Float32Array {
+  const out = new Float32Array(n * n).fill(Infinity);
+  for (const r of rasters) {
+    if (!r) continue;
+    const src = r.low;
+    for (let j = 0; j < r.h; j++) {
+      const g = (r.j0 + j) * n + r.i0;
+      const l = j * r.w;
+      for (let i = 0; i < r.w; i++) {
+        const v = src[l + i]!;
+        if (v < out[g + i]!) out[g + i] = v;
       }
     }
   }

@@ -12,7 +12,7 @@ import type { Rng } from '../rng.ts';
 
 type AiState = 'seek' | 'chase' | 'deliver' | 'escort';
 
-export interface DriverConfig {
+interface DriverConfig {
   readonly reevaluateS: number;
   readonly steerGain: number;
   readonly slowTurnAngle: number;

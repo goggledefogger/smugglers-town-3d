@@ -23,7 +23,7 @@ export function hillshade(dhdx: number, dhdz: number): number {
   return Math.max(0, Math.min(1, dot));
 }
 
-export interface RadarPoint {
+interface RadarPoint {
   readonly x: number;
   readonly y: number;
   /** The target is beyond the radar's range and is pinned to the rim. */

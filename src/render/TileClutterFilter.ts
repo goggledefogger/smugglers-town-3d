@@ -44,21 +44,21 @@ import { injectDetailGrain } from './DetailGrain.ts';
 
 export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept';
 /** Index order is baked into the shader's mode comparisons: append, never reorder. */
-export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden', 'swept'];
+const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden', 'swept'];
 
 /** Real metres above the ground estimate under which tile geometry is street clutter (a car is ~1.5 m). */
 export const CLUTTER_RISE_M = 2.5;
 /** Swept only: with no structure cell within bilinear reach, tall enough to take buses and RVs too. */
-export const CLUTTER_TALL_M = 6;
+const CLUTTER_TALL_M = 6;
 
 /** Facade snap: catch zone in front of a wall face, in grid cells; the walls are lenient on purpose. */
-export const SNAP_REACH_OUT_CELLS = 2.5;
+const SNAP_REACH_OUT_CELLS = 2.5;
 /** Facade snap: catch zone behind a wall face (inside the box), in grid cells. */
-export const SNAP_REACH_IN_CELLS = 1.5;
+const SNAP_REACH_IN_CELLS = 1.5;
 /** Facade snap: cell -> box map is dilated by this many cells so the catch zone can find its box. */
-export const SNAP_RING_CELLS = 2;
+const SNAP_RING_CELLS = 2;
 /** Facade snap: kerb-height geometry on a road cell (parked cars) only snaps from this close (m): a ground floor at its wall. */
-export const SNAP_LOW_ROAD_M = 2;
+const SNAP_LOW_ROAD_M = 2;
 /** Box bounds texture: this many boxes per row, two texels (min, max) each. */
 const BOXES_PER_ROW = 1024;
 

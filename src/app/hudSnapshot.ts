@@ -13,7 +13,7 @@ import { navTarget, OBJECTIVE_TEXT } from './navTarget.ts';
 import type { GamePhase, HudSnapshot } from './store.ts';
 import { WORLD_M_PER_M } from '../core/geo/ecef.ts';
 
-export interface HudInputs {
+interface HudInputs {
   readonly state: MatchState;
   readonly player: VehicleActor;
   readonly vehicles: readonly VehicleActor[];

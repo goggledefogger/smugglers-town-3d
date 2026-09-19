@@ -55,7 +55,7 @@ export interface RoundConfig {
   readonly finalMinuteS: number;
 }
 
-export interface GameDeps {
+interface GameDeps {
   readonly events: GameEvents;
   readonly store: Store<HudSnapshot>;
   /** Defaults to config.match; tests shorten it. */

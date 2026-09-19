@@ -25,7 +25,7 @@ export interface LogEntry {
 
 export type LogSink = (entry: LogEntry) => void;
 
-export interface Logger {
+interface Logger {
   debug(msg: string, data?: unknown): void;
   info(msg: string, data?: unknown): void;
   warn(msg: string, data?: unknown): void;

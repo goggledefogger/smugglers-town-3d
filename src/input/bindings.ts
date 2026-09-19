@@ -16,9 +16,9 @@ import type { LogicalAction } from './types.ts';
 export type DeviceKind = 'keyboard' | 'gamepad';
 
 /** One physical control bound to one logical action. */
-export interface KeyBinding { readonly kind: 'key'; readonly code: string }
-export interface ButtonBinding { readonly kind: 'button'; readonly index: number }
-export interface AxisBinding { readonly kind: 'axis'; readonly index: number; readonly sign: 1 | -1 }
+interface KeyBinding { readonly kind: 'key'; readonly code: string }
+interface ButtonBinding { readonly kind: 'button'; readonly index: number }
+interface AxisBinding { readonly kind: 'axis'; readonly index: number; readonly sign: 1 | -1 }
 
 export type Binding = KeyBinding | ButtonBinding | AxisBinding;
 
@@ -27,11 +27,11 @@ export type Binding = KeyBinding | ButtonBinding | AxisBinding;
 export type BindingTable = Record<LogicalAction, Binding[]>;
 
 /** Which `LogicalAction`s each binding feeds. */
-export const DRIVING_ACTIONS: readonly LogicalAction[] = [
+const DRIVING_ACTIONS: readonly LogicalAction[] = [
   'accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'
 ];
 export const HOTKEY_ACTIONS: readonly LogicalAction[] = ['camera', 'reset', 'viewMode', 'clutterMode'];
-export const UI_ACTIONS: readonly LogicalAction[] = [
+const UI_ACTIONS: readonly LogicalAction[] = [
   'uiUp', 'uiDown', 'uiLeft', 'uiRight', 'uiConfirm', 'uiBack', 'uiTab', 'uiPause'
 ];
 
@@ -101,7 +101,7 @@ const STORAGE_KEY = 'stt.bindings';
  */
 const SCHEMA_VERSION = 4;
 
-export interface SavedBindings {
+interface SavedBindings {
   readonly keyboard: BindingTable;
   readonly gamepad: BindingTable;
 }

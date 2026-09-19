@@ -39,4 +39,3 @@ export interface VehiclePalette {
 }
 
 export type VehicleModelBuilder = (b: VehicleMeshBuilder, p: VehiclePalette, r: number) => VehicleLayout;
-export type VehicleArchetype = 'Dune Buggy' | 'Rally Car' | 'SUV' | 'Trophy Truck' | 'Monster Truck';

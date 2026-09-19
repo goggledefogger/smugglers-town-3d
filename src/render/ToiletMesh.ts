@@ -13,7 +13,7 @@ import {
   CanvasTexture, DoubleSide, NormalBlending, AdditiveBlending,
   type Camera, type Material, type Object3D
 } from 'three';
-import { vehicleEnvMap } from './vehicleMeshes.ts';
+import { vehicleEnvMap } from './vehicles/index.ts';
 
 /** Generates a procedural radial soft-smoke alpha texture with turbulent density. */
 function createSmokeTexture(): CanvasTexture {

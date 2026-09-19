@@ -33,7 +33,7 @@ export interface RunningMatch {
   dispose(): void;
 }
 
-export interface OnlineDeps {
+interface OnlineDeps {
   readonly events: GameEvents;
   readonly store: Store<HudSnapshot>;
   readonly lobbyEl: LobbyScreen;

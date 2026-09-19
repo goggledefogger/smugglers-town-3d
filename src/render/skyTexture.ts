@@ -6,7 +6,7 @@
 import { CanvasTexture, EquirectangularReflectionMapping, SRGBColorSpace, Vector3 } from 'three';
 import { SKY_COLORS } from '../core/theme.ts';
 
-export const SKY_ZENITH = SKY_COLORS.zenith;
+const SKY_ZENITH = SKY_COLORS.zenith;
 export const SKY_HORIZON = SKY_COLORS.horizon;
 /** Hemisphere-light sky tint: between zenith and horizon. */
 export const SKY_MID_LIGHT = SKY_COLORS.midLight;

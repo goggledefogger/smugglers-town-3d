@@ -25,7 +25,7 @@ import {
   liveryRear,
   liveryTailgate,
   liveryHood
-} from '../src/render/vehicleMeshes.ts';
+} from '../src/render/vehicles/index.ts';
 
 describe('Modular Vehicles Architecture', () => {
   it('registers all five canonical vehicle archetypes', () => {

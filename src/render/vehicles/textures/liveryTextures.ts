@@ -56,7 +56,7 @@ function rng(seed: number): () => number {
 
 const NUMBERS = [7, 22, 11, 55, 88];
 
-export function raceNumber(stats: VehicleStats): number {
+function raceNumber(stats: VehicleStats): number {
   return NUMBERS[VEHICLE_TYPES.indexOf(stats)] ?? 1;
 }
 

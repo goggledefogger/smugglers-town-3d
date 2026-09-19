@@ -24,7 +24,7 @@ export interface SpawnPoint extends Vec2 {
   readonly yaw: number;
 }
 
-export interface SpawnConfig {
+interface SpawnConfig {
   readonly mapHalf: number;
   /** Radius of the active gameplay arena where bases and contraband spawn. */
   readonly arenaRadius?: number;

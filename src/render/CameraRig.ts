@@ -7,7 +7,7 @@ import { Vector3, PerspectiveCamera } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
 import type { Pose } from './VehicleView.ts';
 
-export type CameraMode = 0 | 1 | 2;
+type CameraMode = 0 | 1 | 2;
 
 /** The chase camera never comes closer than this fraction of its full distance... */
 const MIN_CHASE_FRAC = 0.3;

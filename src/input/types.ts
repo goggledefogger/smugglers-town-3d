@@ -44,13 +44,6 @@ export type LogicalAction =
   | 'uiUp' | 'uiDown' | 'uiLeft' | 'uiRight'
   | 'uiConfirm' | 'uiBack' | 'uiTab' | 'uiPause';
 
-/** Which actions produce continuous (held) values vs. one-shot edges. */
-export const EDGE_ACTIONS: ReadonlySet<LogicalAction> = new Set([
-  'camera', 'reset', 'viewMode',
-  'uiUp', 'uiDown', 'uiLeft', 'uiRight',
-  'uiConfirm', 'uiBack', 'uiTab', 'uiPause'
-]);
-
 /**
  * A source of input. The `InputManager` owns several and merges them.
  * `vehicleInput` returns the resting value when the source has nothing to

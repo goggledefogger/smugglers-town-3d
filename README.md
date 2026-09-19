@@ -35,7 +35,7 @@ the garage's **Controls** screen.
 | `W` `S` in the air | Pitch the nose down / up |
 | `R` | Reset your car nearby |
 | `C` | Camera: chase, wide, hood |
-| `V` / `G` | Cycle view modes (Map + Objects is the first stop after Real 3D) |
+| `V` / `G` | Cycle view modes (Masked 3D Tiles is the first stop after Real 3D) |
 | `1`–`5` | Change vehicle mid-match |
 
 Gamepad defaults are mapped from the original game's PS2 controller onto the
@@ -113,39 +113,34 @@ Truck between two towers if you try.
 
 ### View Modes
 
-Press `V` / `G` to cycle **Real 3D**, **Map + Objects**, **Baked Facades**, **Masked 3D Tiles**, **Best 3D**, **Projected (3D Tiles)**, **Projected (2D Maps)**, **Textured 3D**, **Textured (Planar)**, and **Arcade 3D**.
+Press `V` / `G` to cycle **Real 3D**, **Masked 3D Tiles**, **Best 3D**,
+**Painted 3D**, **Painted Metropolis**, **Footprint 3D**, **Vector City**, and
+**Arcade 3D** (`VIEW_MODE_CYCLE` in `src/main.ts` is the order).
 
-**Map + Objects** is the recommended simple alternative to projection: satellite
-ground and unlit satellite roofs, with opaque, lit masonry walls and subtle
-world-fixed windows. It renders the existing collision boxes and bridge decks,
-so switching views does not change gameplay. Cars also pick up shadows sampled
-from the ground imagery. No offscreen tile render, facade baking, new imagery
-requests, or extra geometry are added.
+**Real 3D** is the startup default: Google's photorealistic 3D tiles, shown
+cleanly with no collider geometry in front of them. **Masked 3D Tiles** is the
+same tiles with road and clutter pruning applied.
 
-This deliberately trades photographic facades and landmark silhouettes for
-readability and camera-stable materials. Tiles still stream to extract collision
-geometry; this is not a download-cost optimization. Roofs use the base satellite
-image, not the sharper streamed ground patches. Without imagery, roofs retain
-their solid material. Existing modes and the Real 3D startup default are unchanged.
+**Best 3D** moves tile vertices onto the nearest collider box face so the tiles
+themselves become the walls. It is kept for comparison; its failure modes
+(shards, walls buried in overlapping boxes, bare faces) are what **Painted 3D**
+was built to remove. Painted 3D copies real photographic wall detail from the
+loaded tiles into building-fixed atlas textures, so the imagery is stable under
+camera movement instead of projected from the driving camera. It fills a small
+bounded atlas (64 slots, 256px, no mipmaps) with clean unlit bake proxies and
+shows the result as alpha-tested overlays on the collision boxes, keeping a solid
+fallback where no matching wall was found.
 
-Verify the mode with `node scripts/verify-map-objects.mjs` while the dev server is
-running. This exercises desktop/mobile input, render passes, geometry invariance,
-and actual roof/wall pixels. `MAP_OBJECTS_REAL=1` adds a live SF relocation using
-`MAP_OBJECTS_KEY`, `GOOGLE_MAPS_API_KEY`, or the local ignored `.sm-key.txt`.
+**Painted Metropolis** is Painted 3D plus a procedural wall (three typologies by
+height, story and bay grid, lit rooms, storefront glass, plinth, parapet)
+wherever the bake saw nothing. **Footprint 3D** draws the Overture footprint
+prisms instead of the collision boxes, so shapes follow the real outlines.
+**Vector City** draws no Google tile at all: the prisms wear the Metropolis
+facade and the OSM road ways become asphalt ribbons draped over the heightfield,
+which makes it the honest QA view of where the car may drive. **Arcade 3D**
+renders the extracted physical geometry with a flat arcade palette.
 
-**Baked Facades** is experimental. It copies real photographic wall detail from
-the loaded 3D tiles into building-fixed atlas textures, so the imagery is stable
-under camera movement instead of projected from the driving camera. It fills a
-small bounded atlas (64 slots, 256px, no mipmaps) with clean unlit bake proxies
-and shows the result as alpha-tested overlays on the collision boxes, keeping a
-solid fallback where no matching wall was found.
-
-It is not yet a finished look. Downtown San Francisco verification found the
-atlas holds real facade pixels, but only 88 of 1,024,000 screen pixels changed at
-the reported street-level camera, because the fixed slab is too narrow for
-diagonal walls reconstructed as axis-aligned boxes and because the test camera
-sat inside collision geometry. Correspondence and overlay visibility still need
-work. See [`docs/baked-facades-spec.md`](docs/baked-facades-spec.md).
+See [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) for what each mode trades away.
 
 ### Diagnostics & Collider Experiments
 

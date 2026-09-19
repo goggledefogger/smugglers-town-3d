@@ -47,13 +47,6 @@ if (uCoverCell > 0.0) {
 }
 `;
 
-export interface TileFootprint {
-  readonly minX: number;
-  readonly maxX: number;
-  readonly minZ: number;
-  readonly maxZ: number;
-}
-
 /**
  * Procedural micro-surface sand and dune ripple texture for procedural terrain.
  * Multiplied over vertex colors to provide crisp, high-resolution physical sand & pebble

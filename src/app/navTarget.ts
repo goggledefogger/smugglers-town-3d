@@ -39,7 +39,7 @@ export const OBJECTIVE_TEXT = {
 
 export type ObjectiveText = (typeof OBJECTIVE_TEXT)[NavGoal];
 
-export interface NavTarget {
+interface NavTarget {
   readonly goal: NavGoal;
   /** Live position — a carrier's own, so the marker tracks a moving car. */
   readonly pos: Vector3;

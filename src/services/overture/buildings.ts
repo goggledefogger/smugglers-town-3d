@@ -13,7 +13,7 @@ import { llToWorld, worldToLl } from '../../core/geo/projection.ts';
 import { EARTH_RADIUS_M, type GeoOrigin } from '../../core/geo/ecef.ts';
 import { latLonToWorldPixel, type RoadRaster } from '../maps/MapsApi.ts';
 
-export const OVERTURE_BUILDINGS_URL =
+const OVERTURE_BUILDINGS_URL =
   'https://overturemaps-extras-us-west-2.s3.us-west-2.amazonaws.com/tiles/2026-08-19.0/buildings.pmtiles';
 const ZOOM = 14;
 /** Storeys to metres when Overture has floors but no height. */

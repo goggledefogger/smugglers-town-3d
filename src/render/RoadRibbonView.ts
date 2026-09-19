@@ -9,7 +9,7 @@ import {
   BufferGeometry, BufferAttribute, Group, Mesh, ShaderMaterial, DoubleSide
 } from 'three';
 
-export interface RoadPoint { east: number; north: number; widthM: number }
+interface RoadPoint { east: number; north: number; widthM: number }
 
 /** Longest ribbon segment (m) before it is split so the strip follows the hill. */
 const STEP_M = 6;

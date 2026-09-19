@@ -20,7 +20,7 @@
  * 4-axis layout so the rest of the game handles all controllers uniformly.
  */
 
-export interface PadButton {
+interface PadButton {
   readonly value: number;
   readonly pressed: boolean;
 }

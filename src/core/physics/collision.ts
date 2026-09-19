@@ -23,7 +23,7 @@ import { Vector3, type Quaternion } from 'three';
 export type CollisionLayer = 'building' | 'prop';
 
 /** A sphere in body space: +X right, +Y up, -Z forward. */
-export interface LocalSphere {
+interface LocalSphere {
   readonly x: number;
   readonly y: number;
   readonly z: number;

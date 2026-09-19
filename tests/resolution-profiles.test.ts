@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import {
-  getResolutionProfile
+  getResolutionProfile, loadResolution3D, saveResolution3D, DEFAULT_RESOLUTION_3D
 } from '../src/services/tiles/resolutionProfiles.ts';
 import {
   allowedErrorM,
@@ -208,3 +208,52 @@ describe('GameRenderer DPR Cap and Anisotropy', () => {
 });
 
 
+
+describe('resolution persistence', () => {
+  let origStorage: unknown;
+  let saved: Record<string, string>;
+
+  beforeEach(() => {
+    origStorage = (globalThis as any).localStorage;
+    saved = {};
+    (globalThis as any).localStorage = {
+      getItem: (k: string) => saved[k] ?? null,
+      setItem: (k: string, v: string) => { saved[k] = v; },
+      removeItem: (k: string) => { delete saved[k]; },
+      clear: () => { saved = {}; }
+    };
+  });
+
+  afterEach(() => {
+    (globalThis as any).localStorage = origStorage;
+  });
+
+  it('defaults to high when nothing is saved, the mode Best 3D needs', () => {
+    expect(loadResolution3D(null)).toBe(DEFAULT_RESOLUTION_3D);
+    expect(DEFAULT_RESOLUTION_3D).toBe('high');
+  });
+
+  it('lets an explicit url param beat the saved choice', () => {
+    saved['stt.res3d'] = 'ultra';
+    expect(loadResolution3D('balanced')).toBe('balanced');
+    expect(loadResolution3D('ultra')).toBe('ultra');
+  });
+
+  it('falls back to the default for a saved value that is not a mode', () => {
+    saved['stt.res3d'] = 'nonsense';
+    expect(loadResolution3D(null)).toBe(DEFAULT_RESOLUTION_3D);
+    expect(loadResolution3D('also-nonsense')).toBe(DEFAULT_RESOLUTION_3D);
+  });
+
+  it('round trips a saved mode, so the app and the settings screen agree', () => {
+    saveResolution3D('ultra');
+    expect(loadResolution3D(null)).toBe('ultra');
+    expect(saved['stt.res3d']).toBe('ultra');
+  });
+
+  it('returns the default when there is no localStorage at all', () => {
+    delete (globalThis as any).localStorage;
+    expect(loadResolution3D(null)).toBe(DEFAULT_RESOLUTION_3D);
+    expect(() => saveResolution3D('high')).not.toThrow();
+  });
+});

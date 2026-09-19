@@ -15,7 +15,7 @@ import { logger } from '../app/log.ts';
 
 const log = logger('render');
 
-export interface RendererDeps {
+interface RendererDeps {
   readonly canvas: HTMLCanvasElement;
   readonly onResize?: (w: number, h: number) => void;
 }
