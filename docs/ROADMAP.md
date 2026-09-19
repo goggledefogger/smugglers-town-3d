@@ -74,6 +74,17 @@ measured 25-60 ms. Left:
 - Cinematic camera sweep **(Done)**: A 6-second dynamic establishing shot swoops across
   the landscape with terrain and building obstacle avoidance, staged banners (`LOCATION`,
   `GET READY`, countdown 3-2-1, `GO!`), and instant skip via `Space`, `Enter`, click, or gamepad.
+- Stretched fill in Best 3D **(salvage, branch kept)**: PR #34 added a `best-3d-stretched`
+  style that dilates authentic tile colours outward along 8 rays (up to ~130 px) to fill the
+  transparency in irregular silhouettes. It was built as a screen-space branch inside the
+  old `BuildingMeshView` projection shader, which the city-modes merge removed, so all
+  seven APIs it patched (`uTilesMap`, `screenUV`, `uTextureStyle`, `uResolution`,
+  `setProjecting3dTiles`, `getTilesTexture`, `setTilesTexture`) now have zero references.
+  Best 3D is vertex-snapping (`clutterFilter.snap`) and has no alpha holes to fill, so the
+  loop wants porting as a texture style on the snap pipeline, not rebasing. Branch
+  `feat/best-3d-expand` holds it; its own test sets `visible = false` then asserts false,
+  and its ray loop cannot find a pixel whose alpha sits between the 0.04 outer gate and the
+  0.05 ray threshold.
 
 ## 5. Input and platforms
 
