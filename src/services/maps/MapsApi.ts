@@ -17,6 +17,9 @@ declare global {
 }
 
 let mapsApiPromise: Promise<void> | null = null;
+// Google fires gm_authFailure after the script's callback, so a bad key still
+// "loads" and every later service call just hangs; remember it to say so
+let keyRejected = false;
 
 /**
  * The key binds at script load and the API cannot be reloaded with a different
@@ -44,6 +47,7 @@ export function loadMapsApi(apiKey: string): Promise<void> {
     };
 
     window.gm_authFailure = () => {
+      keyRejected = true;
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -116,8 +120,9 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
     // Google's own reason (API not enabled, billing, key restriction)
     let timer: ReturnType<typeof setTimeout> | undefined;
     const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => reject(new Error(
-        `Elevation request timed out (chunk ${s / CHUNK}). Check Elevation API is enabled; the browser console has Google's reason.`
+      timer = setTimeout(() => reject(new Error(keyRejected
+        ? 'Google rejected this API key (InvalidKeyMapError). Paste a valid key and reload the page.'
+        : `Elevation request timed out (chunk ${s / CHUNK}). Check Elevation API is enabled; the browser console has Google's reason.`
       )), 8000);
     });
     const part = await Promise.race([
