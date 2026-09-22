@@ -112,21 +112,22 @@ export async function fetchElevationGrid(lat: number, lon: number): Promise<Elev
   const CHUNK = 500;
   for (let s = 0; s < all.length; s += CHUNK) {
     const chunk = all.slice(s, s + CHUNK);
-    const part = await new Promise<google.maps.ElevationResult[]>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        reject(new Error(`Elevation request timed out (chunk ${s / CHUNK}). Check Elevation API is enabled.`));
-      }, 8000);
-      try {
-        elevator.getElevationForLocations({ locations: chunk }, (res, status) => {
-          clearTimeout(timer);
-          if (status === 'OK' && res) resolve(res);
-          else reject(new Error(`Elevation failed: ${status} (chunk ${s / CHUNK})`));
-        });
-      } catch (err) {
-        clearTimeout(timer);
-        reject(err);
-      }
+    // the callback form only reports a bare status; the promise form rejects with
+    // Google's own reason (API not enabled, billing, key restriction)
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(
+        `Elevation request timed out (chunk ${s / CHUNK}). Check Elevation API is enabled; the browser console has Google's reason.`
+      )), 8000);
     });
+    const part = await Promise.race([
+      elevator.getElevationForLocations({ locations: chunk }).then(r => r.results),
+      timeout
+    ]).catch((err: unknown) => {
+      throw err instanceof Error && !err.message.startsWith('Elevation request timed out')
+        ? new Error(`Elevation failed (chunk ${s / CHUNK}): ${err.message}`)
+        : err;
+    }).finally(() => clearTimeout(timer));
     for (let k = 0; k < part.length; k++) samples[s + k] = part[k]!.elevation;
   }
   return { samples, gridN: N };
