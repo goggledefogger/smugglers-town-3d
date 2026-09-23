@@ -241,16 +241,16 @@ export class SmokingToilet {
    * bakes the number of visible point lights into every shader's cache key, so
    * hiding this group (two lights) forced every material in the scene, tiles
    * included, to compile a fresh program on its next draw: a 35 ms stall on
-   * each pickup and delivery. The lights stay visible at zero intensity.
+   * each pickup and delivery. The lights stay visible at zero intensity, and
+   * so does every parent of one: an invisible parent drops its lights too
    */
   setShown(on: boolean): void {
     if (on === this.shown) return;
     this.shown = on;
     const hide = (o: Object3D): void => {
       for (const c of o.children) {
-        if ((c as PointLight).isLight) continue;
-        c.visible = on;
-        hide(c);
+        if (c.getObjectByProperty('isLight', true)) hide(c);
+        else c.visible = on;
       }
     };
     hide(this.group);
