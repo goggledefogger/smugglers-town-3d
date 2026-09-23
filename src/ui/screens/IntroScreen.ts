@@ -6,7 +6,7 @@ import type { InputManager } from '../../input/InputManager.ts';
 /**
  * The garage: title, the roster to pick from, stats for the pick, and the
  * way into the game. The right half is see-through so the Showroom's 3D
- * preview of the selected vehicle shows behind it. Arrow keys or 1-5
+ * preview of the selected vehicle shows behind it. Arrow keys
  * select, Enter (or the button) starts. A gamepad navigates the same way:
  * dpad/stick moves the focus ring, A starts, B opens online.
  */
@@ -237,7 +237,7 @@ export class IntroScreen extends LitElement {
           ` : ''}
           <kbd>W</kbd>/<kbd>↑</kbd> accelerate · <kbd>S</kbd>/<kbd>↓</kbd> brake/reverse ·
           <kbd>A</kbd><kbd>D</kbd>/<kbd>←</kbd><kbd>→</kbd> steer · <kbd>Space</kbd> jump<br>
-          <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>↑</kbd><kbd>↓</kbd> or <kbd>1-5</kbd> pick · <kbd>Enter</kbd> start
+          <kbd>R</kbd> reset car · <kbd>C</kbd> camera · <kbd>↑</kbd><kbd>↓</kbd> pick · <kbd>Enter</kbd> start
         </div>
         <span class="actions">
           <button class="online" data-focusable @click=${() => this.onOnline?.(this.selected)}>PLAY ONLINE</button>

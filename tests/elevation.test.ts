@@ -13,14 +13,14 @@ describe('fetchElevationGrid geodesy and orientation', () => {
 
     // Mock Google Maps Elevation API
     const mockElevator = {
-      getElevationForLocations: vi.fn(({ locations }, cb) => {
+      getElevationForLocations: vi.fn(({ locations }) => {
         capturedLocations.push(...locations);
         const results = locations.map((loc: any) => ({
           elevation: 10,
           location: loc,
           resolution: 1
         }));
-        cb(results, 'OK');
+        return Promise.resolve({ results });
       })
     };
 
