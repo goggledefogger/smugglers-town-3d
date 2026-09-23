@@ -537,6 +537,13 @@ function rebuildRibbons(): void {
 }
 
 function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
+  const t0 = performance.now();
+  try { applyTileCollidersNow(tileBoxes); } finally {
+    const ms = performance.now() - t0;
+    if (ms >= SLOW_WORK_MS) perfLog.warn(`collider apply took ${Math.round(ms)} ms`, { boxes: tileBoxes.length });
+  }
+}
+function applyTileCollidersNow(tileBoxes: readonly BuildingCollider[]): void {
   colliderGeneration++;
   lastTileBoxes = tileBoxes;
   const rawColliders = [...tileBoxes, ...propScatter.colliders];
@@ -1237,6 +1244,35 @@ if (urlParams) {
   }
 }
 
+// ---- slow-frame log ----
+// A hitch names its cause: per-section ms for the frame, plus the game events
+// of the last second. `stt.dump()` or the lobby's copy link carries them
+const perfLog = logger('perf');
+const SLOW_WORK_MS = 50, SLOW_GAP_MS = 250;
+const laps: Record<string, number> = {};
+let lapAt = 0;
+function lap(name: string): void {
+  const t = performance.now();
+  laps[name] = (laps[name] ?? 0) + t - lapAt;
+  lapAt = t;
+}
+const recentEvents: { name: string; t: number }[] = [];
+for (const name of ['contraband:pickup', 'contraband:stolen', 'contraband:delivered', 'contraband:dropped',
+  'vehicle:wrecked', 'match:finalMinute', 'match:suddenDeath'] as const) {
+  events.on(name, () => recentEvents.push({ name, t: performance.now() }));
+}
+function reportSlowFrame(gapMs: number, now: number): void {
+  let work = 0;
+  for (const k in laps) work += laps[k]!;
+  while (recentEvents.length && now - recentEvents[0]!.t > 1000) recentEvents.shift();
+  if (work < SLOW_WORK_MS && gapMs < SLOW_GAP_MS) return;
+  const parts: Record<string, number> = {};
+  for (const k in laps) if (laps[k]! >= 2) parts[k] = Math.round(laps[k]!);
+  perfLog.warn(`slow frame: ${Math.round(work)} ms work, ${Math.round(gapMs)} ms since last`, {
+    parts, events: recentEvents.map(e => `${e.name} ${Math.round(now - e.t)}ms ago`)
+  });
+}
+
 // ---- frame loop ----
 let last = performance.now();
 let simTime = 0;
@@ -1251,6 +1287,8 @@ function frame(now: number): void {
     return;
   }
 
+  for (const k in laps) delete laps[k];
+  lapAt = performance.now();
   const dt = Math.min(rawDt, config.loop.maxFrameDt);
   if (rawDt <= 0.15) {
     renderer.adapt(rawDt, now);
@@ -1322,6 +1360,7 @@ function frame(now: number): void {
     if (online) online.tick(rawDt, drive);
     else game.update(dt, drive);
     simTime += dt;
+    lap('sim');
     const player = world.player?.body ?? null;
     if (tiles && player) {
       tiles.update(player.pos, now);
@@ -1334,6 +1373,7 @@ function frame(now: number): void {
         }
       }
     }
+    lap('tiles');
     // Step amortized ground refinement (bounded to 1.5ms per frame)
     if (groundBuilder && tiles) {
       const finished = groundBuilder.step(1.5);
@@ -1353,18 +1393,24 @@ function frame(now: number): void {
         groundBuilder = null;
       }
     }
+    lap('ground');
     if (groundStreamer && player) {
       groundStreamer.update(player.pos, now);
     }
+    lap('groundStream');
     for (const v of vehicleViews) v.sync(dt, world.alpha);
     // each carried crate rides its carrier's interpolated pose, not the body,
     // so it does not judder a frame behind the car it is strapped to
     pickups.sync(world.state, simTime, dt, body => vehicleViews.find(v => v.actor.body === body)?.pose ?? null);
+    lap('views');
     cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
+    lap('camera');
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);
+    lap('hud');
     audio.update(dt, world, drive, world.state, true);
+    lap('audio');
   } else {
     audio.update(dt, null, null, null, false);
     if (introEl.isConnected) {
@@ -1374,7 +1420,10 @@ function frame(now: number): void {
     }
   }
   if (traits(viewMode).paintsWalls) facadeBaker.update(renderer.camera.position, now);
+  lap('facades');
   renderer.render();
+  lap('render');
+  if (playing) reportSlowFrame(rawDt * 1000, performance.now());
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);

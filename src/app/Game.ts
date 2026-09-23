@@ -414,6 +414,7 @@ export class Game {
   update(frameDt: number, playerInput: VehicleInput | null): void {
     if (this.phase === 'gameover') return;
     const dt = Math.min(frameDt, config.loop.maxFrameDt);
+    this.nav.expandBudget = NAV_EXPAND_PER_FRAME;
     this.accumulator += dt;
     while (this.accumulator >= config.loop.step) {
       this.stepSim(config.loop.step, playerInput);
@@ -566,6 +567,13 @@ export class Game {
     }));
   }
 }
+
+/**
+ * Flow-field cells the bots may expand per frame (~2 ms). One field over the
+ * whole city is ~870k cells and a crate event asks for several at once, which
+ * froze the frame; metered, a far route finishes in a few frames instead
+ */
+const NAV_EXPAND_PER_FRAME = 60_000;
 
 const NEUTRAL_INPUT: VehicleInput = { throttle: 0, brake: 0, steer: 0, jump: false };
 

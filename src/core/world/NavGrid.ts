@@ -25,6 +25,14 @@ export class NavGrid implements OpenSpace {
   private blockedCount = 0;
   private clearanceCells: Uint16Array | null = null;
 
+  /**
+   * Cells the flow fields may still expand before the caller resets it. A
+   * field that runs out answers "drive straight" and picks up where it left
+   * off next time, so a burst of new targets costs a few frames of straight
+   * lines instead of one frozen frame. Unlimited unless the caller meters it
+   */
+  expandBudget = Infinity;
+
   constructor(size: number, readonly cell = 3) {
     this.n = Math.ceil(size / cell);
     this.half = size / 2;
@@ -253,7 +261,9 @@ export class FlowField {
     const n = this.grid.n;
     const dist = this.dist;
     const blocked = this.blocked;
-    while (this.head < this.tail && dist[c] === UNREACHED) {
+    const grid = this.grid;
+    while (this.head < this.tail && dist[c] === UNREACHED && grid.expandBudget > 0) {
+      grid.expandBudget--;
       const cur = this.queue[this.head++]!;
       const d = dist[cur]! + 1;
       const i = cur % n, j = (cur - i) / n;
