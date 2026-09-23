@@ -152,7 +152,10 @@ real ceiling), `steer` scales turn rate, `grip` sets how much lateral
 velocity survives each second (19 % at 0.7, 0.1 % at 1.0), `durability`
 divides damage, and `mass` decides rams. Damage from landings, walls
 and rams is divided by the vehicle's `durability`; at integrity 0 the body
-stays wrecked until `Game.wreck` drops its crate and respawns it. Physics
+stays wrecked until `Game.wreck` drops its crate and respawns it. A wall hit
+charges once per contact, not per box, sphere or substep (a city facade is
+many 10 m boxes): only the speed into it above a safe threshold counts, one
+hit takes at most half the bar, and nothing charges again for 0.5 s. Physics
 tuning enters through `app/config.physics` (plus the field size); the
 `DEFAULT_PHYSICS` in the module exists for tests.
 
@@ -206,12 +209,15 @@ any machine — the first prerequisite in `docs/MULTIPLAYER.md`.
 
 ### `core/ai/DriverBrain.ts` and `core/world/NavGrid.ts`
 Bots steer toward a waypoint supplied by a `RouteFn` when the game has one,
-else straight at the target. `NavGrid` is a 20 m occupancy grid rebuilt from
+else straight at the target. `NavGrid` is a 6 m occupancy grid rebuilt from
 the same colliders physics uses (cell centers within a car's half-width of a
 collider are blocked); a `FlowField` is a BFS distance map from a target
 over that grid, and the waypoint is the cell three steps down it. `Game`
 caches one field per target kind — bases never move, the contraband rarely,
 the carrier's refreshes when it moves more than four cells or every 0.5 s.
+A whole-city field is ~870k cells (~30 ms), and a crate event asks for
+several, so fields share a per-frame expansion budget (`expandBudget`): one
+that runs out answers "drive straight" and resumes next frame.
 A stuck detector (full throttle but crawling for 0.8 s while grounded) still
 triggers a 0.9 s reverse with a random steer as the fallback.
 

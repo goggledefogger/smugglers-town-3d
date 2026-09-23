@@ -133,7 +133,10 @@ log.info('tiles loaded', { tiles: 84, ms: 9100 });
 
 Scopes in use: `app`, `render`, `tiles`, `tile-cache`, `ground-streamer`,
 `osm-roads`, `relocate`, `input`, `online`, `lobby`, `firebase`, `rtc`,
-`host`, `client`. `core/` does not log; it returns.
+`host`, `client`, `perf`. `core/` does not log; it returns. `perf` is the
+slow-frame log (`app/frameProfiler.ts`): a frame over 50 ms of work, or 250 ms
+since the last, logs what each section of the loop cost and the game events of
+the last second.
 
 Levels earn their place by who reads them:
 
