@@ -22,16 +22,20 @@ Hosting; `https://smugglers-town-3d.web.app` is the same site. Link the custom
 domain.
 
 Players on different networks need a TURN relay, since a direct WebRTC link
-often cannot get through two home routers. The build reads it from
-`VITE_TURN_SERVERS` in `.env.local` (gitignored), a JSON `RTCIceServer[]`:
+often cannot get through two home routers. `turn/worker.js` is a Cloudflare
+Worker that hands the game short-lived Cloudflare Realtime TURN credentials
+(first 1,000 GB a month free); the game asks it before every connection and
+falls back to direct links if it is unset or down:
 
 ```bash
-VITE_TURN_SERVERS='[{"urls":"turn:relay.example.com:443?transport=tcp","username":"…","credential":"…"}]'
+cd turn
+npx wrangler secret put TURN_KEY_ID          # from Realtime > TURN in the dashboard
+npx wrangler secret put TURN_KEY_API_TOKEN
+npx wrangler deploy                           # prints the worker URL
 ```
 
-It ships inside the public bundle, so use a relay account whose credentials
-are meant for browsers. Without it, only players whose direct link works can
-join each other.
+The build reads that URL from `VITE_TURN_URL` in `.env`. The key never
+leaves the Worker; browsers only see credentials that expire in four hours.
 
 Caching is set in `firebase.json`: hashed files under `assets/` are immutable
 for a year, `index.html` is `no-cache`, so a deploy is live immediately.

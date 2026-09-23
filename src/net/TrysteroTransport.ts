@@ -8,30 +8,43 @@ const log = logger('rtc');
 /** Google's public STUN server; free, no account, enough for peers that aren't both behind symmetric NATs. */
 const STUN_URL = 'stun:stun.l.google.com:19302';
 /**
- * A TURN relay for players on different networks, where a direct link often
- * cannot get through both routers. JSON RTCIceServer[] from the build env
- * (.env.local, never committed); it ships in the bundle, so use a relay
- * account whose credentials are meant for browsers
+ * Where to get a TURN relay (turn/worker.js) for players on different
+ * networks, where a direct link often cannot get through both routers. Unset
+ * or unreachable, matches still connect directly wherever that works
  */
 // Vite statically replaces import.meta.env.VITE_* at build time.
 // Dynamic key access (import.meta.env[key]) does NOT work
-const TURN_SERVERS: RTCIceServer[] = JSON.parse(import.meta.env.VITE_TURN_SERVERS || '[]');
+const TURN_URL: string = import.meta.env.VITE_TURN_URL ?? '';
+
+async function relayServers(): Promise<RTCIceServer[]> {
+  if (!TURN_URL) return [];
+  try {
+    const res = await fetch(TURN_URL, { signal: AbortSignal.timeout(3000) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const body = await res.json() as { iceServers?: RTCIceServer[] };
+    return body.iceServers ?? [];
+  } catch (e) {
+    log.warn('no TURN relay, direct links only', e);
+    return [];
+  }
+}
 
 export async function connectTrystero(
   roomCode: string,
   firebaseApp: FirebaseApp,
   databaseURL: string
 ): Promise<Transport> {
+  const relays = await relayServers();
   const room = joinRoom(
     {
       appId: databaseURL,
       relayConfig: { firebaseApp, firebasePath: 'signal' },
-      rtcConfig: { iceServers: [{ urls: STUN_URL }, ...TURN_SERVERS] }
+      rtcConfig: { iceServers: [{ urls: STUN_URL }, ...relays] }
     },
     roomCode
   );
 
-  log.info('joined signalling room', { roomCode, selfId });
+  log.info('joined signalling room', { roomCode, selfId, relay: relays.length > 0 });
   const action = room.makeAction<string>('m');
 
   // trystero hands the room a single onMessage/onPeerJoin/onPeerLeave slot each;
