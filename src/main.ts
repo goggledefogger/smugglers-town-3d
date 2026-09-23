@@ -70,6 +70,12 @@ import { isTypingInField } from './ui/controls.ts';
 import { applyThemeToDocument } from './core/theme.ts';
 
 const log = logger('app');
+// an uncaught error otherwise reaches only the console, where a player's
+// "copy debug log" and the remote log never see it
+const errorData = (e: unknown): unknown =>
+  e instanceof Error ? { message: e.message, stack: e.stack?.split('\n').slice(0, 5).join(' | ') } : e;
+window.addEventListener('error', e => log.error('uncaught', errorData(e.error ?? e.message)));
+window.addEventListener('unhandledrejection', e => log.error('unhandled rejection', errorData(e.reason)));
 applyThemeToDocument();
 const app = document.getElementById('app')!;
 
@@ -1243,15 +1249,12 @@ if (urlParams) {
 let last = performance.now();
 let simTime = 0;
 
-function frame(now: number): void {
+function step(now: number): void {
   const rawDt = (now - last) / 1000;
   last = now;
 
   // When tab is hidden or backgrounded, skip simulation and avoid corrupting adaptive resolution
-  if (typeof document !== 'undefined' && document.hidden) {
-    requestAnimationFrame(frame);
-    return;
-  }
+  if (typeof document !== 'undefined' && document.hidden) return;
 
   profiler.begin();
   const dt = Math.min(rawDt, config.loop.maxFrameDt);
@@ -1384,6 +1387,21 @@ function frame(now: number): void {
   renderer.render();
   profiler.lap('render');
   profiler.end(rawDt * 1000);
+}
+/** Messages already logged, so a frame that throws every time logs once. */
+const frameErrors = new Set<string>();
+// one throwing frame must not end the loop: before this, a single error froze
+// the world for good while the HTML overlays kept running
+function frame(now: number): void {
+  try {
+    step(now);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (!frameErrors.has(msg)) {
+      frameErrors.add(msg);
+      log.error('frame failed', errorData(e));
+    }
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
