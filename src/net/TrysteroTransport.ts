@@ -16,6 +16,20 @@ const STUN_URL = 'stun:stun.l.google.com:19302';
 // Dynamic key access (import.meta.env[key]) does NOT work
 const TURN_URL: string = import.meta.env.VITE_TURN_URL ?? '';
 
+/** `?relay` on the URL: connect only through the relay, to test it on one network. */
+const RELAY_ONLY = typeof location !== 'undefined' && new URLSearchParams(location.search).has('relay');
+
+/** How a live link to a peer actually runs: through the relay, or directly. */
+async function linkKind(pc: RTCPeerConnection | undefined): Promise<string> {
+  if (!pc) return 'unknown';
+  const stats = await pc.getStats();
+  for (const s of stats.values()) {
+    if (s.type !== 'candidate-pair' || !s.nominated || s.state !== 'succeeded') continue;
+    return stats.get(s.localCandidateId)?.candidateType === 'relay' ? 'relay' : 'direct';
+  }
+  return 'unknown';
+}
+
 async function relayServers(): Promise<RTCIceServer[]> {
   if (!TURN_URL) return [];
   try {
@@ -39,12 +53,14 @@ export async function connectTrystero(
     {
       appId: databaseURL,
       relayConfig: { firebaseApp, firebasePath: 'signal' },
-      rtcConfig: { iceServers: [{ urls: STUN_URL }, ...relays] }
+      rtcConfig: { iceServers: [{ urls: STUN_URL }, ...relays], ...(RELAY_ONLY ? { iceTransportPolicy: 'relay' as const } : {}) }
     },
-    roomCode
+    roomCode,
+    // without this a link that never comes up fails silently on both sides
+    { onJoinError: e => log.warn('peer link failed', { peerId: e.peerId, error: e.error }) }
   );
 
-  log.info('joined signalling room', { roomCode, selfId, relay: relays.length > 0 });
+  log.info('joined signalling room', { roomCode, selfId, relay: relays.length > 0, relayOnly: RELAY_ONLY });
   const action = room.makeAction<string>('m');
 
   // trystero hands the room a single onMessage/onPeerJoin/onPeerLeave slot each;
@@ -57,7 +73,7 @@ export async function connectTrystero(
     for (const cb of messageCbs) cb(data, peerId);
   };
   room.onPeerJoin = (peerId) => {
-    log.info('peer joined', { peerId });
+    void linkKind(room.getPeers()[peerId]).then(via => log.info('peer joined', { peerId, via }));
     for (const cb of joinCbs) cb(peerId);
   };
   room.onPeerLeave = (peerId) => {
