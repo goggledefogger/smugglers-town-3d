@@ -314,7 +314,9 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     clutterFilter?.patch(g);
     renderer.warm(g);
     g.traverse(o => o.layers.set(1));
-    refreshColliders();
+    // no collider rebuild here: a city streams hundreds of tiles, and one per
+    // tile chained rebuilds back to back (40-360 ms each on the main thread).
+    // The frame loop picks up the dirty tiles, at most every 1.5 s
   };
   updateClutterUi();
   setViewMode(viewMode);
