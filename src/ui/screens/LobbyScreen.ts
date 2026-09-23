@@ -7,7 +7,13 @@ import type { UiAction } from '../../input/types.ts';
 const TEAM_NAME: Record<Team, string> = { 0: 'Your Crew', 1: 'Rivals' };
 
 /** Somewhere to start from, so the search box is never a blank stare. */
-const PRESETS = ['Portland, OR', 'San Francisco', 'Manhattan, NY', 'Tokyo', 'Dubai'] as const;
+// label shown on the chip, and the query geocoded when it is picked
+const PRESETS = [
+  ['Portland', 'Portland, OR'],
+  ['Mt. Everest', 'Mount Everest'],
+  ['Swiss Alps', 'Zermatt, Switzerland'],
+  ['Tokyo', 'Tokyo']
+] as const;
 
 export type CityMap = Extract<MatchMap, { kind: 'city' }>;
 
@@ -597,8 +603,8 @@ export class LobbyScreen extends LitElement {
           </button>
         </div>
         <div class="presets">
-          ${PRESETS.map(name => html`
-            <button class="chip" ?disabled=${this.checking} @click=${() => this.usePreset(name)}>${name}</button>
+          ${PRESETS.map(([label, query]) => html`
+            <button class="chip" ?disabled=${this.checking} @click=${() => this.usePreset(query)}>${label}</button>
           `)}
         </div>
         ${this.place ? html`
