@@ -12,7 +12,8 @@ const PRESETS = [
   ['Portland', 'Portland, OR'],
   ['Mt. Everest', 'Mount Everest'],
   ['Swiss Alps', 'Zermatt, Switzerland'],
-  ['Tokyo', 'Tokyo']
+  ['Tokyo', 'Tokyo'],
+  ['Grand Canyon', 'Grand Canyon Village, AZ']
 ] as const;
 
 export type CityMap = Extract<MatchMap, { kind: 'city' }>;
