@@ -80,6 +80,19 @@ const HARD_LANDING_V = 4;
 const SAFE_LANDING_V = 12;
 /** Above this the landing is a crash, not a landing, and the car tumbles. */
 const TUMBLE_V = 22;
+/**
+ * Crash damage, the way arcade racers meter it: one hit per contact rather
+ * than per collider sphere, per wall and per substep, which summed a scrape or
+ * a wedge between two walls into a wreck. A wall charges only the speed into
+ * it above SAFE_WALL_V, a single hit takes at most MAX_HIT_DAMAGE, and nothing
+ * charges again for HIT_COOLDOWN_S
+ */
+const SAFE_WALL_V = 8;
+const WALL_DAMAGE_PER_V = 0.012;
+const MAX_HIT_DAMAGE = 0.5;
+const HIT_COOLDOWN_S = 0.5;
+/** A contact normal this upright is a roof or ledge the car landed on, not a wall. */
+const FLOOR_NORMAL_Y = 0.7;
 /** Suspension: the ride height eases toward the ground at this rate (1/s)... */
 const RIDE_RATE = 15;
 /** ...within this much travel either side of it; beyond that it is clamped. */
@@ -134,6 +147,8 @@ export class VehicleBody {
    * landing should not cost integrity or flip anyone; set by the spawner.
    */
   graceS = 0;
+  /** Seconds until a crash can charge damage again; see HIT_COOLDOWN_S. */
+  private hitCooldownS = 0;
   /** Absolute lateral slip speed in m/s (side-skid), for tire screech audio and skid visuals. */
   lateralSlip = 0;
   /** Transient impact event from the latest physics step, consumed by audio/VFX. */
@@ -224,6 +239,7 @@ export class VehicleBody {
     // a held handbrake flares the tail lights too — it's the rear wheels locking
     this.brake = input.handbrake ? Math.max(input.brake, 0.7) : input.brake;
     if (this.graceS > 0) this.graceS = Math.max(0, this.graceS - dt);
+    if (this.hitCooldownS > 0) this.hitCooldownS = Math.max(0, this.hitCooldownS - dt);
 
     this.integrateAngular(dt);
     this.integratePosition(dt, ground, surfaceProvider);
@@ -448,7 +464,7 @@ export class VehicleBody {
       }
       this.lastImpact = { kind: 'landing', speed: impact };
       const excess = Math.max(0, impact - SAFE_LANDING_V);
-      this.damage = Math.min(1, this.damage + excess * 0.004 / this.stats.durability);
+      this.takeHit(excess * 0.004 / this.stats.durability);
       this.vel.y = impact * 0.18;
       // tumble on very hard landings — biased to pitch (forward flip)
       if (impact > TUMBLE_V) {
@@ -497,6 +513,7 @@ export class VehicleBody {
    */
   private resolveBuildings(buildings: readonly BuildingCollider[]): void {
     const hit = this._contact;
+    let worst = 0;
     for (const s of this.stats.collider.spheres) {
       const c = this._sphere.set(s.x, s.y, s.z).applyQuaternion(this.quat).add(this.pos);
       for (const b of buildings) {
@@ -523,12 +540,21 @@ export class VehicleBody {
         if (impact > 2.5) {
           this.lastImpact = { kind: 'building', speed: impact };
         }
-        if (impact > 6) {
-          this.damage = Math.min(1, this.damage + impact * 0.01 / this.stats.durability);
-          this.angVel.y += (this.rng() - 0.5) * impact * 0.04;
-        }
+        if (hit.ny < FLOOR_NORMAL_Y) worst = Math.max(worst, impact);
       }
     }
+    if (worst > SAFE_WALL_V && this.hitCooldownS === 0) {
+      this.takeHit((worst - SAFE_WALL_V) * WALL_DAMAGE_PER_V / this.stats.durability);
+      this.angVel.y += (this.rng() - 0.5) * worst * 0.04;
+    }
+  }
+
+  /** Charge one crash, capped, then hold off further charges briefly. */
+  private takeHit(amount: number): void {
+    // the respawn drop-in is free against buildings too, not only the ground
+    if (amount <= 0 || this.hitCooldownS > 0 || this.graceS > 0) return;
+    this.damage = Math.min(1, this.damage + Math.min(MAX_HIT_DAMAGE, amount));
+    this.hitCooldownS = HIT_COOLDOWN_S;
   }
 
 }

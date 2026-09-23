@@ -168,3 +168,28 @@ describe('segmentVsAabb', () => {
     expect(segmentVsAabb(new Vector3(15, 1, 0), new Vector3(40, 1, 0), min, max)).toBe(0);
   });
 });
+
+describe('crash damage', () => {
+  const box = (x0: number, x1: number): BuildingCollider => ({ min: new Vector3(x0, 0, -50), max: new Vector3(x1, 30, 50) });
+
+  it('an angled hit on a ragged city facade is one crash, not one per box', () => {
+    // the collider grid builds a facade from 10 m cells, each its own box, ragged heights
+    const facade: BuildingCollider[] = [];
+    for (let z = -60; z < 60; z += 10) facade.push({ min: new Vector3(5, 0, z), max: new Vector3(15, 8 + ((z / 10) % 3) * 5, z + 10) });
+    const v = makeBody(1, 0, 0.3); // Rally Car: this wrecked it outright
+    v.vel.set(17, 0, -30);
+    v.quat.setFromAxisAngle(new Vector3(0, 1, 0), -0.5);
+    for (let i = 0; i < 60; i++) v.step(1 / 60, { ...NO_INPUT, throttle: 1 }, FLAT, facade);
+    expect(v.damage).toBeGreaterThan(0.1);
+    expect(v.damage).toBeLessThan(0.5);
+  });
+
+  it('one flat-out crash hurts but cannot wreck a healthy car by itself', () => {
+    const v = makeBody(1, 0, 0); // Rally Car, the most fragile
+    v.vel.x = 80;
+    const wall = box(3, 20);
+    for (let i = 0; i < 30; i++) v.step(1 / 60, NO_INPUT, FLAT, [wall]);
+    expect(v.damage).toBeGreaterThan(0.3);
+    expect(v.damage).toBeLessThanOrEqual(0.5);
+  });
+});
