@@ -10,7 +10,7 @@
     "type": "git",
     "url": "https://github.com/goggledefogger/smugglers-town-3d.git"
   },
-  "homepage": "https://smugglers-town-3d.web.app",
+  "homepage": "https://st3d.roytown.net",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",

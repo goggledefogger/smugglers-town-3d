@@ -17,6 +17,10 @@ active login is a work account:
 firebase deploy --only hosting --account <personal-account>
 ```
 
+The site answers at https://st3d.roytown.net, a custom domain on Firebase
+Hosting; `https://smugglers-town-3d.web.app` is the same site. Link the custom
+domain.
+
 Caching is set in `firebase.json`: hashed files under `assets/` are immutable
 for a year, `index.html` is `no-cache`, so a deploy is live immediately.
 

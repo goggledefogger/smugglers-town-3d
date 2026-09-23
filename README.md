@@ -6,7 +6,7 @@ base, and ram anyone carrying one. First team to five deliveries wins.
 It starts on a desert with no setup. Add a Google Maps API key and play
 anywhere on Earth, with real terrain and buildings.
 
-**Play:** https://smugglers-town-3d.web.app
+**Play:** https://st3d.roytown.net
 
 ## Run it
 
