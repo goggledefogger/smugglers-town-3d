@@ -14,6 +14,7 @@ import type { GameEvents } from '../app/events.ts';
 import type { HudSnapshot, Store } from '../app/store.ts';
 import type { WorldView } from '../app/WorldView.ts';
 import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.ts';
+import type { SurfaceElevationFn } from '../core/physics/VehicleBody.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { LobbyScreen, CityMap } from '../ui/screens/LobbyScreen.ts';
 import { previewPlace } from '../services/relocate.ts';
@@ -42,6 +43,8 @@ interface OnlineDeps {
    * and building tiles; apiKey is null only for a desert.
    */
   makeTerrain(seed: number, map: MatchMap, apiKey: string | null): Promise<TerrainProvider>;
+  /** This player's elevated driving surfaces (bridges, ramps) once tiles are in; a guest stands cars on them. */
+  readonly surface?: SurfaceElevationFn;
   /** Host only: a fresh, seeded Game on this terrain with these seats, colliders set and the match reset. */
   makeHostGame(seed: number, terrain: TerrainProvider, seats: readonly Seat[]): Game;
   onMatch(match: RunningMatch, terrain: TerrainProvider): void;
@@ -341,7 +344,7 @@ export class OnlineFlow {
       transport.send(encode({ t: 'r' }));
       el.status = 'Waiting for the other players…';
       await waitFirstSnapshot(transport, START_WAIT_MS);
-      const client = new ClientSession(hello, lobby.selfId, transport, this.deps.events, this.deps.store, terrain);
+      const client = new ClientSession(hello, lobby.selfId, transport, this.deps.events, this.deps.store, terrain, this.deps.surface);
       this.finish(lobby, {
         world: client,
         seed: hello.seed,

@@ -135,6 +135,7 @@ export class HostSession {
   snapshot(): SnapshotMsg {
     const g = this.game!;
     const st = g.state;
+    const hf = g.terrainProvider.heightfield;
     return {
       t: 's',
       tick: g.tick,
@@ -144,7 +145,7 @@ export class HostSession {
       scores: [st.scores[0], st.scores[1]],
       crates: st.contraband.map(c => ({
         i: c.id,
-        p: [c.pos.x, c.pos.y, c.pos.z] as [number, number, number],
+        p: [c.pos.x, c.pos.y - hf.sample(c.pos.x, c.pos.z), c.pos.z] as [number, number, number],
         c: c.carrier?.id ?? null,
         d: c.delivered ? 1 as const : 0 as const
       })),
@@ -152,7 +153,7 @@ export class HostSession {
         const b = a.body;
         return {
           id: b.id,
-          p: [b.pos.x, b.pos.y, b.pos.z],
+          p: [b.pos.x, b.pos.y - b.groundY, b.pos.z],
           q: [b.quat.x, b.quat.y, b.quat.z, b.quat.w],
           v: [b.vel.x, b.vel.y, b.vel.z],
           d: b.damage,

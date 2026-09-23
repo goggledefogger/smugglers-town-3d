@@ -13,7 +13,7 @@ import type { HudSnapshot, Store } from '../app/store.ts';
 import { navMarkerFor } from '../app/navTarget.ts';
 import { buildHudSnapshot } from '../app/hudSnapshot.ts';
 import type { Crate, MatchState } from '../core/gameplay/MatchRules.ts';
-import { VehicleBody } from '../core/physics/VehicleBody.ts';
+import { VehicleBody, type SurfaceElevationFn } from '../core/physics/VehicleBody.ts';
 import { VEHICLE_TYPES, type VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { Transport } from './Transport.ts';
@@ -66,7 +66,9 @@ export class ClientSession implements WorldView {
     private readonly transport: Transport,
     private readonly events: GameEvents,
     private readonly store: Store<HudSnapshot>,
-    readonly terrainProvider: TerrainProvider
+    readonly terrainProvider: TerrainProvider,
+    /** This player's bridge decks and ramps, so a car the host has on one sits on ours. */
+    private readonly surface?: SurfaceElevationFn
   ) {
     for (const e of hello.roster) {
       const stats = VEHICLE_TYPES[e.vehicle] ?? VEHICLE_TYPES[2]!;
@@ -136,7 +138,7 @@ export class ClientSession implements WorldView {
       this.st.contraband = m.crates.map(c => {
         const existing = this.st.contraband.find(e => e.id === c.i);
         const pos = existing?.pos ?? new Vector3();
-        pos.set(c.p[0], c.p[1], c.p[2]);
+        pos.set(c.p[0], this.terrainProvider.heightfield.sample(c.p[0], c.p[2]) + c.p[1], c.p[2]);
         return {
           id: c.i,
           pos,
@@ -196,7 +198,10 @@ export class ClientSession implements WorldView {
       const dx = sb.p[0] - sa.p[0], dy = sb.p[1] - sa.p[1], dz = sb.p[2] - sa.p[2];
       const cut = dx * dx + dy * dy + dz * dz > TELEPORT_UNITS * TELEPORT_UNITS;
       const t = cut ? 1 : f;
-      body.pos.set(sa.p[0] + dx * t, sa.p[1] + dy * t, sa.p[2] + dz * t);
+      // p[1] is height above the host's ground: stand it on ours
+      const x = sa.p[0] + dx * t, z = sa.p[2] + dz * t;
+      body.groundY = this.groundAt(x, z, body.pos.y);
+      body.pos.set(x, body.groundY + sa.p[1] + dy * t, z);
       _qa.set(sa.q[0], sa.q[1], sa.q[2], sa.q[3]);
       _qb.set(sb.q[0], sb.q[1], sb.q[2], sb.q[3]);
       body.quat.slerpQuaternions(_qa, _qb, t);
@@ -204,11 +209,16 @@ export class ClientSession implements WorldView {
       body.speed = body.vel.length();
       body.damage = sb.d;
       body.onGround = sb.g === 1;
-      body.groundY = this.terrainProvider.heightfield.sample(body.pos.x, body.pos.z);
       body.snapPrev();
     }
   }
 
+
+  /** Our driving surface at (x, z); nearY picks the deck nearest where the car last was. */
+  private groundAt(x: number, z: number, nearY: number): number {
+    const gy = this.terrainProvider.heightfield.sample(x, z);
+    return this.surface?.(x, z, nearY, gy) ?? gy;
+  }
 
   navMarker(): { yaw: number; distance: number; target: Vector3 } | null {
     const player = this.player;

@@ -838,6 +838,7 @@ async function openOnline(type: number): Promise<void> {
       events,
       store,
       lobbyEl: document.querySelector('sr-lobby') as LobbyScreen,
+      surface: (x, z, cy, gy) => tiles ? tiles.surfaceElevation(x, z, cy, gy) : null,
       // owns the tile lifecycle: a match's world replaces whatever was loaded,
       // so nothing downstream clears tiles this just streamed
       makeTerrain: async (seed, map, apiKey) => {

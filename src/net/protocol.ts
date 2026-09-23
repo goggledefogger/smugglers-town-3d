@@ -15,14 +15,19 @@ type PeerId = string;
  * instead and drove around a different world for the whole match. Better to
  * refuse the match and say why.
  */
-export const PROTOCOL_VERSION = 3;
+export const PROTOCOL_VERSION = 4;
 
 /** Client → host, ~30 Hz. Latest seq wins. */
 export interface InputMsg { t: 'i'; seq: number; th: number; br: number; st: number; j: boolean; p: number; hb: boolean }
 
+/**
+ * p[1] is height above the host's driving surface, not world y: each player
+ * streams their own tiles and ground, so an absolute height floats or sinks a
+ * car on every screen but the host's. The guest adds its own ground back
+ */
 export interface BodySnap { id: number; p: [number, number, number]; q: [number, number, number, number]; v: [number, number, number]; d: number; g: 0 | 1 }
 
-/** One crate on the wire: id, position, and the body id carrying it. */
+/** One crate on the wire: id, position (p[1] above the host's ground, as for bodies), and the body id carrying it. */
 interface CrateSnap { i: number; p: [number, number, number]; c: number | null; d: 0 | 1 }
 
 /** Host → all, ~20 Hz. */

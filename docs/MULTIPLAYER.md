@@ -52,7 +52,8 @@ steer, jump, pitch, handbrake, plus a sequence number so the host ignores
 stale packets.
 
 **Snapshot** (host to all, 20 Hz, unreliable). Per body: position, orientation,
-velocity, damage, on-ground. Per match: phase, clock, scores, and every crate
+velocity, damage, on-ground. Position y is height above the host's ground,
+not world y; see "Every player's own ground" below. Per match: phase, clock, scores, and every crate
 (id, position, carrier, delivered). Measured: eight bodies and four crates is
 ~1090 bytes as JSON, so ~21 KB/s per
 client at 20 Hz and ~150 KB/s upstream from a host with seven guests, sent
@@ -161,6 +162,43 @@ host chooses:
 - **Off**: `keyShared` is false, and a joiner without a key of its own is
   shown a key field and cannot ready up until it has one — better than
   discovering the problem at the countdown.
+
+## Every player's own ground
+
+Each browser streams its own city, and since the 3D tiles started shaping the
+ground (bridge decks 2026-09-04, ground refined from tiles 2026-09-05) no two
+players have quite the same ground: tile detail follows each player's own car,
+the quality setting changes it, each side calibrates the tile datum from the
+tiles it happened to load, and the OSM road data that flattens road cells can
+fail on one side. Absolute heights from the host then float or sink cars on
+every screen but the host's, worst for a guest's own car, which the host
+simulates on its coarse far-away tiles.
+
+So since protocol 4 the host sends height above its driving surface
+(`pos.y - groundY`, and crates above its heightfield), and a guest adds its own
+surface back (`ClientSession.groundAt`: heightfield, then bridge decks). Same
+bytes on the wire, one lookup per car per frame, and the host stays
+authoritative for everything else. What it does not cover: walls and
+colliders still differ a little per player, so a car can touch a wall a hair
+early or late on a guest's screen.
+
+Alternatives, kept for if this is not enough:
+
+- **Same world for everyone.** Build the ground only from inputs every player
+  shares (the Google elevation grid), as city matches did before 2026-09-05,
+  and keep tile-derived ground and decks cosmetic in online play. Exact
+  agreement, at the cost of cars not riding bridges or tile-refined ground
+  online.
+- **Host sends the ground.** Ship the host's refined heightfield (560² cells,
+  a few hundred KB compressed) or per-body ground heights once. Guests match
+  the host exactly; costs a large one-off transfer and a slower start, and the
+  host's far tiles are coarse anyway.
+- **Pin the quality setting per room.** The host's resolution profile rides
+  the hello and every player uses it. Removes one source of difference, not
+  the streaming one.
+- **Guest-side prediction of its own car** (the version 2 item above) would
+  also run the guest's car on the guest's own ground, removing the worst case,
+  but it is the biggest change of the four.
 
 ## Prerequisites
 
