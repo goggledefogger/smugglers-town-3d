@@ -177,3 +177,9 @@ is why the tests need no browser.
 
 A ground-up rebuild of a 1,600-line single-file prototype into something
 modular and tested. The prototype is still around as a reference.
+
+## License
+
+[MIT](LICENSE) © 2026 Danny Bauman. The license covers this code only. Map
+imagery, elevation, and 3D tiles come from Google Maps Platform under your own
+API key and Google's terms, and are not part of this repository.

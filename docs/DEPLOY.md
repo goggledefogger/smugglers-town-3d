@@ -10,11 +10,11 @@ npm run serve      # build + hosting emulator on :5000
 ```
 
 Both use the account the Firebase CLI is logged in as. This project lives on
-the personal account, so add `--account dannybauman@gmail.com` if the CLI's
+the personal account, so add `--account <personal-account>` if the CLI's
 active login is a work account:
 
 ```bash
-firebase deploy --only hosting --account dannybauman@gmail.com
+firebase deploy --only hosting --account <personal-account>
 ```
 
 Caching is set in `firebase.json`: hashed files under `assets/` are immutable

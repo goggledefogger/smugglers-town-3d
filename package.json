@@ -4,6 +4,13 @@
   "version": "0.1.0",
   "type": "module",
   "description": "Smugglers Town 3D: World Tour — a 4v4 arcade vehicle combat game with real-world terrain",
+  "license": "MIT",
+  "author": "Danny Bauman",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/goggledefogger/smugglers-town-3d.git"
+  },
+  "homepage": "https://smugglers-town-3d.web.app",
   "scripts": {
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
