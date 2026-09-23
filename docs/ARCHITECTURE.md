@@ -36,11 +36,13 @@ Dependency rules (enforced by review, not tooling):
   `WorldView` on a client. `core/` never learns what a peer is, and the
   whole directory loads on first use (dynamic import), so single player
   never pays for Firebase.
+- `audio/` sits beside `render/`: `AudioManager` reads the same `WorldView`
+  each frame and depends on nothing else in the stack; nothing depends on it.
 
 ## Frame data flow
 
 ```
-InputManager ─► Game.update(dt) ─► VehicleBody.step ×8 ─► resolveVehicleCollisions
+InputManager ─► Game.update(dt) ─► VehicleBody.step ─► resolveVehicleCollisions
    (poll() every frame;                 │                        │
     vehicleInput() only                  │                        ▼
     while playing)                       │                  MatchRules (pickup/steal/deliver)
@@ -254,7 +256,9 @@ by `Game`.
 
 ### `core/ai/DriverBrain.ts`
 Per-bot state machine: `seek` (no carrier) / `chase` (enemy carries — with
-velocity prediction) / `deliver` (self or ally carries). Steering is
+velocity prediction and a cutoff toward the enemy base) / `escort` (a
+teammate carries: intercepts the nearest threat within 140 units, else
+shadows the carrier home) / `deliver` (self carries). Steering is
 angle-clamped with slow-down on sharp turns; occasional jumps for flavor.
 
 ### `core/geo/`
@@ -285,7 +289,7 @@ hands `main.ts` a `RunningMatch`. The host's `HostSession` owns a seeded
 `Game` whose seats are `local`, `bot`, or a remote uid; remote inputs arrive
 as the latest wins, snapshots leave at 20 Hz, gameplay events are forwarded
 as they fire. A `ClientSession` runs no simulation: it mirrors the host's
-bodies as puppets with the host's ids, interpolated four ticks behind the
+bodies as puppets with the host's ids, interpolated six ticks behind the
 newest snapshot, and implements `WorldView` so the renderer, HUD, camera and
 minimap do not know which they are drawing. The desert, the props and the
 spawn layout all derive from the match seed, so every machine builds the
@@ -343,8 +347,8 @@ are glTF Y-up with the ECEF placement baked into the node matrix, so
 
 `TileStreamer` owns the loaded tiles. After the initial load it keeps
 refining around the player: every 250 ms it picks the nearest tile that is
-too coarse for its distance (`STREAM_LOD`: 8 m tiles within 360 m, 16 m to
-640 m) and swaps it for its children, one swap at a time, up to a tile cap.
+too coarse for its distance (`STREAM_LOD`: 8 m tiles within 480 m, 16 m by
+960 m) and swaps it for its children, one swap at a time, up to a tile cap.
 Every coarse tile in the field is collected up front; only the nearest
 `MAX_INITIAL_TILES` load, the rest are *parked*. Each tick, parked tiles
 within `PARK_RELOAD_M` (600 m) of the player stream in nearest first, and
@@ -402,7 +406,8 @@ From this raster, two physical surfaces are extracted:
    The road network is taken from a Google Static Maps roadmap styled down to road
    fills (thresholded to a raster), with drivable OpenStreetMap centrelines from
    Overpass as the fallback, and rasterized
-   into a `roadMask` grid with reach-aware bounding box clearance (`halfWidth + cellSize * 0.85`).
+   into a `roadMask` grid with reach-aware bounding box clearance (`halfWidth + cellSize * 0.5`,
+   tunable per collider experiment mode).
    Road cells are exempt from building classification, and their driving ground height in
    `AmortizedGroundBuilder` is pinned directly to the true surface (`Math.min(top, low)`)
    rather than the sagging estimate. An asynchronous event (`onRoadsLoaded`) dynamically
@@ -570,7 +575,7 @@ patterns:
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
 | **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
-| **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.85 reach padding. |
+| **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.5 reach padding by default. |
 | **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 
 ## UI notes
@@ -632,10 +637,12 @@ physics origin sits `groundClearance` above the ground, so the mesh hangs a
 clearance below the body (it rode a metre in the air until the contact shadow
 gave that away), and the wheels reach down by however far the suspension is
 holding the body above its ride height, so the tyres stay planted without
-giving up the smoothing that keeps the camera calm. `render/vehicleMeshes.ts` builds one silhouette
-per roster type from primitives (buggy cage, rally spoiler, SUV rack, lifted
-pickups) with clearcoat paint in the team color, the type's accent on trim,
-headlights, and tail lights that flare while braking. Wheels sit in pivots
+giving up the smoothing that keeps the camera calm. `render/vehicles/` builds
+one silhouette per roster type from primitives (buggy cage, rally spoiler,
+SUV rack, lifted pickups) with clearcoat paint in the team color, the type's
+accent on trim, headlights, and tail lights that flare while braking; each
+model lives in its own file under `render/vehicles/models/`, built through
+the shared `VehicleMeshBuilder`. Wheels sit in pivots
 (the front pair steer with the input) and spin on their axle with forward
 speed; wheel radius scales with the type's mass. `render/Pickups.ts` pools a
 crate mesh per live crate — a fading light beacon each, hidden while carried,
@@ -704,6 +711,20 @@ What this cannot fix is the two photographs disagreeing: the satellite pass
 and the tile capture were flown on different days, so a street in a tower's
 shadow in one is sunlit in the other. Ground shade follows the satellite
 because that is what the car is standing on.
+
+## Audio (`audio/`)
+
+Everything is synthesized with the Web Audio API, no sample files: `EngineAudio`
+(dual harmonic oscillators and a multi-gear RPM curve driven by throttle,
+speed and airborne state), `TireAudio` (bandpass-filtered noise keyed to
+lateral slip and the handbrake), `ImpactAudio` (landing thuds, building
+crunches, vehicle rams), `StingerAudio` (pickup, steal, delivery, wreck,
+countdown, match end), `ProximityAudio` (a beacon that quickens as a carrier
+nears its base) and `HornAudio` (a two-tone horn). `AudioManager` owns the
+`AudioContext`, unlocks it on the first pointer/keyboard/touch input (browser
+autoplay policy), persists mute and volume to `localStorage`, and is driven
+once a frame from the same `WorldView` the renderer reads, alongside
+`VehicleView.sync()` and the rest.
 
 ## Performance
 

@@ -48,13 +48,15 @@ Cheating is a non-goal: a host can only cheat their own friends.
 Three message kinds, all defined in `src/net/protocol.ts`:
 
 **Input** (client to host, 30 Hz, unreliable, latest wins). Throttle, brake,
-steer, jump, pitch, plus a sequence number so the host ignores stale packets.
+steer, jump, pitch, handbrake, plus a sequence number so the host ignores
+stale packets.
 
 **Snapshot** (host to all, 20 Hz, unreliable). Per body: position, orientation,
 velocity, damage, on-ground. Per match: phase, clock, scores, and every crate
 (id, position, carrier, delivered). Measured: eight bodies and four crates is
 ~1090 bytes as JSON, so ~21 KB/s per
-client at 20 Hz and ~110 KB/s upstream from a host with seven guests.
+client at 20 Hz and ~150 KB/s upstream from a host with seven guests, sent
+once per peer connection since WebRTC has no relay to fan it out.
 Fine for a friends match on broadband; binary packets are the version 2
 item if a host's uplink turns out to be the bottleneck.
 
@@ -107,8 +109,9 @@ Security rules (all under `auth != null`; the deployed set is described in
 - `rooms/{code}/players/{uid}`: only that uid, and no new seat after start.
 - `tokens/{code}/{uid}`: the seat's secret; owner writes, owner and host read.
 - `signal/{code}`: any signed-in user, for the WebRTC handshake.
-- Everything else denied. A scheduled Cloud Function deletes rooms older
-  than two hours; it is the first backend code and can wait for version 2.
+- Everything else denied. Stale rooms are not cleaned up yet; a scheduled
+  Cloud Function to delete rooms older than two hours would be the first
+  backend code, and can wait for version 2.
 
 ## Host leaves
 
@@ -122,10 +125,12 @@ last snapshot it received.
 src/net/
   Transport.ts          send / receive / peers; one interface
   TrysteroTransport.ts  the only implementation for now
+  LoopbackTransport.ts  in-memory hub for tests, not used in production
   protocol.ts           Input, Snapshot, Event types and codecs
   HostSession.ts        owns the Game, applies remote inputs, broadcasts
   ClientSession.ts      sends inputs, buffers snapshots, drives the views
   lobby.ts              room create / join / presence in RTDB
+  OnlineFlow.ts         composition root: lobby screen -> room -> peer -> match
 src/services/firebase.ts  app init and anonymous sign-in
 ```
 

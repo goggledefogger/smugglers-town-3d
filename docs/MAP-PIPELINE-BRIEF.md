@@ -21,8 +21,8 @@ Photogrammetry is also noisy: parked cars appear as melted lumps fused to the ro
 kerbs are jagged, thin structures are non-manifold.
 
 Relevant files:
-- `src/services/tiles/Tileset.ts` — tree traversal, LOD, streaming (~730 lines)
-- `src/services/tiles/tileColliders.ts` — all the classification (~1200 lines)
+- `src/services/tiles/Tileset.ts` — tree traversal, LOD, streaming (~1180 lines)
+- `src/services/tiles/tileColliders.ts` — all the classification (~1440 lines)
 - `src/core/heightfield.ts` — the surface cars drive on
 - `src/core/world/NavGrid.ts` — bot pathfinding grid
 - `src/render/TileClutterFilter.ts` — visual-only clutter filtering

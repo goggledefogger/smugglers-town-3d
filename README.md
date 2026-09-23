@@ -36,7 +36,9 @@ the garage's **Controls** screen.
 | `R` | Reset your car nearby |
 | `C` | Camera: chase, wide, hood |
 | `V` / `G` | Cycle view modes (Masked 3D Tiles is the first stop after Real 3D) |
-| `1`–`5` | Change vehicle mid-match |
+| `H` | Horn |
+| `M` | Mute |
+| `P` | Pause: opens the Controls screen mid-match |
 
 Gamepad defaults are mapped from the original game's PS2 controller onto the
 same physical positions on a Stadia pad: **A** accelerates, **X** brakes,
@@ -44,7 +46,7 @@ same physical positions on a Stadia pad: **A** accelerates, **X** brakes,
 the camera, **Start** pauses. Left stick or D-pad steers, right stick pitches
 in the air.
 
-In the garage, `↑` `↓` or `1`–`5` browse the roster and `Enter` (or gamepad
+In the garage, `↑` `↓` browse the roster and `Enter` (or gamepad
 **A**) starts. At match start, a cinematic camera sweep introduces the landscape;
 press `Space`, `Enter`, click **SKIP**, or press gamepad **A** to immediately jump to the race. Typing in the search box never leaks into the game.
 
@@ -101,7 +103,7 @@ Truck between two towers if you try.
 | Script | What it does |
 |---|---|
 | `npm run dev` | Dev server with hot reload |
-| `npm test` | Test suite (451 tests, plain node) |
+| `npm test` | Test suite (514 tests, plain node) |
 | `npm run test:watch` | The same, re-running as you edit |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
 | `npm run smoke:gamepad` | Headless gamepad E2E test with simulated Bluetooth Stadia controller |
@@ -157,16 +159,20 @@ When testing building and road collider generation in real-world locations (e.g.
 src/
 ├── main.ts          wiring and the frame loop
 ├── app/             game loop, state, events, tuning
+├── audio/           procedural engine, horn, impact, and tire sound
 ├── core/            simulation: physics, AI, rules, terrain, geo math
 ├── input/           input sources (keyboard, gamepad), rebindable bindings
+├── net/             online lobby and match sync, over Firebase and WebRTC
 ├── render/          three.js views
-├── services/        Google Maps and 3D Tiles
+├── services/        Google Maps, 3D Tiles, OSM roads, Overture buildings
 └── ui/              Lit HUD and screens
 ```
 
-TypeScript, three.js, Lit, Vite, Vitest. The only runtime dependencies are
-`three` and `lit`. Everything in `core/` is DOM-free and runs in node, which
-is why the tests need no browser.
+TypeScript, three.js, Lit, Vite, Vitest. Runtime dependencies beyond `three`
+and `lit`: `firebase` and `@trystero-p2p/firebase` for the online lobby, and
+`pmtiles`/`pbf`/`@mapbox/vector-tile` for reading Overture's building
+footprints out of their PMTiles archive. Everything in `core/` is DOM-free
+and runs in node, which is why the tests need no browser.
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — how the layers fit together
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — what's next and why
@@ -175,8 +181,8 @@ is why the tests need no browser.
 
 ## Where it came from
 
-A ground-up rebuild of a 1,600-line single-file prototype into something
-modular and tested. The prototype is still around as a reference.
+A ground-up rebuild of a single-file prototype into something modular and
+tested.
 
 ## License
 

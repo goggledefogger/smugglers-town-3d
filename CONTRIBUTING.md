@@ -13,15 +13,15 @@ npm run dev        # Vite on http://localhost:5173
 Node 20 or newer. The procedural desert needs nothing else. To drive a real
 city, paste a Google Maps Platform key into the bar at the top of the game;
 it stays in your browser's `localStorage` and never enters the repo or the
-build. The key needs the Map Tiles, Elevation, Geocoding and Places APIs
-enabled.
+build. The key needs the Maps JavaScript, Geocoding, Elevation, Static Maps,
+and Photorealistic 3D Tiles APIs enabled.
 
 Useful scripts:
 
 | Command | What it does |
 |---|---|
 | `npm run typecheck` | `tsc --noEmit` under the strict config |
-| `npm test` | The unit suite, plain node, under a second |
+| `npm test` | The unit suite, plain node, a few seconds |
 | `npm run build` | Typecheck plus a production bundle in `dist/` |
 | `npm run serve` | Build and serve it the way hosting will |
 | `npm run smoke` | Headless desert match: HUD, radar, input and layout, at four widths |
@@ -33,9 +33,11 @@ Useful scripts:
 src/core/       the simulation: physics, gameplay rules, AI, spawning, geo math
 src/input/      keyboard and gamepad sources, rebindable bindings, InputManager
 src/app/        glue: the game loop, config, events, the store the HUD reads
+src/audio/      procedural engine, horn, impact, and tire sound
+src/net/        online lobby and match sync, over Firebase and WebRTC
 src/render/     three.js scene, meshes, textures, camera
 src/ui/         Lit components for the HUD and menus
-src/services/   the outside world: Google Maps, 3D Tiles, Firebase
+src/services/   the outside world: Google Maps, 3D Tiles, OSM roads, Overture buildings
 tests/          vitest, one file per area
 docs/           architecture, roadmap, deploy, multiplayer spec
 ```
@@ -45,11 +47,14 @@ change that crosses two of those directories.
 
 ## The one rule that matters
 
-`core/` never imports from `app/`, `render/`, `ui/`, or `services/`. Its only
-dependency is three.js math types. That is what keeps the whole simulation
-testable in plain node with no browser, and it is easy to break by accident.
-If you find yourself reaching for the renderer or the network from inside a
-physics file, the answer is an event or a return value, not an import.
+`core/` never imports from `render/`, `ui/`, or `services/`, and its only
+import from `app/` is the plain-data `config.ts` (physics and AI read their
+tunables from it directly; it has no DOM or network dependency of its own).
+Its only external dependency is three.js math types. That is what keeps the
+whole simulation testable in plain node with no browser, and it is easy to
+break by accident. If you find yourself reaching for the renderer or the
+network from inside a physics file, the answer is an event or a return
+value, not an import.
 
 A few consequences worth knowing:
 
@@ -126,8 +131,9 @@ const log = logger('tiles');
 log.info('tiles loaded', { tiles: 84, ms: 9100 });
 ```
 
-Scopes in use: `app`, `render`, `tiles`, `relocate`, `online`, `lobby`,
-`firebase`, `rtc`, `host`, `client`. `core/` does not log; it returns.
+Scopes in use: `app`, `render`, `tiles`, `tile-cache`, `ground-streamer`,
+`osm-roads`, `relocate`, `input`, `online`, `lobby`, `firebase`, `rtc`,
+`host`, `client`. `core/` does not log; it returns.
 
 Levels earn their place by who reads them:
 

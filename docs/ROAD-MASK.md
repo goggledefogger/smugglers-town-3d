@@ -18,7 +18,7 @@ cars off walls. The pipeline does not care how the grid was made.
 
 `MapsApi.roadsUrl` asks Static Maps for a roadmap with every feature hidden
 except road fills, drawn white on black with per-class stroke weights
-(highway 6 px, arterial 4 px, local 3 px; about 23 / 15 / 11 m at zoom 15
+(highway 5 px, arterial 3 px, local 2 px; about 19 / 11 / 8 m at zoom 15
 downtown). `fetchRoadRasters` stitches two 3×3 grids of 640 px tiles like the
 satellite ground does: zoom 15 for the whole 5.6 km field, and zoom 16 for
 the inner 3.6 km, because Google only draws alleys and service roads at 16

@@ -19,8 +19,7 @@ The garage (vehicle pick) exists, and the online lobby now sets the location
 screen (`SettingsScreen`, opened from the garage's CONTROLS button) covers
 keyboard and gamepad, with press-to-bind capture and reset-to-defaults. Left:
 the rest of game setup (round length, team size, bot difficulty) including for
-single player, a pause menu, and audio options. Mid-match `1`–`5` vehicle
-switching should go once setup exists; it is a debug leftover.
+single player, a pause menu, and audio options.
 
 ## 2. Round structure — mostly done
 
@@ -34,10 +33,10 @@ a tie. Left:
 Done: BFS flow fields over a 6 m occupancy grid built from the colliders;
 bots follow waypoints around buildings and props. The fields expand lazily,
 only as far as the bot asking, because a full sweep of the ~870k-cell grid
-measured 25-60 ms. Left:
+measured 25-60 ms. Roles: when an ally carries, an escort intercepts the
+nearest threat within 140 units and otherwise shadows the carrier home,
+rather than driving to base and waiting. Left:
 
-- Roles: when an ally carries, escorts should body-block chasers rather than
-  drive to the base and wait.
 - Difficulty setting: reaction time (`reevaluateS`), top-speed cap, steal
   aggression.
 - Field quality: a cell is blocked when its centre is within a car half-width
@@ -53,8 +52,8 @@ measured 25-60 ms. Left:
   zoom-18 patches (~0.25 m/px) around the player rather than a fixed grid, and
   skips ground already covered by 3D tiles. The clutter filter's hidden mode
   streams under tiles too, since it reveals the ground beneath them.
-- Streaming: evict the farthest tiles when over `MAX_TILES` so long sessions
-  keep refining; coarsen behind the player.
+- Streaming **(Done)**: evicts the farthest tiles when over `MAX_TILES` so
+  long sessions keep refining; coarsens behind the player.
 - Impact feedback: camera shake on rams and landings, sparks/smoke as
   integrity drops, skid marks.
 - Time of day: the painted sky (`skyTexture.ts`) takes a sun direction, so
@@ -63,13 +62,18 @@ measured 25-60 ms. Left:
   streaming hitches that made the game feel choppy are gone (a 30 s drive
   through Manhattan holds p99 10.4 ms with zero long tasks). Tile
   rasterization is still on the main thread at ~48 ms per streaming burst and
-  is the next candidate. A quality preset (tile caps, streaming LOD, MSAA off)
-  on top of the adaptive resolution would help very weak GPUs.
+  is the next candidate. A manual quality preset already exists
+  (`Resolution3DMode`: balanced/high/ultra, tile caps plus streaming LOD plus
+  DPR, cycled with Shift+V/R or `?res3d=`) alongside `Renderer`'s automatic
+  adaptive resolution; an MSAA toggle and auto-picking the preset for weak
+  GPUs are what's left.
 - Street clutter filter **(Done)**: `TileClutterFilter` patches every tile
   material so street-level photogrammetry noise is flattened onto the ground
   or discarded entirely, leaving buildings over streamed satellite ground.
-  Swept is the default; it keeps kerbside facades (and street trees) over
-  streamed satellite ground, while Hidden discards non-building geometry completely.
+  Raw Photoreal (unfiltered) is the default view; Masked Tiles applies Swept,
+  which keeps kerbside facades (and street trees) over streamed satellite
+  ground, while Best 3D uses Hidden, discarding non-building geometry
+  completely.
   Note this is **render-side only** — the colliders still contain the clutter it hides.
 - Cinematic camera sweep **(Done)**: A 6-second dynamic establishing shot swoops across
   the landscape with terrain and building obstacle avoidance, staged banners (`LOCATION`,
@@ -111,11 +115,14 @@ Left:
   steer without a keyboard or gamepad, so a phone can watch and not play.
   The `InputSource` seam is there for a `TouchSource` to plug into.
 
-## 6. Audio
+## 6. Audio — Done
 
-Engine pitch from speed, ram and landing impacts, pickup/steal/deliver
-stingers, a proximity cue near your base. Web Audio with procedural sounds
-first, no assets needed.
+Procedural Web Audio, no assets: engine pitch from speed and throttle load
+(`EngineAudio`), tire skid/drift noise (`TireAudio`), ram and landing
+impacts (`ImpactAudio`), a horn (`HornAudio`), pickup/steal/deliver/wreck
+stingers (`StingerAudio`), and a proximity cue that quickens as a carrier
+nears their base (`ProximityAudio`). `AudioManager` wires it all to gameplay
+events, handles the browser autoplay unlock, and persists master mute.
 
 ## 7. Multiplayer — version 1 live
 
@@ -129,7 +136,8 @@ phase plan. The per-driver input-source interface now exists
 
 ## 8. Tooling and code quality
 
-- ESLint with typescript-eslint; `npm run lint`.
+- ESLint with typescript-eslint and `npm run lint` are not set up on `main`
+  yet; a one-commit attempt sits unmerged on `chore/eslint-ci`.
 - CI. The checks themselves exist — `npm run typecheck`, `npm test`,
   `npm run build`, `npm run smoke` (no key needed) and `npm run e2e:online` —
   but nothing runs them on a push.
@@ -146,8 +154,9 @@ phase plan. The per-driver input-source interface now exists
 - Bicubic sampling for the 10 m tile ground if it feels like gravel at
   speed; the four-wheel mean and suspension hide most of it.
 - Remember the last place and offer a few presets (Portland, SF, Tokyo) — presets done in scenario catalog (`testScenarios.ts`).
-- Progress with tile counts and byte totals; a clear message when the key is
-  missing one of the four APIs.
+- Progress already reports tile counts (`n/total` while streaming) and a
+  clear per-API error (Maps JS, Geocoding, Elevation, Static Maps) when the
+  key is missing one. Left: byte totals in the progress message.
 - If a place has too little tile data near the center for the measured datum
   shift, fall back to an EGM96 geoid lookup.
 

@@ -120,13 +120,10 @@ authority can import it directly rather than reimplementing rules.
 
 ### Auth
 
-`src/services/firebase.ts`'s `identity()` already tries Anonymous auth on
-every load — it calls `signInAnonymously` and uses the returned uid. Nothing
-in the console has enabled the provider yet, so that call fails and
-`identity()` falls back to a random id kept in `localStorage`
-(`stt_client_id`), silently, no throw. The lobby works either way; enabling
-Anonymous auth in the console just upgrades every browser's id to a real
-Firebase uid without a code change, which is what the tightened database
-rules above key off. When richer auth lands (leaderboards, saved garages),
-add the emulator ports to the `emulators` block so local work never touches
-production data.
+`src/services/firebase.ts`'s `identity()` calls `signInAnonymously` on first
+use and caches the returned uid for the session. If sign-in fails (Anonymous
+auth not enabled on the project, or offline) it throws rather than inventing
+an id — the database rules bind every seat to `auth.uid`, so there is no
+useful identity without a real sign-in. When richer auth lands (leaderboards,
+saved garages), add the emulator ports to the `emulators` block so local
+work never touches production data.
