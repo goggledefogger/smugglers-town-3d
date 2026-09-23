@@ -1,7 +1,7 @@
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
 
-const ARTIFACT_DIR = '/Users/Danny/.gemini/antigravity-ide/brain/17338ac7-1732-4700-9dc2-17d3d0437a25';
+const ARTIFACT_DIR = process.env.ARTIFACT_DIR ?? '.sm-artifacts';
 const SCRATCH = `${ARTIFACT_DIR}/scratch`;
 mkdirSync(SCRATCH, { recursive: true });
 const BASE = process.env.E2E_URL ?? 'http://localhost:5173';
