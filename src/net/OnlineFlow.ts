@@ -50,8 +50,13 @@ interface OnlineDeps {
 
 /** How long the host holds the countdown for players still connecting. */
 const PEER_WAIT_MS = 10000;
-/** How long a client waits for the host's hello before giving up. */
+/**
+ * How long a client waits for the host's hello before giving up. The host
+ * sends it only once its own world is built, and a city takes 20-30 s of
+ * streaming, so a city room waits far longer than the desert
+ */
 const HELLO_WAIT_MS = 20000;
+const CITY_HELLO_WAIT_MS = 90000;
 /**
  * How long the host holds the start for players still building their world.
  * A city is tens of seconds of streaming; past this one straggler is not worth
@@ -320,9 +325,9 @@ export class OnlineFlow {
       const early = room.map.kind === 'desert' || this.mapsKey
         ? this.deps.makeTerrain(room.seed, room.map, this.mapsKey).catch(() => null)
         : null;
-      el.status = 'Waiting for the host…';
+      el.status = room.map.kind === 'city' ? `Waiting for the host to load ${room.map.label}…` : 'Waiting for the host…';
       log.info('client connected, waiting for hello', { code: room.code, headStart: early !== null });
-      const hello = await waitHello(transport, HELLO_WAIT_MS);
+      const hello = await waitHello(transport, room.map.kind === 'city' ? CITY_HELLO_WAIT_MS : HELLO_WAIT_MS);
       log.info('hello', { v: hello.v, seed: hello.seed, roster: hello.roster.length, map: hello.map.kind, sharedKey: hello.key !== undefined });
       if (hello.v !== PROTOCOL_VERSION) throw new Error('version-mismatch');
       if (hello.key) this.useKey(hello.key);
