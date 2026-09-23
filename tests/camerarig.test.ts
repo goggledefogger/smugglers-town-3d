@@ -89,4 +89,29 @@ describe('CameraRig', () => {
     expect(rig.zoom).toBe(1.5);
     expect(camera.fov).toBeCloseTo(62 + 0.5 * 2.4, 2);
   });
+
+  it('a one-frame blockage between buildings does not flip the chase camera overhead', () => {
+    const camera = new PerspectiveCamera(62, 1, 0.1, 1000);
+    const hf = new Heightfield(840, 1, new Float32Array([0, 0, 0, 0]));
+    let clear = 1;
+    const rig = new CameraRig(camera, () => hf, () => clear);
+    const player: Pose = { pos: new Vector3(0, 0, 0), quat: new Quaternion() };
+    rig.snap(player);
+    for (let i = 0; i < 30; i++) rig.update(1 / 60, player);
+    const settledY = camera.position.y;
+
+    clear = 0.05; // a wall sweeps through the line of sight for one frame
+    rig.update(1 / 60, player);
+    clear = 1;
+    rig.update(1 / 60, player);
+    expect(Math.abs(camera.position.y - settledY)).toBeLessThan(0.5);
+
+    // a lasting blockage still climbs, gradually
+    clear = 0.05;
+    for (let i = 0; i < 6; i++) rig.update(1 / 60, player);
+    const early = camera.position.y;
+    for (let i = 0; i < 120; i++) rig.update(1 / 60, player);
+    expect(early).toBeLessThan(camera.position.y - 1);
+    expect(camera.position.y).toBeGreaterThan(8);
+  });
 });

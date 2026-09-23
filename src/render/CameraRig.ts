@@ -13,6 +13,13 @@ type CameraMode = 0 | 1 | 2;
 const MIN_CHASE_FRAC = 0.3;
 /** ...and looks down from this high when even that is inside a building. */
 const CLIMB_ABOVE = 12;
+/**
+ * Spring-arm rates (per second): pull in fast so a wall never hides the car,
+ * ease back out slowly so a gap between buildings does not yank the view.
+ * Climbing is gentler still, and only as deep as the blockage.
+ */
+const ARM_IN_RATE = 10, ARM_OUT_RATE = 1.5;
+const CLIMB_UP_RATE = 3, CLIMB_DOWN_RATE = 0.8;
 /** High oblique establishing shot height above spawn ground. */
 const INTRO_START_HEIGHT = 80;
 /** Horizontal distance for establishing shot. */
@@ -65,6 +72,9 @@ export class CameraRig {
   private readonly _desired = new Vector3();
   private readonly _look = new Vector3();
   private lookY: number | null = null;
+  /** Smoothed arm length (fraction of full) and climb (0 = normal height, 1 = CLIMB_ABOVE). */
+  private arm = 1;
+  private climb = 0;
 
   private introLeft = 0;
   private introTotal = 0;
@@ -137,12 +147,7 @@ export class CameraRig {
       return;
     }
     this._look.copy(player.pos).add(new Vector3(0, 2, 0));
-    const clear = this.lineOfSight(this._look, this._desired);
-    if (clear < 1) {
-      const frac = Math.max(clear, MIN_CHASE_FRAC);
-      this._desired.sub(this._look).multiplyScalar(frac).add(this._look);
-      if (clear < MIN_CHASE_FRAC) this._desired.y = this._look.y + CLIMB_ABOVE;
-    }
+    this.avoidBuildings(0);
     this.camera.position.copy(this._desired);
     this.lookY = this._look.y;
     this.camera.lookAt(this._look);
@@ -239,12 +244,7 @@ export class CameraRig {
     // a chase camera 14 units back is inside the block behind the car in
     // any downtown: pull it in along the line to the car until the view is
     // clear, and if even close in is blocked, climb instead
-    const clear = this.lineOfSight(this._look, this._desired);
-    if (clear < 1) {
-      const frac = Math.max(clear, MIN_CHASE_FRAC);
-      this._desired.sub(this._look).multiplyScalar(frac).add(this._look);
-      if (clear < MIN_CHASE_FRAC) this._desired.y = this._look.y + CLIMB_ABOVE;
-    }
+    this.avoidBuildings(dt);
     // tighter lerp at high zoom so the wider view stays settled
     const lerpK = 1 - Math.pow(0.001 / (1 + z * 0.15), dt);
     this.camera.position.lerp(this._desired, lerpK);
@@ -253,5 +253,26 @@ export class CameraRig {
     this.lookY = this.lookY === null ? this._look.y : this.lookY + (this._look.y - this.lookY) * (1 - Math.exp(-dt * 8));
     this._look.y = this.lookY;
     this.camera.lookAt(this._look);
+  }
+
+  /**
+   * Shorten and raise `_desired` so the car stays visible from behind the
+   * buildings. The raw line-of-sight flickers as walls pass, so it drives
+   * smoothed targets rather than the pose: dt 0 (a snap) jumps straight there
+   */
+  private avoidBuildings(dt: number): void {
+    const clear = this.lineOfSight(this._look, this._desired);
+    const armTarget = Math.max(clear, MIN_CHASE_FRAC);
+    // how far below the floor the clear fraction fell: 0 at the floor, 1 fully blocked
+    const climbTarget = clear < MIN_CHASE_FRAC ? 1 - clear / MIN_CHASE_FRAC : 0;
+    const ease = (v: number, target: number, up: number, down: number): number =>
+      dt <= 0 ? target : v + (target - v) * (1 - Math.exp(-dt * (target > v ? up : down)));
+    this.arm = ease(this.arm, armTarget, ARM_OUT_RATE, ARM_IN_RATE);
+    this.climb = ease(this.climb, climbTarget, CLIMB_UP_RATE, CLIMB_DOWN_RATE);
+    if (this.arm < 1) this._desired.sub(this._look).multiplyScalar(this.arm).add(this._look);
+    if (this.climb > 0) {
+      const top = this._look.y + CLIMB_ABOVE;
+      if (top > this._desired.y) this._desired.y += (top - this._desired.y) * this.climb;
+    }
   }
 }
