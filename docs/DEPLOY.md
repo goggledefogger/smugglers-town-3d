@@ -34,7 +34,9 @@ npx wrangler secret put TURN_KEY_API_TOKEN
 npx wrangler deploy                           # prints the worker URL
 ```
 
-The build reads that URL from `VITE_TURN_URL` in `.env`. The key never
+The key lives in 1Password (Roy vault, "Cloudflare TURN · st3d-turn"); the
+live Worker is `https://st3d-turn.roytownwizard.workers.dev`. The build reads
+that URL from `VITE_TURN_URL` in `.env`. The key never
 leaves the Worker; browsers only see credentials that expire in four hours.
 
 Caching is set in `firebase.json`: hashed files under `assets/` are immutable
