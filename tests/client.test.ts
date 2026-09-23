@@ -54,4 +54,18 @@ describe('ClientSession playback', () => {
     expect(stalls).toBeLessThan(6);
     client.dispose();
   });
+
+  it('stands a car on this player\'s own ground, whatever the host\'s ground was', async () => {
+    const hub = createLoopbackHub();
+    const host = hub.join('host');
+    const me = hub.join('me');
+    // our ground is 25 above whatever the host had; the snapshot says 1 above the host's
+    const terrain = createDesertTerrain(new Heightfield(840, 1, new Float32Array([25, 25, 25, 25])));
+    const client = new ClientSession(hello, 'me', me, new EventBus<GameEventMap>(), createStore<HudSnapshot>({} as HudSnapshot), terrain);
+    for (let f = 0; f < 30; f += 3) host.send(encode(snapshot(f, 0)), 'me');
+    await flush();
+    for (let i = 0; i < 30; i++) client.update(1 / 60, null);
+    expect(client.player!.body.pos.y).toBeCloseTo(26, 3);
+    client.dispose();
+  });
 });
