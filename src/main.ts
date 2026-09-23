@@ -1346,10 +1346,10 @@ function step(now: number): void {
       const finished = groundBuilder.step(1.5);
       if (finished && groundBuilder.result) {
         const refined = Heightfield.fromCells(groundBuilder.result, tiles.grid.n, tiles.grid.cell);
+        // only the world being played: on a guest, `game` is the idle
+        // single-player world on another terrain, and copying into it threw
+        // every frame, which stopped every draw after the ground refined
         world.terrainProvider.heightfield.copyFrom(refined);
-        if (game && (game as unknown) !== world) {
-          game.terrainProvider.heightfield.copyFrom(refined);
-        }
         terrainMesh.refresh(world.terrainProvider.heightfield);
         clutterFilter?.groundChanged(world.terrainProvider.heightfield);
         buildingMeshView.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
