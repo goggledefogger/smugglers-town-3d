@@ -7,6 +7,15 @@ const log = logger('rtc');
 
 /** Google's public STUN server; free, no account, enough for peers that aren't both behind symmetric NATs. */
 const STUN_URL = 'stun:stun.l.google.com:19302';
+/**
+ * A TURN relay for players on different networks, where a direct link often
+ * cannot get through both routers. JSON RTCIceServer[] from the build env
+ * (.env.local, never committed); it ships in the bundle, so use a relay
+ * account whose credentials are meant for browsers
+ */
+// Vite statically replaces import.meta.env.VITE_* at build time.
+// Dynamic key access (import.meta.env[key]) does NOT work
+const TURN_SERVERS: RTCIceServer[] = JSON.parse(import.meta.env.VITE_TURN_SERVERS || '[]');
 
 export async function connectTrystero(
   roomCode: string,
@@ -17,7 +26,7 @@ export async function connectTrystero(
     {
       appId: databaseURL,
       relayConfig: { firebaseApp, firebasePath: 'signal' },
-      rtcConfig: { iceServers: [{ urls: STUN_URL }] }
+      rtcConfig: { iceServers: [{ urls: STUN_URL }, ...TURN_SERVERS] }
     },
     roomCode
   );

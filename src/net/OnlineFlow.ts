@@ -313,10 +313,12 @@ export class OnlineFlow {
 
   private async runClient(lobby: Lobby, room: LobbyRoom): Promise<void> {
     const el = this.deps.lobbyEl;
+    let hangUp: Transport | null = null;
     try {
       el.busy = true;
       el.status = 'Connecting to the host…';
       const transport = await connect(room.code);
+      hangUp = transport;
       // the host learns which seat we are from this; repeat it to every peer
       // that appears, since the host may connect after us
       const join = encode({ t: 'j', uid: lobby.selfId, token: lobby.token });
@@ -353,6 +355,8 @@ export class OnlineFlow {
       }, terrain);
     } catch (err) {
       log.error('client start failed', err);
+      // hang up: a half-open connection left behind blocks the retry, which reuses our peer id
+      hangUp?.leave();
       el.status = describe(err);
       el.busy = false;
       this.starting = false;

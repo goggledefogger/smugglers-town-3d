@@ -21,6 +21,18 @@ The site answers at https://st3d.roytown.net, a custom domain on Firebase
 Hosting; `https://smugglers-town-3d.web.app` is the same site. Link the custom
 domain.
 
+Players on different networks need a TURN relay, since a direct WebRTC link
+often cannot get through two home routers. The build reads it from
+`VITE_TURN_SERVERS` in `.env.local` (gitignored), a JSON `RTCIceServer[]`:
+
+```bash
+VITE_TURN_SERVERS='[{"urls":"turn:relay.example.com:443?transport=tcp","username":"…","credential":"…"}]'
+```
+
+It ships inside the public bundle, so use a relay account whose credentials
+are meant for browsers. Without it, only players whose direct link works can
+join each other.
+
 Caching is set in `firebase.json`: hashed files under `assets/` are immutable
 for a year, `index.html` is `no-cache`, so a deploy is live immediately.
 
