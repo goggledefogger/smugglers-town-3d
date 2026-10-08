@@ -20,6 +20,8 @@ import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
 import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView.ts';
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
+import { footprintMask1m, classifierGap, type FootprintMask, type CoverageGap } from './services/overture/footprintMask.ts';
+import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
@@ -214,50 +216,19 @@ if (typeof window !== 'undefined') {
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
-export type ViewMode = 'photoreal' | 'masked-tiles' | 'best-3d' | 'painted-3d' | 'painted-metro' | 'footprint-3d' | 'vector-city' | 'game3d';
-/** The V key's order. */
-const VIEW_MODE_CYCLE: readonly ViewMode[] = ['photoreal', 'masked-tiles', 'best-3d', 'painted-3d', 'painted-metro', 'footprint-3d', 'vector-city', 'game3d'];
-/**
- * What each mode draws. One row per mode, all rows required: a new mode that
- * forgets a trait is a type error rather than a feature that silently defaults off.
- * paintsWalls: photos on walls, baker runs every frame (painted-3d, painted-metro, footprint-3d)
- * paintsBoxes: collider boxes with photos on their faces (painted-3d, painted-metro)
- * showsPrisms: Overture footprint prisms instead of the boxes (footprint-3d, vector-city)
- * proceduralFacades: Metropolis facade on every wall the photos left bare (painted-metro, vector-city)
- * showsTiles: Google 3D tiles on screen, raw, masked, or snapped (photoreal, masked-tiles, best-3d)
- * snapsTiles: those tiles snapped onto the collider boxes (best-3d)
- */
-interface ViewModeTraits {
-  label: string;
-  paintsWalls: boolean;
-  paintsBoxes: boolean;
-  showsPrisms: boolean;
-  proceduralFacades: boolean;
-  showsTiles: boolean;
-  snapsTiles: boolean;
-}
-const VIEW_MODES: Record<ViewMode, ViewModeTraits> = {
-  photoreal:      { label: 'VIEW: REAL 3D',           paintsWalls: false, paintsBoxes: false, showsPrisms: false, proceduralFacades: false, showsTiles: true,  snapsTiles: false },
-  'masked-tiles': { label: 'VIEW: MASKED 3D TILES',   paintsWalls: false, paintsBoxes: false, showsPrisms: false, proceduralFacades: false, showsTiles: true,  snapsTiles: false },
-  'best-3d':      { label: 'VIEW: BEST 3D',           paintsWalls: false, paintsBoxes: false, showsPrisms: false, proceduralFacades: false, showsTiles: true,  snapsTiles: true },
-  'painted-3d':   { label: 'VIEW: PAINTED 3D',        paintsWalls: true,  paintsBoxes: true,  showsPrisms: false, proceduralFacades: false, showsTiles: false, snapsTiles: false },
-  'painted-metro':{ label: 'VIEW: PAINTED METROPOLIS',paintsWalls: true,  paintsBoxes: true,  showsPrisms: false, proceduralFacades: true,  showsTiles: false, snapsTiles: false },
-  'footprint-3d': { label: 'VIEW: FOOTPRINT 3D',      paintsWalls: true,  paintsBoxes: false, showsPrisms: true,  proceduralFacades: false, showsTiles: false, snapsTiles: false },
-  'vector-city':  { label: 'VIEW: VECTOR CITY',       paintsWalls: false, paintsBoxes: false, showsPrisms: true,  proceduralFacades: true,  showsTiles: false, snapsTiles: false },
-  game3d:         { label: 'VIEW: ARCADE 3D',         paintsWalls: false, paintsBoxes: false, showsPrisms: false, proceduralFacades: false, showsTiles: false, snapsTiles: false },
-};
-const traits = (m: ViewMode): ViewModeTraits => VIEW_MODES[m];
-let viewMode: ViewMode = 'photoreal';
+export type { ViewMode } from './render/viewModes.ts';
+/** ?view=cutout-3d (any mode name) starts in that view. */
+let viewMode: ViewMode = parseViewMode(new URLSearchParams(window.location.search).get('view')) ?? 'photoreal';
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // swept by default: flattens road clutter while keeping kerbside building facades
 // and trees over the sharper streamed satellite ground
 let clutterMode: ClutterMode = 'off';
 /** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
-const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept']);
+const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept', 'cutout']);
 const clutterBtn = document.getElementById('clutter-btn') as HTMLButtonElement | null;
 const clutterText = document.getElementById('clutter-text') as HTMLSpanElement | null;
-const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN', swept: 'CLUTTER: SWEPT' };
+const CLUTTER_LABEL: Record<ClutterMode, string> = { off: 'CLUTTER: OFF', flatten: 'CLUTTER: FLAT', hidden: 'CLUTTER: HIDDEN', swept: 'CLUTTER: SWEPT', cutout: 'CLUTTER: CUTOUT' };
 
 function updateClutterUi(): void {
   if (!clutterBtn || !clutterText) return;
@@ -392,7 +363,11 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     log.info('building footprints arrived in background, refreshing colliders');
     refreshColliders();
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
-    if (traits(viewMode).showsPrisms) setViewMode(viewMode);
+    // (Cutout 3D: its walls take over the physics and its stencil replaces the structure fallback)
+    cutoutMaskFor = null;
+    cutoutCoverageLogged = false;
+    footprintsLandedAt = performance.now();
+    if (traits(viewMode).prismPhysics || traits(viewMode).cutsToFootprints) setViewMode(viewMode);
   };
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
@@ -421,8 +396,10 @@ function setViewMode(mode: ViewMode): void {
   const isMaskedTiles = mode === 'masked-tiles';
   const isBest3d = traits(mode).snapsTiles;
   const isPainted = traits(mode).paintsBoxes;
+  const isCutout = traits(mode).cutsToFootprints;
   // a prism mode before Overture answers shows the boxes; the load re-applies the mode
-  const isFootprint = traits(mode).showsPrisms && (rebuildPrisms(), prismView.count > 0);
+  const hasPrisms = traits(mode).prismPhysics && (rebuildPrisms(), prismView.count > 0);
+  const isFootprint = traits(mode).showsPrisms && hasPrisms;
   const hasTiles = traits(mode).showsTiles;
 
   if (tiles) tiles.group.visible = hasTiles;
@@ -443,6 +420,14 @@ function setViewMode(mode: ViewMode): void {
     } else if (isRawPhotoreal) {
       clutterFilter.mode = 'off';
       clutterMode = 'off';
+    } else if (isCutout) {
+      rebuildCutoutMask();
+      clutterFilter.mode = 'cutout';
+      clutterMode = 'cutout';
+    } else if (clutterMode === 'cutout') {
+      // cutout is this view's alone: the box and prism modes go back to the default
+      clutterFilter.mode = 'off';
+      clutterMode = 'off';
     }
     updateClutterUi();
   }
@@ -460,7 +445,8 @@ function setViewMode(mode: ViewMode): void {
 
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
   // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
-  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint);
+  // Cutout 3D: the cut photogrammetry is the building, the prism walls only collide
+  buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint || isCutout);
   prismView.visible = isFootprint;
   roadRibbons.visible = mode === 'vector-city';
   // built on first entry, not when the roads land: draping 2,000 ways is a frame's worth of work
@@ -485,8 +471,9 @@ function setViewMode(mode: ViewMode): void {
   }
 
   renderer.setLightRig((hasTiles || traits(mode).paintsWalls || mode === 'vector-city') && world.terrainProvider.isReal ? 'photo' : 'arcade');
-  // what the car hits follows what it sees: the outline walls in a prism mode, the boxes elsewhere
-  if (isFootprint !== physicsOnWalls) applyTileColliders(lastTileBoxes);
+  // what the car hits follows what it sees: the outline walls in a prism mode (and in
+  // Cutout 3D, whose visible buildings are those same outlines), the boxes elsewhere
+  if (hasPrisms !== physicsOnWalls) applyTileColliders(lastTileBoxes);
   // the wheels ride the captured surface only in a view that shows it
   applySurface();
   updateViewModeUi();
@@ -627,6 +614,70 @@ function rebuildPrisms(): boolean {
   return true;
 }
 
+/**
+ * Cutout 3D stencil dilation (m): grows each footprint so leaning facades and overhangs are not
+ * shaved. 2, not 1.5: in SF (Market and Montgomery) tile geometry over 18 m up left outside the
+ * stencil fell from 7.6% at 1.5 m to 3.9% at 2 m with no extra kerb clutter. ?cutoutDilate= overrides.
+ */
+const CUTOUT_DILATE_M = Number(new URLSearchParams(window.location.search).get('cutoutDilate') ?? '') || 2;
+/** Cutout 3D stencil side (texels at 1 m): covers the 1800 m footprint radius plus polygons straddling it. */
+const CUTOUT_MASK_N = 4096;
+let cutoutMaskFor: readonly Footprint[] | null = null;
+let cutoutMask: FootprintMask | null = null;
+let cutoutCoverageLogged = false;
+let footprintsLandedAt = Infinity;
+/** Cutout 3D's last stencil build and upload, for the survey script. */
+let cutoutStats: { footprints: number; buildMs: number; uploadMs: number; dilateM: number; fallback: boolean } | null = null;
+
+/**
+ * Cutout 3D's stencil: built once per footprint set, on first entry to the
+ * mode, centred on the tileset origin where the footprints were fetched. No
+ * footprints (Overture empty or not answered yet) clears it, so the shader
+ * falls back to the classifier's structure mask.
+ */
+function rebuildCutoutMask(): void {
+  if (!clutterFilter || !tiles) return;
+  const polys = tiles.footprints;
+  if (!polys || polys.length === 0) {
+    if (cutoutMaskFor !== null || clutterFilter.hasFootprintMask) clutterFilter.setFootprintMask(null);
+    cutoutMaskFor = null;
+    cutoutMask = null;
+    cutoutStats = { footprints: 0, buildMs: 0, uploadMs: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
+    return;
+  }
+  if (cutoutMaskFor === polys && clutterFilter.hasFootprintMask) return;
+  const t0 = performance.now();
+  cutoutMask = footprintMask1m(polys, { n: CUTOUT_MASK_N, cell: 1, dilateM: CUTOUT_DILATE_M });
+  const t1 = performance.now();
+  clutterFilter.setFootprintMask(cutoutMask);
+  cutoutMaskFor = polys;
+  cutoutStats = { footprints: polys.length, buildMs: t1 - t0, uploadMs: performance.now() - t1, dilateM: CUTOUT_DILATE_M, fallback: false };
+  log.info('cutout stencil built', cutoutStats);
+}
+
+/** How many classifier buildings have no Overture footprint within 3 m; null without both. */
+function cutoutCoverage(): (CoverageGap & { footprints: number }) | null {
+  const polys = tiles?.footprints;
+  if (!tiles || !polys || polys.length === 0) return null;
+  const mask = cutoutMask && cutoutMaskFor === polys ? cutoutMask : footprintMask1m(polys, { n: CUTOUT_MASK_N, cell: 1, dilateM: CUTOUT_DILATE_M });
+  return { footprints: polys.length, ...classifierGap(tiles.structureGrid, tiles.activeGrid, mask, 3) };
+}
+(window as any).__cutoutCoverage = () => cutoutCoverage();
+(window as any).__cutoutStats = () => cutoutStats;
+
+/**
+ * Once per tileset load, after the footprints have had time to meet a
+ * streamed-in neighbourhood: the size of the Overture gap the v1 fallback
+ * leaves (a classifier building with no footprint is cut away in Cutout 3D).
+ */
+function logCutoutCoverage(): void {
+  if (cutoutCoverageLogged || performance.now() - footprintsLandedAt < 10000) return;
+  const c = cutoutCoverage();
+  if (!c) return;
+  cutoutCoverageLogged = true;
+  log.info('cutout coverage', c);
+}
+
 /** Vector City streets: the OSM ways draped on the ground the car drives on. */
 function rebuildRibbons(): void {
   const polys = tiles?.roadPolylines;
@@ -643,8 +694,8 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   const colliders = rawColliders.map(b => anchorCollider(b, sample));
   clutterFilter?.maskChanged();
   if (clutterFilter && tiles) clutterFilter.setSnapBoxes(colliders, tiles.activeGrid, tiles.roadMask);
-  const prismsRebuilt = traits(viewMode).showsPrisms && rebuildPrisms();
-  physicsOnWalls = traits(viewMode).showsPrisms && prismView.count > 0;
+  const prismsRebuilt = traits(viewMode).prismPhysics && rebuildPrisms();
+  physicsOnWalls = traits(viewMode).prismPhysics && prismView.count > 0;
   // a prism mode draws the exact outline, so the cars hit the outline (plus the props);
   // the classifier's boxes stay behind it for the bots' routes and the blocked-ground checks
   game.setBuildingColliders(
@@ -653,6 +704,7 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   );
   buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
+  logCutoutCoverage();
   if (traits(viewMode).paintsBoxes) {
     facadeBaker.setColliders(colliders);
   } else if (viewMode === 'footprint-3d' && prismsRebuilt) {
@@ -698,6 +750,10 @@ function clearTiles(): void {
   prismView.clear();
   roadRibbons.clear();
   prismsFor = null;
+  cutoutMaskFor = null;
+  cutoutMask = null;
+  cutoutCoverageLogged = false;
+  footprintsLandedAt = Infinity;
   game.setSurfaceProvider(undefined);
   deactivateSurface();
   groundBuilder = null;
