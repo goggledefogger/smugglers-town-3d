@@ -45,7 +45,7 @@ const ACTION_LABEL: Record<LogicalAction, string> = {
 
 const ACTION_GROUP: Record<string, LogicalAction[]> = {
   Driving: ['accelerate', 'brake', 'steerLeft', 'steerRight', 'jump', 'handbrake', 'pitchUp', 'pitchDown'],
-  'Gameplay hotkeys': ['camera', 'reset', 'viewMode', 'surfaceMode'],
+  'Gameplay hotkeys': ['camera', 'reset', 'viewMode', 'clutterMode', 'surfaceMode'],
   Menus: ['uiUp', 'uiDown', 'uiLeft', 'uiRight', 'uiConfirm', 'uiBack', 'uiTab', 'uiPause']
 };
 
