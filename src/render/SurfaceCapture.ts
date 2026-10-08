@@ -3,6 +3,8 @@
  * through an orthographic camera into a float render target whose red channel
  * is world Y, reads it back without stalling, and hands it to a
  * `SurfaceHeightfield` that the wheels sample (see core/terrain/SurfaceHeightfield.ts).
+ * The render-and-readback itself is TopDownCapture, shared with the Cutout
+ * height field; this class owns the schedule and the hand-over to the field.
  *
  * Only the tiles are drawn: the tile group is moved into a private scene for
  * the one render call (and put back in a `finally`), so vehicles, props, sky,
@@ -13,37 +15,15 @@
  * Lives in render/ rather than core/terrain/: it owns WebGL objects, and core/
  * stays three-math-only so the simulation tests in node.
  */
-import {
-  DoubleSide, FloatType, NearestFilter, OrthographicCamera, RedFormat, RGBAFormat, Scene,
-  ShaderMaterial, WebGLRenderTarget, Color, Mesh, PlaneGeometry,
-  type Object3D, type WebGLRenderer
-} from 'three';
+import type { Object3D, WebGLRenderer } from 'three';
 import {
   SURF_ENCODE_OFFSET, shouldRecapture, type SurfaceHeightfield
 } from '../core/terrain/SurfaceHeightfield.ts';
 import type { HeightSampler } from '../core/heightfield.ts';
-import { logger } from '../app/log.ts';
-
-const log = logger('surface');
+import { TopDownCapture, TOPDOWN_FLOOR_MARGIN_M } from './TopDownCapture.ts';
 
 /** Above the highest base ground in the window: anything taller is a roof, rejected by the band anyway. */
 const CAMERA_HEADROOM_M = 600;
-/** Below the lowest base ground: the depth range must reach under a sunken street. */
-const FLOOR_MARGIN_M = 60;
-
-const VERT = /* glsl */`
-varying float vWorldY;
-void main() {
-  vec4 wp = modelMatrix * vec4(position, 1.0);
-  vWorldY = wp.y;
-  gl_Position = projectionMatrix * viewMatrix * wp;
-}`;
-const FRAG = /* glsl */`
-uniform float uOffset;
-varying float vWorldY;
-void main() {
-  gl_FragColor = vec4(vWorldY + uOffset, 0.0, 0.0, 1.0);
-}`;
 
 export interface SurfaceTimings {
   /** CPU ms to submit the capture render (draw calls + state). */
@@ -56,80 +36,23 @@ export interface SurfaceTimings {
 }
 
 export class SurfaceCapture {
-  private rt: WebGLRenderTarget;
-  /** RGBA fallback only: four floats per texel, red is copied out. */
-  private rgba: Float32Array | null = null;
-  private readonly camera = new OrthographicCamera();
-  private readonly scene = new Scene();
-  private readonly material = new ShaderMaterial({
-    vertexShader: VERT,
-    fragmentShader: FRAG,
-    uniforms: { uOffset: { value: SURF_ENCODE_OFFSET } },
-    // the projection is mirrored to get x and z ascending in the buffer, which
-    // flips winding; and the top surface is wanted whichever way a triangle faces
-    side: DoubleSide,
-    toneMapped: false
-  });
-  private readonly prevClear = new Color();
-  private inFlight = false;
+  private readonly core: TopDownCapture;
   private lastCaptureMs = -Infinity;
   private dirty = false;
-  private asyncBroken = false;
   private disposed = false;
-  /** False until the capture program has compiled off the frame (compileAsync). */
-  private compiled = false;
   /** Bumped by reset(): a readback started before it lands nowhere. */
   private generation = 0;
   readonly timings: SurfaceTimings = { renderMs: 0, readbackMs: 0, processMs: 0, captures: 0 };
 
   constructor(
-    private readonly renderer: WebGLRenderer,
+    renderer: WebGLRenderer,
     readonly field: SurfaceHeightfield,
     /** The tile group to capture, or null while there is none. */
     private readonly source: () => Object3D | null,
     /** The base ground, for the camera's depth range. */
     private readonly base: () => HeightSampler
   ) {
-    this.rt = this.makeTarget(RedFormat);
-    this.scene.overrideMaterial = this.material;
-    this.scene.matrixWorldAutoUpdate = false;
-    // world x and z ascending along the buffer's columns and rows: camera-local
-    // +x is world -x with up = +z, so the projection's left/right swap back
-    this.camera.up.set(0, 0, 1);
-    // the tiles draw on their own layer (main.ts sets layer 1 and the view
-    // modes switch it on and off on the main camera); this camera sees every
-    // layer, since its scene only ever holds the tile group
-    this.camera.layers.enableAll();
-    // compile the capture program in the background: compiled on first use it
-    // cost a ~0.5 s frame. compile() ignores overrideMaterial, so warm it on a
-    // stand-in mesh in a scene with the same (absent) lights and fog
-    const warm = new Scene();
-    const stand = new Mesh(new PlaneGeometry(1, 1), this.material);
-    warm.add(stand);
-    // with the capture target bound, so the program key (tone mapping, output
-    // colour space) matches the real capture and is not compiled a second time
-    const prev = renderer.getRenderTarget();
-    renderer.setRenderTarget(this.rt);
-    let warming: Promise<unknown>;
-    try {
-      warming = renderer.compileAsync(warm, this.camera);
-    } finally {
-      renderer.setRenderTarget(prev);
-    }
-    warming
-      .catch(e => log.warn('surface program warm-up failed; compiling on first capture', e))
-      .finally(() => {
-        stand.geometry.dispose();
-        this.compiled = true;
-      });
-  }
-
-  private makeTarget(format: typeof RedFormat | typeof RGBAFormat): WebGLRenderTarget {
-    const res = this.field.res;
-    return new WebGLRenderTarget(res, res, {
-      type: FloatType, format, minFilter: NearestFilter, magFilter: NearestFilter,
-      generateMipmaps: false, depthBuffer: true, stencilBuffer: false
-    });
+    this.core = new TopDownCapture(renderer, field.res, SURF_ENCODE_OFFSET, 'surface');
   }
 
   /**
@@ -152,14 +75,14 @@ export class SurfaceCapture {
 
   /** Call every frame with the player's position: advances processing, starts a capture when due. */
   update(nowMs: number, px: number, pz: number, budgetMs = 1.5): void {
-    if (this.disposed || !this.compiled) return;
+    if (this.disposed || !this.core.compiled) return;
     const f = this.field;
     if (f.processing) {
       if (f.step(budgetMs)) this.timings.processMs = f.lastProcessMs;
       return;
     }
     if (!shouldRecapture({
-      nowMs, lastCaptureMs: this.lastCaptureMs, hasCapture: f.hasCapture, busy: this.inFlight,
+      nowMs, lastCaptureMs: this.lastCaptureMs, hasCapture: f.hasCapture, busy: this.core.inFlight,
       centerX: f.centerX, centerZ: f.centerZ, playerX: px, playerZ: pz,
       extentM: f.extentM, dirty: this.dirty
     })) return;
@@ -174,113 +97,27 @@ export class SurfaceCapture {
   }
 
   private capture(group: Object3D, cx: number, cz: number): void {
-    const r = this.renderer;
     const t0 = performance.now();
     const half = this.field.extentM / 2;
     const { lo, hi } = baseRange(this.base(), cx, cz, half);
-    const top = hi + CAMERA_HEADROOM_M;
-    const cam = this.camera;
-    cam.left = half; cam.right = -half; cam.top = half; cam.bottom = -half;
-    cam.near = 0.5;
-    cam.far = top - lo + FLOOR_MARGIN_M;
-    cam.position.set(cx, top, cz);
-    cam.lookAt(cx, lo - FLOOR_MARGIN_M, cz);
-    cam.updateProjectionMatrix();
-    cam.updateMatrixWorld();
-
-    const parent = group.parent;
-    const visible = group.visible;
-    const prevTarget = r.getRenderTarget();
-    r.getClearColor(this.prevClear);
-    const prevAlpha = r.getClearAlpha();
-    const prevAutoClear = r.autoClear;
-    try {
-      this.scene.add(group);
-      group.visible = true;
-      r.setRenderTarget(this.rt);
-      r.setClearColor(0x000000, 0);
-      r.autoClear = false;
-      r.clear(true, true, false);
-      r.render(this.scene, cam);
-    } finally {
-      this.scene.remove(group);
-      if (parent) parent.add(group);
-      group.visible = visible;
-      r.setRenderTarget(prevTarget);
-      r.setClearColor(this.prevClear, prevAlpha);
-      r.autoClear = prevAutoClear;
-    }
+    this.core.render(group, cx, cz, half, hi + CAMERA_HEADROOM_M, lo - TOPDOWN_FLOOR_MARGIN_M);
     const t1 = performance.now();
     this.timings.renderMs = t1 - t0;
     this.timings.captures++;
-    this.readback(cx, cz, t1);
-  }
-
-  private readback(cx: number, cz: number, t1: number): void {
-    const res = this.field.res;
-    const dst = this.rgba ?? this.field.readBuffer;
     const gen = this.generation;
-    const done = (): void => {
-      this.inFlight = false;
+    this.core.readback(this.field.readBuffer, () => {
       if (this.disposed || gen !== this.generation) return;
-      const t2 = performance.now();
-      if (this.rgba) {
-        const out = this.field.readBuffer, src = this.rgba;
-        for (let k = 0; k < out.length; k++) out[k] = src[k * 4]!;
-      }
-      this.timings.readbackMs = t2 - t1;
+      this.timings.readbackMs = performance.now() - t1;
       this.field.beginProcess(cx, cz);
-    };
-    if (!this.asyncBroken) {
-      this.inFlight = true;
-      // r169 checks IMPLEMENTATION_COLOR_READ_FORMAT before binding the target,
-      // so it asks about whatever framebuffer is bound (the canvas: RGBA) and
-      // refuses R32F. Binding ours first makes it ask about the right one; the
-      // check runs synchronously, before the method's first await.
-      const prev = this.renderer.getRenderTarget();
-      this.renderer.setRenderTarget(this.rt);
-      let pending: Promise<unknown>;
-      try {
-        pending = this.renderer.readRenderTargetPixelsAsync(this.rt, 0, 0, res, res, dst);
-      } finally {
-        this.renderer.setRenderTarget(prev);
-      }
-      pending
-        .then(done)
-        .catch(e => {
-          this.inFlight = false;
-          this.asyncBroken = true;
-          this.fallBack(e);
-        });
-      return;
-    }
-    // last resort: a synchronous read stalls the frame on the GPU
-    this.renderer.readRenderTargetPixels(this.rt, 0, 0, res, res, dst);
-    done();
-  }
-
-  /**
-   * The async read refused this format (a driver whose implementation read
-   * format for R32F is not RED): switch to an RGBA float target, which every
-   * WebGL2 implementation must read, and retry on the next capture.
-   */
-  private fallBack(e: unknown): void {
-    if (this.rgba) {
-      log.warn('async surface readback unavailable; using a synchronous read (frame stalls)', e);
-      return;
-    }
-    log.warn('R32F surface readback refused; retrying with an RGBA float target', e);
-    this.rt.dispose();
-    this.rt = this.makeTarget(RGBAFormat);
-    this.rgba = new Float32Array(this.field.res * this.field.res * 4);
-    this.asyncBroken = false;
-    this.lastCaptureMs = -Infinity;
+    }, () => {
+      // the target was swapped for an RGBA one: capture again at the next allowed moment
+      if (!this.disposed && gen === this.generation) this.lastCaptureMs = -Infinity;
+    });
   }
 
   dispose(): void {
     this.disposed = true;
-    this.rt.dispose();
-    this.material.dispose();
+    this.core.dispose();
   }
 }
 
