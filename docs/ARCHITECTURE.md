@@ -716,17 +716,24 @@ that is still the lobby's procedural desert, so every base was a dune and
 178a21a). Classifier gap cells stay as they
 are, since they exist because the mesh rose there.
 
-Height field (cutout, stage 1; design `docs/plans/2026-10-08-cutout-per-texel-heights.md`):
-`render/HeightCapture.ts` renders the fine tiles (geometric error up to 8 m) top-down through
-`render/TopDownCapture.ts` (the core True Surface shares) into 900 m chunks of a fixed 4x4 lattice over
-the 3600 m stencil square from x,z = -1800, 1 m texels, one chunk per frame at most, only after a
-chunk's tiles were quiet for 1 s (`TileStreamer.dirtyRect`, `forEachTile`). The chunk goes, transferred,
-to the cutout worker, where `services/overture/heightField.ts` keeps one byte per texel: bits 0-5 rise
-above the 10 m terrain (0-15.5 m in 0.5 m steps, 16-61 m in 1.5 m steps, 63 unknown), bit 6 rough (not
-planar along both x and z: |y(i-1)+y(i+1)-2y(i)| >= 1 m, an unkept neighbour counting as not planar; canopy,
-not roofs), bit 7 kept (on at 3 m x relief, off below half of it). Unknown texels are NaN on the wire and keep their byte. Measured and recorded only, behind
-`?cutoutDebug=1` (`__cutoutStats().heights`, `await __cutoutHeightAt(x, z)`): no stencil, wall or
-collider reads it. Stage 2, the consumers (`polygonRoofCaps`, `fillPolygon`, gap cells), is pending.
+Height field (cutout; design `docs/plans/2026-10-08-cutout-per-texel-heights.md`): while the view cuts to
+footprints, `render/HeightCapture.ts` renders the fine tiles (geometric error up to 8 m) top-down through
+`render/TopDownCapture.ts` into 900 m chunks of a fixed 4x4 lattice over the 3600 m stencil square (1 m texels,
+from -1800), one per frame at most, once a chunk's tiles were quiet for 1 s (`render/heightSchedule.ts`). Each
+chunk goes, transferred, to the cutout worker, where `services/overture/heightField.ts` keeps one byte per
+texel: bits 0-5 rise over the 10 m terrain (0-15.5 m in 0.5 m steps, 16-61 m in 1.5 m steps, 63 unknown), bit 6
+rough (|y(i-1)+y(i+1)-2y(i)| >= 1 m along both x and z, an unkept neighbour counting as not planar: canopy, not
+roofs), bit 7 kept (on at 3 m x relief, off below half; unknown keeps the last decision). The builder gets the
+field by reference and reads it three ways. Drop: a footprint with at least half its texels measured and fewer
+than 20 kept ones is dropped (cap 0); otherwise its cap is the highest kept world Y plus the margin, and below
+half measured the old 10 m classifier rule stands. Fill: texels measured not-kept are skipped (unmeasured fill as
+before) after a 3x3 open-then-close, so a pole is shed and a stair-step closed; rough is ignored inside a polygon.
+Growth: one multi-source flood on the filled raster, before dilation, enters unfilled kept non-rough texels whose
+rise is at most the parent's cap, at most 8 layers (`CUTOUT_GROW_M`, off at a 2 m texel), taking the parent's
+cap (the higher where fronts meet) and counting `grown` / `grownTruncated`; gap cells paint only kept non-rough
+texels where the field is measured. Collider rule unchanged: `core` (grown texels included) is walled, `mask` is
+`dilate(core)`. A chunk that flips a kept or rough bit bumps the input digest's keep version and requests a rebuild
+on the usual 2 s cadence. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
 
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
 building when its TALLEST geometry rises 3.5 m above the ground estimate, so

@@ -120,6 +120,11 @@ for (const name of PLACES) {
     return { stats: window.__cutoutStats?.(), landings: window.__cutoutLandings().length, segments: segs ? segs.length / 6 : null, bySource };
   });
   console.log('stats', JSON.stringify(snap.stats));
+  // the height field's work in this build: is the 8 m growth bound short (grownTruncated), how much canopy was refused
+  const st = snap.stats ?? {};
+  console.log('height field', JSON.stringify({
+    droppedByField: st.droppedByField, grown: st.grown, grownTruncated: st.grownTruncated, rough: st.rough, heights: st.heights
+  }));
   console.log('landings', snap.landings, 'segments', snap.segments, 'by source byte', JSON.stringify(snap.bySource));
 
   // Pioneer Courthouse Square: world x = east, z = south, metres from the load point (llToWorld in
