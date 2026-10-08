@@ -48,6 +48,25 @@ export const SURF_RECAPTURE_MS = 1000;
 export const SURF_ENCODE_OFFSET = 1024;
 
 /** True where (x, z) is an OSM road cell. */
+/**
+ * Whether the wheels ride the captured surface. 'hidden': the player switched
+ * it on but the view mode does not show the photogrammetry, so the wheels keep
+ * the base ground rather than ride kerbs nobody can see, and capture pauses.
+ */
+export type SurfaceGate = 'off' | 'client' | 'hidden' | 'active';
+
+export function surfaceGate(s: {
+  readonly on: boolean;
+  readonly hasTiles: boolean;
+  readonly onlineClient: boolean;
+  /** The view mode's showsTiles trait. */
+  readonly showsTiles: boolean;
+}): SurfaceGate {
+  if (s.onlineClient) return 'client';
+  if (!s.on || !s.hasTiles) return 'off';
+  return s.showsTiles ? 'active' : 'hidden';
+}
+
 export type RoadLookup = (x: number, z: number) => boolean;
 
 export interface SurfaceOptions {

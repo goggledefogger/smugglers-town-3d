@@ -205,8 +205,7 @@ visuals alone and gives the wheels a 1 m surface captured from the GPU:
   car (~1.5 m) does not. A wall, roof or canopy texel sits metres above the
   base and is rejected too, so this mode never
   creates a wall: walls stay the job of the box colliders, and which streets
-  are drivable does not change (box colliders, or the footprint walls in the
-  prism modes). On OSM road cells the delta is also capped at
+  are drivable does not change. On OSM road cells the delta is also capped at
   +0.5 m, so an awning or tree over a street is never a ramp. The delta is
   box-blurred 3×3 and faded to 0 over the last 16 m of the window; processing
   runs in 1.5 ms slices into a second buffer that is swapped in whole.
@@ -238,9 +237,11 @@ Known limits: under a bridge or canopy the low deck is lost inside the band
 streaming the capture is of coarse tiles until the next recapture; a ramp or
 grade change that rises more than 0.6 m above the 10 m base inside one base
 cell is cut back to the base; the +0.5 m road cap also clips real road surface where the 10 m base sits low
-(parking aisles); in the view modes that hide the tiles (painted, footprint,
-vector city, arcade) the wheels still ride the photogrammetry nobody sees, and
-in the prism modes they do so between footprint walls rather than boxes.
+(parking aisles). The wheels never ride a surface the player cannot see: in
+the view modes whose `showsTiles` trait is false (painted, footprint, vector
+city, arcade) the toggle stays on but the wheels keep the base ground, capture
+pauses, and the button reads "TRUE 1M (HIDDEN VIEW)" (`surfaceGate`). Online
+that is the host's view mode, since the host's physics is everyone's.
 
 ### `core/physics/collision.ts`
 Collision shapes, kept separate from render meshes and deliberately simple.

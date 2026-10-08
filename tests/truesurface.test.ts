@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Heightfield } from '../src/core/heightfield.ts';
 import {
-  SurfaceHeightfield, shouldRecapture, SURF_ENCODE_OFFSET, SURF_RECAPTURE_MS, type RecaptureState
+  SurfaceHeightfield, shouldRecapture, SURF_ENCODE_OFFSET, SURF_RECAPTURE_MS, surfaceGate, type RecaptureState
 } from '../src/core/terrain/SurfaceHeightfield.ts';
 import { Bindings, HOTKEY_ACTIONS } from '../src/input/bindings.ts';
 
@@ -121,5 +121,18 @@ describe('surfaceMode hotkey', () => {
     } finally {
       (globalThis as any).localStorage = prev;
     }
+  });
+});
+
+describe('surfaceGate', () => {
+  const on = { on: true, hasTiles: true, onlineClient: false, showsTiles: true };
+  it('rides the capture only in a view that shows the tiles', () => {
+    expect(surfaceGate(on)).toBe('active');
+    expect(surfaceGate({ ...on, showsTiles: false })).toBe('hidden');
+  });
+  it('is off when switched off or without tiles, and a client never decides', () => {
+    expect(surfaceGate({ ...on, on: false })).toBe('off');
+    expect(surfaceGate({ ...on, hasTiles: false, showsTiles: false })).toBe('off');
+    expect(surfaceGate({ ...on, onlineClient: true })).toBe('client');
   });
 });

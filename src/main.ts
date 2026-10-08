@@ -50,7 +50,7 @@ import {
   type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
   loadResolution3D, saveResolution3D
 } from './services/tiles/resolutionProfiles.ts';
-import { SurfaceHeightfield } from './core/terrain/SurfaceHeightfield.ts';
+import { SurfaceHeightfield, surfaceGate, type SurfaceGate } from './core/terrain/SurfaceHeightfield.ts';
 import { SurfaceCapture, SurfacePreview } from './render/SurfaceCapture.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
@@ -279,8 +279,9 @@ clutterBtn?.addEventListener('click', cycleClutterMode);
 // Off by default; ?surface=1 starts with it on. Only the sim's owner may turn
 // it on: online that is the host, and a client only shows the host decides.
 let surfaceOn = new URLSearchParams(window.location.search).get('surface') === '1';
-/** The wheels are on the composite right now (on, tiles loaded, and this browser owns the sim). */
+/** The wheels are on the composite right now (on, tiles loaded, tiles on screen, and this browser owns the sim). */
 let surfaceActive = false;
+let surfaceState: SurfaceGate = 'off';
 // made once and kept: switching the mode back on, or relocating, then costs no shader compile
 let surfaceField: SurfaceHeightfield | null = null;
 let surfaceCapture: SurfaceCapture | null = null;
@@ -297,9 +298,12 @@ function isOnlineClient(): boolean {
 function updateSurfaceUi(): void {
   if (!surfaceBtn || !surfaceText) return;
   surfaceBtn.hidden = !tiles;
-  const client = isOnlineClient();
-  surfaceBtn.classList.toggle('active', surfaceActive);
-  surfaceText.textContent = client ? 'SURFACE: HOST DECIDES' : surfaceActive ? 'SURFACE: TRUE 1M' : 'SURFACE: OFF';
+  const client = surfaceState === 'client';
+  surfaceBtn.classList.toggle('active', surfaceState === 'active' || surfaceState === 'hidden');
+  surfaceText.textContent = client ? 'SURFACE: HOST DECIDES'
+    : surfaceState === 'active' ? 'SURFACE: TRUE 1M'
+    : surfaceState === 'hidden' ? 'SURFACE: TRUE 1M (HIDDEN VIEW)'
+    : 'SURFACE: OFF';
 }
 
 /** Wheels back on the base ground; the capture is forgotten but its GPU objects kept. */
@@ -312,7 +316,11 @@ function deactivateSurface(): void {
 
 /** Bring the composite in line with surfaceOn, the loaded tiles and the current game. Idempotent. */
 function applySurface(): void {
-  if (!surfaceOn || !tiles || isOnlineClient()) {
+  surfaceState = surfaceGate({
+    on: surfaceOn, hasTiles: !!tiles, onlineClient: isOnlineClient(), showsTiles: traits(viewMode).showsTiles
+  });
+  if (surfaceState !== 'active' || !tiles) {
+    // off, a client, or a view that hides the tiles: base ground, capture paused
     deactivateSurface();
     updateSurfaceUi();
     return;
@@ -342,6 +350,7 @@ function toggleSurfaceMode(): void {
   surfaceOn = !surfaceOn;
   applySurface();
   if (!tiles) showToast(`True Surface ${surfaceOn ? 'armed' : 'off'}: it needs a real place with 3D tiles`);
+  else if (surfaceState === 'hidden') showToast('True Surface on, paused: this view hides the 3D tiles, so the wheels keep the 10 m grid');
   else showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface' : 'True Surface off: 10 m ground grid');
 }
 
@@ -478,6 +487,8 @@ function setViewMode(mode: ViewMode): void {
   renderer.setLightRig((hasTiles || traits(mode).paintsWalls || mode === 'vector-city') && world.terrainProvider.isReal ? 'photo' : 'arcade');
   // what the car hits follows what it sees: the outline walls in a prism mode, the boxes elsewhere
   if (isFootprint !== physicsOnWalls) applyTileColliders(lastTileBoxes);
+  // the wheels ride the captured surface only in a view that shows it
+  applySurface();
   updateViewModeUi();
 }
 
