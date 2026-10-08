@@ -96,6 +96,10 @@ export class SurfaceCapture {
     // world x and z ascending along the buffer's columns and rows: camera-local
     // +x is world -x with up = +z, so the projection's left/right swap back
     this.camera.up.set(0, 0, 1);
+    // the tiles draw on their own layer (main.ts sets layer 1 and the view
+    // modes switch it on and off on the main camera); this camera sees every
+    // layer, since its scene only ever holds the tile group
+    this.camera.layers.enableAll();
     // compile the capture program in the background: compiled on first use it
     // cost a ~0.5 s frame. compile() ignores overrideMaterial, so warm it on a
     // stand-in mesh in a scene with the same (absent) lights and fog

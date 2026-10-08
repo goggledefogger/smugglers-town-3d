@@ -26,9 +26,11 @@ page.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 page.on('console', m => { if (/surface/i.test(m.text())) console.log('[game]', m.text().slice(0, 200)); });
 
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
-await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
+await page.evaluate(k => { localStorage.setItem('gmap_key', k); localStorage.setItem('smugglers_audio_muted', 'true'); }, key);
 await page.goto(`${BASE}/?debug&lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
+// a deep link relocates into the garage backdrop; START ENGINE spawns the match
+await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });
 await page.waitForTimeout(8000);
 

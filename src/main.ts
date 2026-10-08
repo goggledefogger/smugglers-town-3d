@@ -1440,6 +1440,8 @@ function step(now: number): void {
       // read before the collider refresh below clears it: new tiles mean a new surface
       if (tiles.collidersDirty) surfaceCapture.markDirty();
       surfaceCapture.update(now, player.pos.x, player.pos.z);
+      // its own lap, so a slow-frame line names the capture rather than 'world'
+      profiler.lap('surface');
     }
     if (tiles && player) {
       tiles.update(player.pos, now);
