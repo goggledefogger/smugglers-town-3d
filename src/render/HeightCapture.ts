@@ -19,6 +19,7 @@ import { Box3, type Group, type Object3D, type WebGLRenderer } from 'three';
 import type { HeightSampler } from '../core/heightfield.ts';
 import { TopDownCapture, TOPDOWN_FLOOR_MARGIN_M } from './TopDownCapture.ts';
 import { baseRange } from './SurfaceCapture.ts';
+import { ChunkSchedule, type DirtyRect } from './heightSchedule.ts';
 import { HEIGHT_CHUNKS, HEIGHT_CHUNK_M, HEIGHT_ORIGIN } from '../services/overture/heightField.ts';
 
 /** Tiles with a geometric error above this are hidden for the capture (Tileset.ts RASTER_MAX_ERROR_M). */
@@ -33,7 +34,9 @@ const CAMERA_HEADROOM_M = 600;
 export interface HeightSource {
   readonly group: Group;
   forEachTile(cb: (group: Group, geometricError: number) => void): void;
-  takeDirtyRect(): { minX: number; maxX: number; minZ: number; maxZ: number } | null;
+  takeDirtyRect(): DirtyRect | null;
+  /** Set by the capture: until then the streamer need not measure a box per tile change. */
+  trackDirty: boolean;
 }
 
 export interface HeightTimings {
@@ -49,12 +52,9 @@ const _box = new Box3();
 
 export class HeightCapture {
   private readonly core: TopDownCapture;
-  private readonly changedAt = new Float64Array(HEIGHT_CHUNKS * HEIGHT_CHUNKS).fill(-Infinity);
-  private readonly dirty = new Uint8Array(HEIGHT_CHUNKS * HEIGHT_CHUNKS);
+  private readonly schedule = new ChunkSchedule(HEIGHT_SETTLE_MS);
   /** chunks delivered at least once */
   private readonly delivered = new Uint8Array(HEIGHT_CHUNKS * HEIGHT_CHUNKS);
-  private allPending = true;
-  private generation = 0;
   private disposed = false;
   readonly timings: HeightTimings = { renderMs: 0, readbackMs: 0, captured: 0 };
 
@@ -78,18 +78,13 @@ export class HeightCapture {
 
   /** A new tileset or world: everything measured so far is void, and the next active update re-measures. */
   reset(): void {
-    this.generation++;
-    this.changedAt.fill(-Infinity);
-    this.dirty.fill(0);
+    this.schedule.reset();
     this.delivered.fill(0);
-    this.allPending = true;
   }
 
   /** Mark every chunk dirty at `nowMs` (the settle clock starts now). */
   markAllDirty(nowMs: number): void {
-    this.dirty.fill(1);
-    this.changedAt.fill(nowMs);
-    this.allPending = false;
+    this.schedule.markAll(nowMs);
   }
 
   /** Call every frame. `active`: the view cuts to footprints. Submits at most one chunk. */
@@ -97,31 +92,14 @@ export class HeightCapture {
     if (this.disposed || !active || !this.core.compiled) return;
     const src = this.source();
     if (!src) return;
-    if (this.allPending) this.markAllDirty(nowMs);
+    src.trackDirty = true;
+    if (this.schedule.allPending) this.schedule.markAll(nowMs);
     const r = src.takeDirtyRect();
-    if (r) this.markRect(r, nowMs);
-    if (this.core.inFlight) return;
-    let pick = -1;
-    for (let c = 0; c < this.dirty.length; c++) {
-      if (!this.dirty[c] || nowMs - this.changedAt[c]! < HEIGHT_SETTLE_MS) continue;
-      if (pick < 0 || this.changedAt[c]! < this.changedAt[pick]!) pick = c;
-    }
+    if (r) this.schedule.markRect(r, nowMs);
+    const pick = this.schedule.take(nowMs, this.core.inFlight);
     if (pick < 0) return;
-    this.dirty[pick] = 0;
     if (!this.holdsFineTile(src, pick)) return;
     this.capture(src, pick);
-  }
-
-  private markRect(r: { minX: number; maxX: number; minZ: number; maxZ: number }, nowMs: number): void {
-    const m = HEIGHT_CHUNK_M, n = HEIGHT_CHUNKS;
-    const lo = (v: number): number => Math.max(0, Math.floor((v - HEIGHT_ORIGIN) / m));
-    const hi = (v: number): number => Math.min(n - 1, Math.floor((v - HEIGHT_ORIGIN) / m));
-    for (let cj = lo(r.minZ); cj <= hi(r.maxZ); cj++) {
-      for (let ci = lo(r.minX); ci <= hi(r.maxX); ci++) {
-        this.dirty[cj * n + ci] = 1;
-        this.changedAt[cj * n + ci] = nowMs;
-      }
-    }
   }
 
   private holdsFineTile(src: HeightSource, chunk: number): boolean {
@@ -156,10 +134,10 @@ export class HeightCapture {
     }
     const t1 = performance.now();
     this.timings.renderMs = t1 - t0;
-    const gen = this.generation;
+    const gen = this.schedule.generation;
     const data = new Float32Array(m * m);
     this.core.readback(data, () => {
-      if (this.disposed || gen !== this.generation) return;
+      if (this.disposed || !this.schedule.isCurrent(gen)) return;
       this.timings.readbackMs = performance.now() - t1;
       this.timings.captured++;
       // decode in place: 0 (cleared, no tile drew) -> NaN, else world Y
@@ -171,9 +149,8 @@ export class HeightCapture {
       this.onChunk(chunk, data);
     }, () => {
       // the target was swapped for an RGBA one: this chunk again, now
-      if (this.disposed || gen !== this.generation) return;
-      this.dirty[chunk] = 1;
-      this.changedAt[chunk] = -Infinity;
+      if (this.disposed || !this.schedule.isCurrent(gen)) return;
+      this.schedule.requeue(chunk);
     });
   }
 

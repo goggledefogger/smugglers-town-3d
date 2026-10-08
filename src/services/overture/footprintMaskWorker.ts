@@ -33,6 +33,8 @@ export type HeightMessage =
 
 export type HeightReply =
   | ({ readonly kind: 'heightsApplied'; readonly chunk: number } & HeightChunkStats)
+  /** a heights or terrain message threw (a bad chunk size, say): the field is as it was; this is not a stencil job */
+  | { readonly kind: 'heightsError'; readonly message: string }
   | { readonly kind: 'heightAtResult'; readonly req: number; readonly rise: number; readonly state: HeightState; readonly chunk: number };
 
 export type FootprintMaskResult =
@@ -51,17 +53,21 @@ let heightTerrain: HeightTerrain | null = null;
 ctx.onmessage = e => {
   const m = e.data;
   if ('kind' in m) {
-    if (m.kind === 'terrain') {
-      heightTerrain = m.terrain;
-      heightField = createHeightField();
-    } else if (m.kind === 'heights') {
-      if (!heightField || !heightTerrain) return;
-      const stats = applyHeightChunk(heightField, m.chunk, m.data, heightTerrain, m.keepRiseM);
-      ctx.postMessage({ kind: 'heightsApplied', chunk: m.chunk, ...stats });
-    } else if (heightField) {
-      ctx.postMessage({ kind: 'heightAtResult', req: m.req, ...heightAt(heightField, m.x, m.z) });
-    } else {
-      ctx.postMessage({ kind: 'heightAtResult', req: m.req, rise: NaN, state: 'never', chunk: chunkAt(m.x, m.z) });
+    try {
+      if (m.kind === 'terrain') {
+        heightTerrain = m.terrain;
+        heightField = createHeightField();
+      } else if (m.kind === 'heights') {
+        if (!heightField || !heightTerrain) return;
+        const stats = applyHeightChunk(heightField, m.chunk, m.data, heightTerrain, m.keepRiseM);
+        ctx.postMessage({ kind: 'heightsApplied', chunk: m.chunk, ...stats });
+      } else if (heightField) {
+        ctx.postMessage({ kind: 'heightAtResult', req: m.req, ...heightAt(heightField, m.x, m.z) });
+      } else {
+        ctx.postMessage({ kind: 'heightAtResult', req: m.req, rise: NaN, state: 'never', chunk: chunkAt(m.x, m.z) });
+      }
+    } catch (err) {
+      ctx.postMessage({ kind: 'heightsError', message: String(err) });
     }
     return;
   }

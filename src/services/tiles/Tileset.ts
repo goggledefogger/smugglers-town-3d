@@ -482,6 +482,8 @@ export class TileStreamer {
    * field) re-measures only what changed. Null when nothing has.
    */
   dirtyRect: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
+  /** `dirtyRect` is only kept while a consumer (HeightCapture) has set this: every add/remove/refine measures a box. */
+  trackDirty = false;
 
   /** The accumulated `dirtyRect`, cleared. */
   takeDirtyRect(): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
@@ -496,6 +498,7 @@ export class TileStreamer {
   }
 
   private widenDirty(g: Group): void {
+    if (!this.trackDirty) return;
     const b = _dirtyBox.setFromObject(g);
     if (b.isEmpty()) return;
     const r = this.dirtyRect;

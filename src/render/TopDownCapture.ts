@@ -18,8 +18,6 @@ import {
 } from 'three';
 import { logger } from '../app/log.ts';
 
-const log = logger('topdown');
-
 /** Below the lowest base ground: the depth range must reach under a sunken street. */
 export const TOPDOWN_FLOOR_MARGIN_M = 60;
 
@@ -47,6 +45,8 @@ export class TopDownCapture {
   private readonly prevClear = new Color();
   private asyncBroken = false;
   private disposed = false;
+  /** Tagged by the caller's label, so True Surface still logs as 'surface' and the heights as 'height'. */
+  private readonly log: ReturnType<typeof logger>;
   /** False until the capture program has compiled off the frame (compileAsync). */
   compiled = false;
   /** A readback is outstanding. */
@@ -62,8 +62,9 @@ export class TopDownCapture {
     private readonly renderer: WebGLRenderer,
     readonly res: number,
     encodeOffset: number,
-    private readonly label = 'surface'
+    label = 'surface'
   ) {
+    this.log = logger(label);
     this.material = new ShaderMaterial({
       vertexShader: VERT,
       fragmentShader: FRAG,
@@ -100,7 +101,7 @@ export class TopDownCapture {
       renderer.setRenderTarget(prev);
     }
     warming
-      .catch(e => log.warn(`${this.label} program warm-up failed; compiling on first capture`, e))
+      .catch(e => this.log.warn('program warm-up failed; compiling on first capture', e))
       .finally(() => {
         stand.geometry.dispose();
         this.compiled = true;
@@ -205,11 +206,13 @@ export class TopDownCapture {
    * WebGL2 implementation must read. True when the target was swapped (retry).
    */
   private fallBack(e: unknown): boolean {
+    // a readback that fails after dispose() must not allocate a new target nobody will free
+    if (this.disposed) return false;
     if (this.rgba) {
-      log.warn(`async ${this.label} readback unavailable; using a synchronous read (frame stalls)`, e);
+      this.log.warn('async readback unavailable; using a synchronous read (frame stalls)', e);
       return false;
     }
-    log.warn(`R32F ${this.label} readback refused; retrying with an RGBA float target`, e);
+    this.log.warn('R32F readback refused; retrying with an RGBA float target', e);
     this.rt.dispose();
     this.rt = this.makeTarget(RGBAFormat);
     this.rgba = new Float32Array(this.res * this.res * 4);

@@ -100,8 +100,9 @@ export function applyHeightChunk(
       const at = row + i;
       const y = worldY[j * m + i]!;
       let b = f[at]!;
-      if (Number.isFinite(y)) {
-        const rise = y - sampleTerrain(terrain, x0 + i + 0.5, z0 + j + 0.5);
+      const rise = Number.isFinite(y) ? y - sampleTerrain(terrain, x0 + i + 0.5, z0 + j + 0.5) : NaN;
+      // a NaN terrain node makes the rise NaN: that is unknown, never a rise of 0
+      if (Number.isFinite(rise)) {
         const was = b & KEPT_BIT;
         let keep = was;
         if (rise >= keepRiseM) keep = KEPT_BIT;

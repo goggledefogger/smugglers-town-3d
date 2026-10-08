@@ -940,6 +940,10 @@ function heightStats(): { chunks: number; captured: number; renderMs: number; re
 }
 
 function onHeightReply(r: HeightReply): void {
+  if (r.kind === 'heightsError') {
+    log.warn('cutout height field message failed', r.message);
+    return;
+  }
   if (r.kind === 'heightsApplied') {
     heightChunkStats.set(r.chunk, { known: r.known, kept: r.kept, changed: r.changed });
     return;
@@ -1929,6 +1933,8 @@ function step(now: number): void {
         roadRibbons.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
         if (groundStreamer) groundStreamer.refresh();
         surfaceCapture?.markDirty();
+        // the worker's terrain is a copy of the ground just overwritten: send it again and re-measure
+        heightsTerrainSent = null;
         groundBuilder = null;
       }
     }

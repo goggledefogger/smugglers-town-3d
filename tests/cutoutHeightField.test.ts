@@ -108,4 +108,40 @@ describe('height field', () => {
     applyHeightChunk(f, 0, chunkOf(2.5), flat(0), 6);
     expect(f.data[0]! & KEPT_BIT).toBe(0);
   });
+
+  it('samples terrain at and beyond the +-1800 edge by clamping to the edge nodes', () => {
+    const segs = 360, w = segs + 1, data = new Float32Array(w * w);
+    for (let j = 0; j < w; j++) for (let i = 0; i < w; i++) data[j * w + i] = i * 0.1 + j * 0.01;
+    const t: HeightTerrain = { size: 3600, segs, data };
+    expect(sampleTerrain(t, -1800, -1800)).toBeCloseTo(0, 5);
+    expect(sampleTerrain(t, 1800, 1800)).toBeCloseTo(360 * 0.1 + 360 * 0.01, 4);
+    expect(sampleTerrain(t, -5000, -5000)).toBeCloseTo(0, 5);
+    expect(sampleTerrain(t, 5000, 1800)).toBeCloseTo(360 * 0.1 + 360 * 0.01, 4);
+    expect(sampleTerrain(t, 1799.9, 0)).toBeCloseTo(sampleTerrain(t, 1800, 0), 1);
+  });
+
+  it('measures the last texels of the square against the edge terrain', () => {
+    const segs = 360, w = segs + 1, data = new Float32Array(w * w);
+    for (let j = 0; j < w; j++) for (let i = 0; i < w; i++) data[j * w + i] = 2;
+    const terrain: HeightTerrain = { size: 3600, segs, data };
+    const f = createHeightField();
+    applyHeightChunk(f, 15, chunkOf(10), terrain, KEEP);
+    expect(riseAt(f, HEIGHT_N - 1, HEIGHT_N - 1)).toBe(8);
+    expect(riseAt(f, HEIGHT_N - M, HEIGHT_N - M)).toBe(8);
+  });
+
+  it('stores unknown, not a rise of 0, where the terrain is NaN', () => {
+    const segs = 360, w = segs + 1, data = new Float32Array(w * w).fill(NaN);
+    const f = createHeightField();
+    const st = applyHeightChunk(f, 0, chunkOf(5), { size: 3600, segs, data }, KEEP);
+    expect(Number.isNaN(riseAt(f, 0, 0))).toBe(true);
+    expect(f.data[0]).toBe(RISE_UNKNOWN);
+    expect(st.known).toBe(0);
+    expect(st.kept).toBe(0);
+    // and a NaN terrain does not erase a texel that was measured
+    applyHeightChunk(f, 0, chunkOf(5), flat(0), KEEP);
+    applyHeightChunk(f, 0, chunkOf(5), { size: 3600, segs, data }, KEEP);
+    expect(riseAt(f, 0, 0)).toBe(5);
+    expect(f.data[0]! & KEPT_BIT).toBe(KEPT_BIT);
+  });
 });
