@@ -3,10 +3,15 @@ import { RGFormat } from 'three';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilter.ts';
 import {
-  footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells,
+  footprintMask1m, type FootprintMaskOptions, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells,
   CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE, encodeRoofCap, decodeRoofCap, ROOF_NO_CAP, roofCapAt,
-  footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest, requireRoofed, fallbackCarBoxes, CELL_UNROOFED, ROOF_MIN_M
+  footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest, requireRoofed, fallbackCarBoxes, CELL_UNROOFED, ROOF_MIN_M,
+  footprintMaskLayers, polygonRoofCapsDetailed, type HeightsView
 } from '../src/services/overture/footprintMask.ts';
+import {
+  createHeightField, applyHeightChunk, encodeRise, KEPT_BIT, ROUGH_BIT, HEIGHT_ORIGIN, HEIGHT_N, HEIGHT_CHUNK_M,
+  type HeightField, type HeightTerrain
+} from '../src/services/overture/heightField.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
 import { traceStencil, SEG_STRIDE, SEG_SRC_OVERTURE, SEG_SRC_GAP, SEG_SRC_UNKNOWN } from '../src/services/overture/stencilTrace.ts';
 import { debugLines, DEBUG_COLOURS } from '../src/render/CutoutDebugOverlay.ts';
@@ -17,6 +22,25 @@ import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/rende
 /** closed square ring, world x,z */
 const square = (x0: number, z0: number, x1: number, z1: number) => [x0, z0, x1, z0, x1, z1, x0, z1, x0, z0];
 const count = (d: Uint8Array) => d.reduce((a, v) => a + (v ? 1 : 0), 0);
+
+// ---- height field fixtures: bytes written directly, world x,z in whole metres, the field's lattice from -1800 ----
+const flatTerrain = (h = 0): HeightTerrain => ({ size: 3600, segs: 360, data: new Float32Array(361 * 361).fill(h) });
+/** a field measured everywhere as flat ground (known, not kept) */
+const groundField = (): HeightField => {
+  const f = createHeightField();
+  f.data.fill(encodeRise(0));
+  return f;
+};
+/** rise `riseM` (kept unless `flags` says otherwise) over world x in [x0, x1), z in [z0, z1) */
+const setBox = (f: HeightField, x0: number, x1: number, z0: number, z1: number, riseM: number, flags = KEPT_BIT): void => {
+  for (let z = z0; z < z1; z++) for (let x = x0; x < x1; x++) f.data[(z - HEIGHT_ORIGIN) * HEIGHT_N + (x - HEIGHT_ORIGIN)] = encodeRise(riseM) | flags;
+};
+/** texels (channel 0) set in a mask */
+const countOn = (m: { data: Uint8Array; channels: number }): number => {
+  let c = 0;
+  for (let k = 0; k < m.data.length; k += m.channels) if (m.data[k]) c++;
+  return c;
+};
 
 describe('footprintMask1m', () => {
   // 64 m mask at 1 m, centred on the origin: texel i covers x in [-32 + i, -31 + i)
@@ -280,6 +304,18 @@ describe('roof cap', () => {
     // a footprint too small to hold a cell centre reads the cell under its box centre
     const small = packFootprints([{ ring: square(11, 1, 14, 4), holes: [] }]);
     expect(polygonRoofCaps(small, { base: Float32Array.from([5]), overtureTop: Float32Array.from([NaN]), marginM: 3 }, top, grid)[0]).toBe(43);
+    // with the height field, the cap comes from the rising texels: 12 m over the west half, 40 m over the east,
+    // measured from ground 5
+    const f = groundField();
+    setBox(f, 0, 10, 0, 10, 12);
+    setBox(f, 10, 20, 0, 10, 40);
+    const h: HeightsView = { field: f, terrain: flatTerrain(5) };
+    const viaField = polygonRoofCaps(pk, roof, top, grid, h);
+    // the field's max is the 40 m rise's coarse step top (40.75) over ground 5, plus the margin, above base 5:
+    // 44, where the classifier's 10 m cell said 43 (45 + 3 - 5)
+    expect(viaField[0]).toBe(44);
+    // the polygon with no field texel measured keeps the classifier answer (caps[1] was dropped: no building cell)
+    expect(viaField[1]).toBe(0);
   });
 
   it('builder: gap cells get no cap, and a roof sample streaming in re-rasters the cap', () => {
@@ -304,6 +340,29 @@ describe('roof cap', () => {
     expect(roofCapAt(second.mask, -25, -25)).toBe(Infinity);
     const third = b.build({ setId: 1, opts: o, classifier: { structure, grid, top: top2.slice() } });
     expect(third.changed).toBe(false);
+  });
+
+  it('builder: a heights message (a new keep version) re-rasters the cap; the same version does not', () => {
+    const b = new CutoutStencilBuilder();
+    const polys = [{ ring: square(2, 2, 8, 8), holes: [] }];
+    const roof = { base: Float32Array.from([0]), overtureTop: Float32Array.from([NaN]), marginM: 3 };
+    const o = { size: 128, cell: 1, dilateM: 2, roofCap: true };
+    const f = createHeightField();
+    const h: HeightsView = { field: f, terrain: flatTerrain(0) };
+    const job = { setId: 1, packed: packFootprints(polys), roof, opts: o, classifier: null };
+    const first = b.build({ ...job, keepVersion: 0 }, h);
+    if (!first.changed) throw new Error('expected a mask');
+    // an unmeasured field: today's behaviour, no cap
+    expect(roofCapAt(first.mask, 5, 5)).toBe(Infinity);
+    const same = b.build({ ...job, packed: undefined, roof: undefined, keepVersion: 0 }, h);
+    expect(same.baseRebuilt).toBe(false);
+    // a roof 20 m high is measured over the footprint (the chunk flipped kept bits: main bumps the version)
+    setBox(f, 2, 8, 2, 8, 20);
+    const next = b.build({ ...job, packed: undefined, roof: undefined, keepVersion: 1 }, h);
+    expect(next.baseRebuilt).toBe(true);
+    if (!next.changed) throw new Error('expected a mask');
+    // 20 m is the coarse step 20.5, its top 21.25, plus the margin 3: 24.25 rounds up to 25
+    expect(roofCapAt(next.mask, 5, 5)).toBe(25);
   });
 });
 
@@ -335,6 +394,10 @@ describe('stencil digests: skip the upload and the build when nothing changed', 
     expect(cutoutInputDigest(1, opts, { structure, grid, top: t2 })).not.toBe(d);
     expect(cutoutInputDigest(2, opts, { structure, grid, top })).not.toBe(d);
     expect(cutoutInputDigest(1, { ...opts, roofCap: false }, { structure, grid, top })).not.toBe(d);
+    // the height field rides as a version, not as bytes: a chunk that flipped a kept or rough bit changes it
+    expect(cutoutInputDigest(1, opts, { structure, grid, top }, 0)).toBe(d);
+    expect(cutoutInputDigest(1, opts, { structure, grid, top }, 1)).not.toBe(d);
+    expect(cutoutInputDigest(1, opts, { structure, grid, top }, 1)).toBe(cutoutInputDigest(1, opts, { structure: structure.slice(), grid, top }, 1));
   });
 
   it('digest skip: an identical stencil leaves the texture untouched, a changed one uploads', () => {
@@ -474,6 +537,17 @@ describe('one source: the car hits the stencil it sees', () => {
     // and no wall where nothing is drawn
     expect(insideTrace(built.segments, 5, 5)).toBe(false);
     expect(insideTrace(built.segments, -25, -25)).toBe(true);
+    // the field is known and flat under the building the classifier saw: dropped, whatever the 10 m cell said
+    const field = groundField();
+    const viaField = new CutoutStencilBuilder().build({
+      setId: 1, packed: packFootprints(polys), roof, opts: { size: 128, cell: 1, dilateM: 2 },
+      classifier: { structure: new Uint8Array(64), grid, top }
+    }, { field, terrain: flatTerrain(10) });
+    if (!viaField.changed) throw new Error('expected a mask');
+    expect(viaField.dropped).toBe(2);
+    expect(viaField.droppedByField).toBe(2);
+    expect(maskAt(viaField.mask, -25, -25)).toBe(false);
+    expect(viaField.segments.length).toBe(0);
   });
 
   it('tags each segment with its source: Overture-backed or a classifier gap cell', () => {
@@ -847,5 +921,267 @@ describe('TileClutterFilter cutout', () => {
     expect(f.hasRoofCap).toBe(false);
     expect(a.uniforms.uFootprintNoCap!.value).toBe(1e6);
     expect(() => f.setFootprintMask({ ...capped, data: new Uint8Array(64 * 64) })).toThrow();
+  });
+});
+
+describe('height field in the stencil (docs/plans/2026-10-08-cutout-per-texel-heights.md)', () => {
+  const OPTS: FootprintMaskOptions = { size: 64, cell: 1, dilateM: 2, roofCap: true, growM: 8 };
+  const roof = (n: number) => ({ base: new Float32Array(n), overtureTop: new Float32Array(n).fill(NaN), marginM: 3 });
+  const lot = (x0 = -10, z0 = -10, x1 = 10, z1 = 10) => ({ ring: square(x0, z0, x1, z1), holes: [] });
+  /** caps from the field, then the layers: what the builder does, without the trace */
+  const layersOf = (polys: ReturnType<typeof lot>[], f: HeightField, opts = OPTS) => {
+    const pk = packFootprints(polys);
+    const h: HeightsView = { field: f, terrain: flatTerrain(0) };
+    const caps = polygonRoofCaps(pk, roof(polys.length), null, null, h);
+    return { caps, ...footprintMaskLayers(pk, opts, caps, h) };
+  };
+  const verts = (f: Float32Array): [number, number][] => {
+    const out: [number, number][] = [];
+    for (let o = 0; o < f.length; o += SEG_STRIDE) out.push([f[o]!, f[o + 1]!], [f[o + 2]!, f[o + 3]!]);
+    return out;
+  };
+  /** the core texel (centre x, z) is set */
+  const coreAt = (m: { n: number; cell: number; size: number; cx: number; cz: number; data: Uint8Array; channels: number }, x: number, z: number): boolean => maskAt(m as never, x, z);
+
+  it('1. rise over the west half only: the footprint fills the west half and its walls stand there', () => {
+    const f = groundField();
+    setBox(f, -10, 0, -10, 10, 20);
+    const polys = [lot()];
+    const { core, grown } = layersOf(polys, f);
+    expect(countOn(core)).toBe(200);
+    expect(grown).toBe(0);
+    expect(coreAt(core, -5.5, 0.5)).toBe(true);
+    expect(coreAt(core, 5.5, 0.5)).toBe(false);
+    const built = new CutoutStencilBuilder().build({
+      setId: 1, packed: packFootprints(polys), roof: roof(1), opts: OPTS, classifier: null
+    }, { field: f, terrain: flatTerrain(0) });
+    if (!built.changed) throw new Error('expected a mask');
+    // walls on that side only: every vertex within the west half plus 1 m
+    expect(built.segments.length).toBeGreaterThan(0);
+    for (const [x, z] of verts(built.segments)) {
+      expect(x).toBeLessThanOrEqual(1);
+      expect(x).toBeGreaterThanOrEqual(-11);
+      expect(Math.abs(z)).toBeLessThanOrEqual(10.5);
+    }
+  });
+
+  it('2. a polygon over a known, flat field is dropped; over an unknown field the 10 m rule keeps it', () => {
+    const polys = [lot()];
+    const pk = packFootprints(polys);
+    const top = new Float32Array(64).fill(-Infinity);
+    top[4 * 8 + 4] = 12; // the 10 m cell over x,z in [0, 10): 12 m over base 0
+    const grid = { n: 8, cell: 10, half: 40 };
+    const r = { ...roof(1), minRiseM: 3 };
+    const flat = polygonRoofCapsDetailed(pk, r, top, grid, { field: groundField(), terrain: flatTerrain(0) });
+    expect(flat.caps[0]).toBe(0);
+    expect(flat.droppedByField).toBe(1);
+    const unknown = polygonRoofCapsDetailed(pk, r, top, grid, { field: createHeightField(), terrain: flatTerrain(0) });
+    expect(unknown.caps[0]).toBe(encodeRoofCap(12 + 3));
+    expect(unknown.droppedByField).toBe(0);
+    // under half known: the 10 m rule too, even where what is known is flat
+    const sparse = createHeightField();
+    setBox(sparse, -10, 10, -10, -5, 0, 0); // a quarter of the polygon known, flat
+    expect(polygonRoofCaps(pk, r, top, grid, { field: sparse, terrain: flatTerrain(0) })[0]).toBe(encodeRoofCap(12 + 3));
+    // a known field with 20 rising texels keeps it, one with 19 drops it
+    const some = groundField();
+    setBox(some, -10, -5, -10, -6, 12); // 5 x 4 = 20
+    expect(polygonRoofCaps(pk, r, null, null, { field: some, terrain: flatTerrain(0) })[0]).not.toBe(0);
+    const few = groundField();
+    setBox(few, -10, -5, -10, -7, 12);
+    setBox(few, -10, -6, -7, -6, 12); // 15 + 4 = 19
+    expect(polygonRoofCaps(pk, r, null, null, { field: few, terrain: flatTerrain(0) })[0]).toBe(0);
+  });
+
+  it('3. a gap cell with rise in one corner paints only those texels; over an unknown field it paints whole', () => {
+    const grid = { n: 8, cell: 10, half: 40 };
+    const cells = new Uint8Array(64);
+    cells[1 * 8 + 1] = CELL_GAP; // x,z in [-30, -20)
+    const mk = () => footprintMask1m([], { size: 128, cell: 1, dilateM: 0 });
+    const f = groundField();
+    setBox(f, -30, -26, -30, -26, 15);
+    const m = mk();
+    expect(paintGapCells(m, cells, grid, MASK_ON, { field: f, terrain: flatTerrain(0) })).toBe(1);
+    expect(count(m.data)).toBe(16);
+    expect(maskAt(m, -28.5, -28.5)).toBe(true);
+    expect(maskAt(m, -22.5, -22.5)).toBe(false);
+    // restoring takes exactly those texels back out
+    paintGapCells(m, cells, grid, 0, { field: f, terrain: flatTerrain(0) });
+    expect(count(m.data)).toBe(0);
+    const u = mk();
+    paintGapCells(u, cells, grid, MASK_ON, { field: createHeightField(), terrain: flatTerrain(0) });
+    expect(count(u.data)).toBe(100);
+    const none = mk();
+    paintGapCells(none, cells, grid, MASK_ON);
+    expect(count(none.data)).toBe(100);
+    // a rough kept texel (canopy) is not painted
+    const g = groundField();
+    setBox(g, -30, -20, -30, -20, 15);
+    g.data[(-25 - HEIGHT_ORIGIN) * HEIGHT_N + (-25 - HEIGHT_ORIGIN)]! |= ROUGH_BIT;
+    const r = mk();
+    paintGapCells(r, cells, grid, MASK_ON, { field: g, terrain: flatTerrain(0) });
+    expect(count(r.data)).toBe(99);
+  });
+
+  it('4. hysteresis feeds the stencil: a kept bit that stays kept at 2 m keeps the footprint', () => {
+    const f = createHeightField();
+    const chunk = new Float32Array(HEIGHT_CHUNK_M * HEIGHT_CHUNK_M);
+    const m = HEIGHT_CHUNK_M;
+    // chunk 10 (ci 2, cj 2) starts at world 0, 0; the lot is at 450 +- 10
+    const at = (x: number, z: number) => (z - 0) * m + (x - 0);
+    const paint = (y: number) => { chunk.fill(0); for (let z = 440; z < 460; z++) for (let x = 440; x < 460; x++) chunk[at(x, z)] = y; };
+    const terrain = flatTerrain(0);
+    const polys = [lot(440, 440, 460, 460)];
+    const opts = { ...OPTS, cx: 450, cz: 450 };
+    paint(3.2);
+    applyHeightChunk(f, 10, chunk, terrain, 3);
+    expect(countOn(layersOf(polys, f, opts).core)).toBe(400);
+    paint(2.0);
+    applyHeightChunk(f, 10, chunk, terrain, 3);
+    expect(countOn(layersOf(polys, f, opts).core)).toBe(400);
+    paint(1.0);
+    applyHeightChunk(f, 10, chunk, terrain, 3);
+    const { core, caps } = layersOf(polys, f, opts);
+    expect(caps[0]).toBe(0);
+    expect(countOn(core)).toBe(0);
+    // an unmeasured overwrite keeps what was decided
+    chunk.fill(NaN);
+    applyHeightChunk(f, 10, chunk, terrain, 3);
+    expect(layersOf(polys, f, opts).caps[0]).toBe(0);
+  });
+
+  it('opens away a single kept tree texel and closes a single-texel hole in a roof', () => {
+    const f = groundField();
+    setBox(f, -10, 0, -10, 10, 20);
+    setBox(f, 5, 6, 5, 6, 20); // a pole: opened away
+    setBox(f, -5, -4, -5, -4, 0, 0); // a stair-step hole in the roof: closed
+    const { core } = layersOf([lot()], f);
+    expect(countOn(core)).toBe(200);
+    expect(coreAt(core, -4.5, -4.5)).toBe(true);
+    expect(coreAt(core, 5.5, 5.5)).toBe(false);
+  });
+
+  describe('growth into the connected mesh', () => {
+    it('5. grows an overhang east of the lot: 500 texels, the polygon cap, the wall at the mesh edge', () => {
+      const f = groundField();
+      setBox(f, -10, 15, -10, 10, 20);
+      const polys = [lot()];
+      const { core, caps, grown, grownTruncated, mask } = layersOf(polys, f);
+      expect(countOn(core)).toBe(500);
+      expect(grown).toBe(100);
+      expect(grownTruncated).toBe(0);
+      expect(roofCapAt(core, 12.5, 0.5)).toBe(decodeRoofCap(caps[0]!));
+      expect(roofCapAt(core, 0.5, 0.5)).toBe(decodeRoofCap(caps[0]!));
+      expect(coreAt(core, 14.5, 0.5)).toBe(true);
+      expect(coreAt(core, 15.5, 0.5)).toBe(false);
+      // the cut is the core dilated 2 m: grown texels stamp their own disc
+      expect(maskAt(mask, 16.5, 0.5)).toBe(true);
+      expect(maskAt(mask, 17.6, 0.5)).toBe(false);
+      const built = new CutoutStencilBuilder().build({
+        setId: 1, packed: packFootprints(polys), roof: roof(1), opts: OPTS, classifier: null
+      }, { field: f, terrain: flatTerrain(0) });
+      if (!built.changed) throw new Error('expected a mask');
+      expect(built.grown).toBe(100);
+      const xs = verts(built.segments).map(v => v[0]);
+      expect(xs.some(x => Math.abs(x - 15) <= 0.5)).toBe(true);
+      expect(xs.some(x => x > 10.5 && x < 14.5)).toBe(false);
+      // the same field never captured: today's 400 texels
+      expect(countOn(layersOf(polys, createHeightField()).core)).toBe(400);
+      expect(layersOf(polys, createHeightField()).grown).toBe(0);
+    });
+
+    it('6. stops at 8 m and counts the fronts still rising; a taller strip is another building and is left alone', () => {
+      const f = groundField();
+      setBox(f, -10, 30, -10, 10, 20);
+      const { core, grown, grownTruncated } = layersOf([lot()], f);
+      expect(countOn(core)).toBe(28 * 20);
+      expect(coreAt(core, 17.5, 0.5)).toBe(true);
+      expect(coreAt(core, 18.5, 0.5)).toBe(false);
+      expect(grown).toBe(8 * 20);
+      expect(grownTruncated).toBe(20);
+      const g = groundField();
+      setBox(g, -10, 10, -10, 10, 20);
+      setBox(g, 10, 14, -10, 10, 50);
+      const strip = layersOf([lot()], g);
+      expect(countOn(strip.core)).toBe(400);
+      expect(strip.grown).toBe(0);
+      expect(strip.grownTruncated).toBe(0);
+    });
+
+    it('does not grow with growM 0, at a 2 m texel, or into a texel the field has not measured', () => {
+      const f = groundField();
+      setBox(f, -10, 15, -10, 10, 20);
+      expect(layersOf([lot()], f, { ...OPTS, growM: 0 }).grown).toBe(0);
+      expect(countOn(layersOf([lot()], f, { ...OPTS, growM: 0 }).core)).toBe(400);
+      expect(layersOf([lot()], f, { ...OPTS, cell: 2, size: 64 }).grown).toBe(0);
+      const u = groundField();
+      setBox(u, -10, 10, -10, 10, 20);
+      u.data.fill(63, (0 - HEIGHT_ORIGIN) * HEIGHT_N + (10 - HEIGHT_ORIGIN), (0 - HEIGHT_ORIGIN) * HEIGHT_N + (15 - HEIGHT_ORIGIN));
+      expect(layersOf([lot()], u).grown).toBe(0);
+    });
+
+    it('7. two buildings meet: the gap goes to the nearer front, each with its own cap, one outer outline', () => {
+      const f = groundField();
+      setBox(f, -20, -2, -10, 10, 30);
+      setBox(f, -2, 20, -10, 10, 20);
+      const polys = [lot(-20, -10, -2, 10), lot(2, -10, 20, 10)];
+      const { core, caps } = layersOf(polys, f);
+      expect(caps[0]).toBeGreaterThan(caps[1]!);
+      expect(countOn(core)).toBe(40 * 20);
+      for (const x of [-1.5, -0.5]) expect(roofCapAt(core, x, 0.5)).toBe(decodeRoofCap(caps[0]!));
+      for (const x of [0.5, 1.5]) expect(roofCapAt(core, x, 0.5)).toBe(decodeRoofCap(caps[1]!));
+      const built = new CutoutStencilBuilder().build({
+        setId: 1, packed: packFootprints(polys), roof: roof(2), opts: OPTS, classifier: null
+      }, { field: f, terrain: flatTerrain(0) });
+      if (!built.changed) throw new Error('expected a mask');
+      // every vertex on the one outer rectangle, none across the seam
+      for (const [x, z] of verts(built.segments)) {
+        const onEdge = Math.abs(Math.abs(x) - 20) <= 0.5 || Math.abs(Math.abs(z) - 10) <= 0.5;
+        expect(onEdge).toBe(true);
+        expect(Math.abs(x) <= 20.5 && Math.abs(z) <= 10.5).toBe(true);
+      }
+      expect(verts(built.segments).some(([x]) => Math.abs(x) < 15)).toBe(false);
+    });
+
+    describe('8. trees: the rough bit stops growth', () => {
+      const M = HEIGHT_CHUNK_M;
+      /** the lot at 450, 450 (chunk 10): a 20 m roof, and an overhang to its east of the given pattern */
+      const grownOver = (overhang: (x: number, z: number) => number): { grown: number; core: number } => {
+        const f = createHeightField();
+        const chunk = new Float32Array(M * M);
+        for (let z = 440; z < 460; z++) {
+          for (let x = 440; x < 465; x++) chunk[z * M + x] = x < 460 ? 20 : overhang(x, z);
+        }
+        applyHeightChunk(f, 10, chunk, flatTerrain(0), 3);
+        const r = layersOf([lot(440, 440, 460, 460)], f, { ...OPTS, cx: 450, cz: 450 });
+        return { grown: r.grown, core: countOn(r.core) };
+      };
+
+      it('a 4/12 m checkerboard overhang does not grow, a flat 12 m one does', () => {
+        const checker = grownOver((x, z) => ((x + z) % 2 ? 12 : 4));
+        // not a single texel past the first column: the 12 m texels beside the 20 m roof read planar along x
+        // (20 + 4 - 2 * 12 = 0), so the roof-side column can leak for those rows (10 of 20), but the next
+        // column (12, 4, 12 across) is rough along both axes and stops the front
+        expect(checker.grown).toBe(10);
+        expect(checker.core).toBe(410);
+        const flat = grownOver(() => 12);
+        // 5 x 20 = 100, less the two corner texels of the overhang's roof-side column that read rough
+        expect(flat.grown).toBeGreaterThanOrEqual(96);
+        expect(flat.grown).toBeLessThanOrEqual(100);
+        expect(flat.core).toBe(400 + flat.grown);
+      });
+    });
+  });
+
+  it('reports the rough texels of the field in the build stats', () => {
+    const f = createHeightField();
+    const chunk = new Float32Array(HEIGHT_CHUNK_M * HEIGHT_CHUNK_M).fill(0);
+    for (let z = 440; z < 460; z++) for (let x = 440; x < 460; x++) chunk[z * HEIGHT_CHUNK_M + x] = 20;
+    applyHeightChunk(f, 10, chunk, flatTerrain(0), 3);
+    const built = new CutoutStencilBuilder().build({
+      setId: 1, packed: packFootprints([lot(440, 440, 460, 460)]), roof: roof(1), opts: { ...OPTS, cx: 450, cz: 450 }, classifier: null
+    }, { field: f, terrain: flatTerrain(0) });
+    expect(built.rough).toBe(4);
+    expect(built.droppedByField).toBe(0);
+    expect(built.grownTruncated).toBe(0);
   });
 });

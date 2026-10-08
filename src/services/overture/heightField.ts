@@ -65,6 +65,8 @@ export interface HeightField {
   readonly data: Uint8Array;
   /** per chunk: how many measurements have landed (0 = never captured) */
   readonly chunkSeen: Uint32Array;
+  /** per chunk: texels carrying the rough bit as of its last application (their sum is the field's rough count) */
+  readonly chunkRough: Uint32Array;
   /** bumped by every applied chunk */
   version: number;
 }
@@ -84,6 +86,7 @@ export function createHeightField(): HeightField {
   return {
     data: new Uint8Array(HEIGHT_N * HEIGHT_N).fill(RISE_UNKNOWN),
     chunkSeen: new Uint32Array(HEIGHT_CHUNKS * HEIGHT_CHUNKS),
+    chunkRough: new Uint32Array(HEIGHT_CHUNKS * HEIGHT_CHUNKS),
     version: 0
   };
 }
@@ -219,6 +222,7 @@ export function applyHeightChunk(
     }
   }
   field.chunkSeen[chunk]!++;
+  field.chunkRough[chunk] = rough;
   field.version++;
   return { known, kept, rough, changed };
 }

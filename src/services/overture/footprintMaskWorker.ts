@@ -73,7 +73,7 @@ ctx.onmessage = e => {
   }
   const t0 = performance.now();
   try {
-    const build = builder.build(m);
+    const build = builder.build(m, heightField && heightTerrain ? { field: heightField, terrain: heightTerrain } : null);
     ctx.postMessage({ id: m.id, build, buildMs: performance.now() - t0 }, build.changed ? [build.mask.data.buffer, build.segments.buffer] : []);
   } catch (err) {
     ctx.postMessage({ id: m.id, error: String(err) });
