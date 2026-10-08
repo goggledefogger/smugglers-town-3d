@@ -1,39 +1,36 @@
 # Cutout 3D: per-texel heights from the loaded tiles (option 2)
 
-Status: design, 2026-10-08. Nothing built. Baseline: `npx vitest run tests/cutout.test.ts` passes, 49/49.
+Status: design, 2026-10-08. Stage 1 (capture and field) is built, measured, not consumed. Stage 2 is sections 4 and 4b, and 4b ships first. Baseline: `npx vitest run tests/cutout.test.ts` passes, 49/49.
 
-## 1. Where the tiles live, and how to render them top-down
+## 0. Measured since stage 1
 
-- The tiles are not a view-dependent renderer. `TileStreamer` (`src/services/tiles/Tileset.ts:362`) owns one `group` (`:363`) of per-tile groups. It holds one LOD per area (refine REPLACE, atomic swap at `:1146-1180`). The set changes only inside async `add`/`remove`/`refine`/`coarsenOne` callbacks (`:1087`, `:1137`, `:1146`). `update()` (`:883`) only picks the next swap. main.ts puts every tile on layer 1 (`src/main.ts:402-406`).
-- **LOD pinning needs no error-target switch.** A synchronous render issued from the frame loop sees exactly the geometry of that frame, because no streaming mutation can run during `renderer.render`. The one thing to pin is which tiles count. Tiles coarser than `RASTER_MAX_ERROR_M = 8` (`:92`) already never feed the classifier (`rasterOf`, `:1133`). The capture hides them for the call, so their texels read as unknown. New accessor: `TileStreamer.forEachTile(cb(group, geometricError))`, plus a `dirtyRect` that `add`/`remove`/`refine` widen.
-- **Reuse `SurfaceCapture`** (`src/render/SurfaceCapture.ts`). It already does this pass for the wheels:
-  - an orthographic camera straight down (`:162-174`);
-  - the tile group moved into a private scene with an `overrideMaterial` that writes world Y (`:35-46`, `:94`, `:176-199`);
-  - an R32F target (`:127`), and `readRenderTargetPixelsAsync` with the r169 bind-first workaround and an RGBA fallback (`:226-279`);
-  - the program warmed with `compileAsync` (`:103-125`).
-  
-  The override material matters: it bypasses the cutout discard in the tile shader, so a footprint we drop can still be measured and come back. Plan: factor the render-and-readback core into a `TopDownCapture` class shared by both features. The new `HeightCapture` adds chunking and coarse-tile hiding. Renderer: `WebGLRenderer` (`src/render/Renderer.ts:85`), three 0.169, no WebGPU.
+- Field vs downward raycasts: within 1 m at 7 points. Per 900² chunk: render 1.8 ms, readback copy 11 ms.
+- Overture polygon 4412 (Portland, 45.5188, -122.6780; 34×25 m, 45 m) rises 44.5-45 m everywhere, including the cell the classifier called empty: the oversized-lot case was a classifier error. The drop rule stays, but is not the first win.
+- 2 in 3 known texels are kept (284,119 of 425,764), much of it street-tree canopy.
+- The owner found the inverse failure: a mesh wider than its polygon is walled at the polygon edge and cut away outside it, because a 10 m cell within 3 m of a polygon texel counts as covered. Section 4b fixes it, first.
+
+## 1. Where the tiles live, and how to render them top-down (built)
+
+- `TileStreamer` (`src/services/tiles/Tileset.ts:362`) holds one LOD per area and changes its set only inside async `add`/`remove`/`refine` callbacks, so a synchronous render from the frame loop sees that frame's geometry: no LOD pinning needed. Tiles coarser than `RASTER_MAX_ERROR_M = 8` are hidden for the capture and read unknown. The streamer exposes `forEachTile` and a `dirtyRect`.
+- `TopDownCapture` (factored out of `SurfaceCapture`, shared with the wheels) renders straight down with an `overrideMaterial` writing world Y into R32F and reads back asynchronously. The override bypasses the cutout discard, so a dropped footprint is still measured and can come back. `HeightCapture` (`src/render/HeightCapture.ts`) adds chunking and coarse-tile hiding.
 
 ## 2. The height field
 
 - **Resolution 1 m.** It matches the stencil texel (`CUTOUT_TEXEL_M`, `src/main.ts:675`), so the fill can read it 1:1.
 - **Extent.** The 3600 m stencil square, split into a fixed 4×4 lattice of 900 m chunks starting at x, z = -1800. Only chunks that hold fine tiles get captured. With `STREAM_LOD` (`Tileset.ts:76`), fine tiles sit within about 500 m of the player, so that is 1-4 chunks.
 - **Format on the GPU.** R32F world Y. This is the proven readable path.
-- **Format in the worker.** One persistent `Uint8Array(3600²)`:
-  - bits 0-6 hold the rise above terrain in 0.5 m steps (0-63 m, capped);
-  - 127 means unknown;
-  - bit 7 holds the hysteresis "kept" flag.
+- **Format in the worker.** One persistent `Uint8Array(3600²)` (`heightField.ts`): stage 1 has bits 0-6 rise in 0.5 m steps (127 unknown) and bit 7 kept; stage 2 rearranges it to carry a rough bit (4b, Trees).
 - **Baseline.** Subtracted on the CPU, in the worker, by bilinear sampling of the 10 m tileset terrain (`cutoutTerrain`, `main.ts:699`, the same source `roofInput` uses at `:877`). It is sent once per tileset.
 - **Memory added.**
   - GPU: 6.5 MB, the 900² R32F colour target plus its depth.
   - Worker: 13 MB, persistent.
   - Main thread: 3.24 MB per chunk in flight, transferred to the worker rather than copied.
 
-## 3. Readback and threading
+## 3. Readback and threading (built)
 
-- WebGL2 `readRenderTargetPixelsAsync` (PBO plus fence). Measured for the 768² R32F surface capture (`docs/ARCHITECTURE.md:225-229`): 2.6 ms CPU submit p50 (8.5 ms p99), 0.5-1.7 ms GPU, and the readback resolving 70-110 ms later with no stall. A 900² chunk is 1.37× the texels, so the estimate is the same order: about 3 ms submit and about 1 ms to copy the result out of the buffer.
-- **When it runs.** Never per frame by default. `refreshColliders` (`main.ts:579`, at most every 1.5 s while `collidersDirty`) marks the chunks under `dirtyRect` dirty. A chunk is captured only once no tile in it has changed for 1 s (settle). After that, `HeightCapture.update(now)` in the frame loop (beside `surfaceCapture.update`, `main.ts:1813`) submits at most one chunk per frame, with one readback in flight, and only while `traits(viewMode).cutsToFootprints`.
-- The finished `Float32Array` is posted (transferred) to the existing cutout worker as `{kind:'heights', chunk, data}`. `footprintMaskWorker.ts:30` gains a discriminant. The worker updates its field and replies with `keepChanged`. Only then does main set `cutoutDirty` and call `cutoutRebuild.request()`. The stencil therefore keeps its current coalesced cadence (`CUTOUT_REBUILD_MS = 2000`, `main.ts:696`). The input digest (`footprintMask.ts:650`) gains a `heightVersion` counter rather than 13 MB of bytes.
+- `readRenderTargetPixelsAsync` (PBO plus fence), no stall. Measured per chunk in section 0.
+- Never per frame: a chunk under `dirtyRect` is captured once no tile in it changed for 1 s, at most one chunk per frame with one readback in flight, only while the view cuts to footprints.
+- The `Float32Array` is transferred to the cutout worker as `{kind:'heights', chunk, data}`; the worker folds it into the field and replies with `keepChanged`, and only then does main request a rebuild, so the stencil keeps its 2 s coalesced cadence. The digest gains a `heightVersion` counter, not 13 MB of bytes.
 
 ## 4. How footprintMask.ts consumes it
 
@@ -53,6 +50,35 @@ Status: design, 2026-10-08. Nothing built. Baseline: `npx vitest run tests/cutou
 - **Gap cells.** `classifierCells` (`:414`) and `requireRoofed` (`:356`) are unchanged: lowRise has no top-down equivalent. `paintGapCells` (`:471`) paints only the kept texels inside a gap cell where the field is known, and the whole cell where it is not.
 - **Collider rule intact.** `core` is still the undilated fill plus the painted gap texels. `mask` is still `dilate(core)`. Walls still trace `core` (`build`, `:697`, `traceStencil(core, 0.5, base)`).
 
+## 4b. Growing a footprint into the connected mesh
+
+Section 4 trims a footprint to where the mesh rises; this grows it to where the connected mesh still rises.
+
+**Rule.** After the keep-filtered fill, before dilation, `growFootprints` runs one multi-source breadth-first flood on `filled`. Seeds: filled texels with a 4-neighbour that is unfilled, known, kept and not rough. A step enters such a neighbour if its rise is at most the parent's cap (a taller one is another building, left to the gap rule), for at most 8 layers (`CUTOUT_GROW_M`).
+
+**Bound: a fixed 8 m.** The error is absolute: registration (1-3 m) plus an unmapped bay or wing. A fraction of polygon size gives a shed 1.5 m and a 200 m block 50 m of canopy; "until the rise drops" never ends along rowhouses or canopy. Past 8 m a rising front is likely a separate building, whose cells the gap rule paints. Fronts stopped while still kept count as `grownTruncated`, so the survey shows whether 8 is short.
+
+**Neighbours.** A neighbour's kept texels are already filled, so a front stops at its edge; unclaimed texels between two go to the nearer front. No ownership raster.
+
+**Cap.** A grown texel takes its parent's cap byte: it is the whole structure's ceiling, it keeps the clip continuous across the old edge, and a texel's own rise would let one canopy spike set it. Meeting fronts keep the higher, as `fillPolygon` does.
+
+**Cost.** Seed scan over the 6101 boxes (the outline test `dilateBox` does): 5-10 ms. Flood at 100-300k grown texels: 5-15 ms. Dilation stamps grown texels from the flood queue rather than widening every box (+30 ms). Total about +15-30 ms on the 895 ms build. Rejected: a per-polygon flood (26 MB visited stamp, order-dependent) and a morphological band pass (8 passes, 60-100 ms).
+
+**Walls.** Grown texels are in `core`, `mask` stays `dilate(core)`, walls trace `core`: they move with the mesh. The gap-cell paint-and-restore stays exact, since grown texels lie inside the dilation a gap cell is 3 m clear of.
+
+**Unknown field** (never captured, coarse tile): no seed, no step, today's footprint. Off at `cell === 2`. `baseKey` gains a keep version, bumped when a chunk flips a kept or rough bit.
+
+### Trees
+
+**Planarity, from the floats at apply time.** Rough means |y(i-1) + y(i+1) - 2y(i)| ≥ 1 m along both x and z, an unkept neighbour counting as not planar. Flat and pitched roofs are planar both ways, a parapet or ridge one way, canopy neither. Growth never enters a rough texel and `paintGapCells` skips them; inside a polygon the bit is ignored, so rooftop plant drills no holes.
+
+- False positives: single corner texels (the 2 m dilation covers them), noisy glass roofs, domes. Growth stops short; no building is lost.
+- False negatives: a big crown's smooth top (an island in a rough ring, unreachable), and street trees fused into a smooth band along a façade, which grows up to 8 m.
+
+Rejected: range or variance (every roof edge has the full height in its window; 45° roofs read rough); rise relative to the parent roof (blocks a 12 m podium off a 45 m tower); blob area (street canopy is one blob); satellite green (main-thread readback, leaning orthophotos, leaf-off winters, green roofs).
+
+**Byte.** Bits 0-5 rise: 0-31 is 0-15.5 m in 0.5 m, 32-62 is 16-61 m in 1.5 m, 63 unknown. Bit 6 rough, bit 7 kept. Hysteresis stays in the fine range; caps decode a coarse step's top. 3-5 ms per chunk; seam neighbours come from the field.
+
 ## 5. Tests
 
 Extend in `tests/cutout.test.ts`:
@@ -69,37 +95,43 @@ New pure tests:
 3. A gap cell with rise in one corner paints only those texels. With the field unknown, it paints whole.
 4. Hysteresis: kept at 3.2 m stays kept at 2.0 m, drops at 1.0 m, and an unknown chunk overwrite keeps the previous bit.
 
-Validating the GPU producer by hand, in a browser, when the owner frees it:
+Growth and trees (mask `size: 64, roofCap: true`; field bytes written directly; roof 20 m):
 
-- Add to `__cutoutStats`: `heights: {chunks, renderMs, readbackMs, known, kept, dropped}`.
-- Add `window.__cutoutHeightAt(x, z)` returning the rise and state, then compare it with a raycast at x=195, z=-35, where the raycast hits 44 m.
-- Add an F8-style preview modelled on `SurfacePreview` (`SurfaceCapture.ts:303`).
-- Extend `scripts/cutout-survey.mjs` to print the new fields.
+5. Polygon x,z ∈ [-10,10], field kept at 20 m over x ∈ [-10,15), z ∈ [-10,10), 0 m elsewhere: `core` is those 500 texels, x ≥ 10 carries the polygon's cap, the east wall traces at x = 15 ±0.5, nothing at 10.5 < x < 14.5. Never-captured field: 400 texels.
+6. Kept over x ∈ [-10,30): `core` ends at x = 18, `grownTruncated` = 20. A 50 m strip at x ∈ [10,14) instead: no growth.
+7. A at x ∈ [-20,-2], B at [2,20], both z ∈ [-10,10]; field kept over x ∈ [-20,20), 30 m over A, 20 m elsewhere: x ∈ [-2,0) takes A's cap, [0,2) B's; segments form one outer rectangle.
+8. `applyHeightChunk` on four 20×20 patches 10 m apart on 0 m ground (flat 20 m; slope 10-29 m; 20 m with a 2 m step; 4/12 m checkerboard): rough is the whole checkerboard plus only patch corners and step ends. Test 5 with the overhang as that checkerboard does not grow; as flat 12 m, it does.
+
+By hand: `__cutoutStats.heights` and `__cutoutHeightAt(x, z)` against a raycast, plus `grown`, `grownTruncated` and `rough` in `scripts/cutout-survey.mjs`.
 
 ## 6. Cost ledger
 
 | Item | Added | Where | Basis |
 |---|---|---|---|
-| Chunk render submit | ~3 ms, about 1 per refresh, ≤1 per frame | main | estimated from measured 2.6 ms p50 |
+| Chunk render submit | 1.8 ms, about 1 per refresh, ≤1 per frame | main | measured |
 | GPU per chunk | ~1-2 ms | GPU | estimated from measured 0.5-1.7 ms |
-| Readback | 70-110 ms latency, 0 stall, ~1 ms copy-out | main | latency measured (surface); copy estimated |
-| Field update | 2-4 ms per chunk | worker | estimated |
+| Readback | 70-110 ms latency, 0 stall, 11 ms copy-out | main | latency measured (surface), copy measured |
+| Field update | 2-4 ms per chunk, +3-5 ms rough bit | worker | estimated |
 | Caps scanline | +20-40 ms on the 895 ms build | worker | estimated (about 3M footprint texels) |
 | Fill keep test | +<5% of fill | worker | estimated |
+| Growth (seeds, flood, grown dilation) | +15-30 ms per build at 6101 footprints | worker | estimated |
+| Base re-raster on a kept/rough flip | one fill per heights message, 2 s coalesced | worker | design |
 | Trace | 525 ms ±10% (smoothed); +30% if unsmoothed | worker | estimated |
 | Landing | 15-25 ms, roughly proportional to segments | main | estimated |
 | Upload | 26 MB unchanged | GPU | measured baseline |
-| Memory | 6.5 MB GPU, 13 MB worker, 3.24 MB transient | — | computed |
+| Memory | 6.5 MB GPU, 13 MB worker, 3.24 MB transient, ≤4 MB flood queue | — | computed |
 
 ## 7. Risks
 
-- Trees and canopy inside a lot read as rise. The opening pass and the 20-texel floor bound this, but cannot remove it.
+- Trees: planarity stops growth at rough canopy, but a smooth street-tree band along a façade still grows up to 8 m, and canopy inside a lot is bounded only by the opening pass and the 20-texel floor.
+- The 8 m bound is reasoned, not measured.
+- The 11 ms readback copy runs on main, once per chunk.
 - Under-footprint terrain error on hills: the 10 m DEM against the mesh ground can be off by 1-2 m, about half the threshold.
 - The tile shaders could still compile on the first capture if the warm-up does not cover the shared program.
 - Coarse-tile texels stay on the old rule, so far buildings keep the 10 m behaviour.
 
-**Prototype first.** Capture one chunk around Pioneer Square with the shared core, dump rise and keep at x=195, z=-35, and dump them over a known lot polygon. This proves the measurement and the baseline before any change to `footprintMask.ts`.
+**Next prototype.** Run growth offline on captured chunks around the owner's building and polygon 4412, logging how far fronts would run unbounded, before wiring the stencil.
 
 ## Note: rebuilding the classifier from the same field
 
-`topGrid` alone could be derived from the field: a 10×10 max-reduce of known texels, about 2-5 ms in the worker per chunk. Texels in coarse tiles would stay `NO_DATA`, exactly as today. `structureGrid`, `lowRiseGrid` and `deckGrid` cannot be derived. They need the lowest geometry and the 32-bin vertical occupancy that `rasterizeTile` (`tileColliders.ts:223`) collects per triangle, and a top-down depth render sees only the top surface. The classifier also runs in node for the offline rigs (`captureRasters`, `Tileset.ts:998`). Recommendation: let Cutout's caps read the field directly, keep the CPU classifier, and revisit only if a second consumer of `topGrid` disagrees with the field.
+Only `topGrid` could come from the field (a 10×10 max-reduce, 2-5 ms per chunk). `structureGrid`, `lowRiseGrid` and `deckGrid` need the lowest geometry and vertical occupancy that `rasterizeTile` (`tileColliders.ts:223`) collects, which a top-down render cannot see, and the classifier also runs in node (`captureRasters`, `Tileset.ts:998`). Keep the CPU classifier; caps read the field directly.
