@@ -2,8 +2,10 @@
 // headings plus an aerial, and a 3 s drive frame-time sample per mode.
 //
 //   E2E_URL=http://localhost:5173 MODES=photoreal,map-objects node scripts/mode-survey.mjs outdir
-// MODES takes the ViewMode ids from src/main.ts (photoreal, masked-tiles, best-3d,
-// painted-3d, painted-metro, footprint-3d, vector-city, game3d).
+// MODES takes the ViewMode ids from src/render/viewModes.ts (photoreal, masked-tiles, cutout-3d,
+// best-3d, painted-3d, painted-metro, footprint-3d, vector-city, game3d).
+// PREFIX names the shots (PREFIX=cutout-sf- gives cutout-sf-photoreal-front.png); QUERY appends
+// to the page URL (QUERY=cutoutDilate=2). Cutout 3D's stencil stats and Overture coverage print too.
 // Needs the dev server and .sm-key.txt (or SM_KEY_FILE). Frame stats print to stdout;
 // survey every branch by pointing E2E_URL at each worktree's server.
 import { chromium } from 'playwright-core';
@@ -16,6 +18,8 @@ const MODES = (process.env.MODES ?? 'photoreal').split(',');
 const LAT = process.env.LAT ?? '37.7929';
 const LON = process.env.LON ?? '-122.4030';
 const [TX, TZ] = (process.env.TP ?? '15,-5').split(',').map(Number);
+const PREFIX = process.env.PREFIX ?? '';
+const QUERY = process.env.QUERY ? `&${process.env.QUERY}` : '';
 const key = readFileSync(process.env.SM_KEY_FILE ?? '.sm-key.txt', 'utf8').trim();
 
 const b = await chromium.launch({ channel: 'chrome', headless: false });
@@ -31,7 +35,7 @@ page.on('console', m => {
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => { localStorage.setItem('gmap_key', k); localStorage.setItem('smugglers_audio_muted', 'true'); }, key);
 for (let attempt = 1; attempt <= 3; attempt++) {
-  await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
+  await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}${QUERY}`, { waitUntil: 'load' });
   await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
   await page.locator('sr-intro button.play').click();
   await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });
@@ -81,7 +85,7 @@ const landed = await page.evaluate(([fx, fz]) => {
 console.log('teleport', JSON.stringify(landed));
 await page.waitForTimeout(8000);
 
-const shot = async name => { await page.screenshot({ path: `${OUT}/${name}.png` }); };
+const shot = async name => { await page.screenshot({ path: `${OUT}/${PREFIX}${name}.png` }); };
 const mode = async m => { await page.evaluate(m => window.__setViewMode(m), m); await page.waitForTimeout(2500); };
 const heading = async yaw => {
   await page.evaluate(y => {
@@ -124,16 +128,22 @@ for (const m of MODES) {
   await home();
   await mode(m);
   if (m === 'painted-3d' || m === 'footprint-3d') await page.waitForTimeout(12000);
+  if (m === 'cutout-3d') {
+    console.log('cutout stencil', JSON.stringify(await page.evaluate(() => window.__cutoutStats?.())));
+    console.log('cutout coverage', JSON.stringify(await page.evaluate(() => window.__cutoutCoverage?.())));
+  }
   await heading(landed.yaw); await shot(`${m}-front`);
   await heading(landed.yaw + Math.PI / 2); await shot(`${m}-side`);
 }
 await page.keyboard.press('KeyC');
 for (const m of MODES) {
   await mode(m);
-  await page.evaluate(([x, z]) => {
+  // same heading every mode, so the aerials compare like for like
+  await page.evaluate(([x, z, y]) => {
     const body = window.__game.player.body;
     body.pos.set(x, 140, z); body.vel.set(0, 0, 0); body.prevPos?.copy(body.pos);
-  }, [landed.tx, landed.tz]);
+    body.quat.setFromAxisAngle(new body.pos.constructor(0, 1, 0), y);
+  }, [landed.tx, landed.tz, landed.yaw]);
   await page.waitForTimeout(800);
   await shot(`${m}-aerial`);
   await page.waitForTimeout(3000);

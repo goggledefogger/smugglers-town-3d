@@ -590,7 +590,8 @@ The baker now bakes at most two walls a frame: its CPU budget could not see
 the GPU, and each bake draws every loaded tile once more, so a downtown frame
 that queued six walls read 50 ms with the CPU side under 4. Best 3D+ (per-cell
 columns) was removed in the same pass; the V key cycles Real 3D, Masked,
-Best 3D, Painted 3D, Painted Metropolis, Footprint 3D, Vector City, Arcade.
+Cutout 3D, Best 3D, Painted 3D, Painted Metropolis, Footprint 3D, Vector
+City, Arcade (the table is `render/viewModes.ts`).
 
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
@@ -612,9 +613,11 @@ already owns: the ground heightfield, and the collider pass's structure mask
 flattens geometry under 2.5 m onto the ground plane, turning parked cars into
 road decals while facades keep their ground floors, or discards it entirely,
 leaving buildings and trees over streamed satellite ground. Hidden is the
-default. Its per-fragment mask cut also removes any facade whose footprint
-fell in a street cell, which the 10 m grid and the OSM road exemption make
-common at the kerb. Swept is the alternative: flatten, then discard only
+default. Its mask cut is per vertex, not per fragment: the vertex stage
+samples the 10 m structure mask and the fragment stage only sees the flag
+interpolated across the triangle, so the cut follows triangle edges. It also
+removes any facade whose footprint fell in a street cell, which the 10 m grid
+and the OSM road exemption make common at the kerb. Swept is the alternative: flatten, then discard only
 triangles whose three vertices all flattened. Kerbside walls survive, and so
 do street trees, since no top-down mask separates a tree at the kerb from the
 wall behind it; in open ground with no structure cell within reach the cut
@@ -631,6 +634,58 @@ recompile.
 regardless of mode, so anything the filter hides is still solid. That is a
 deliberate visual-versus-collision mismatch and worth remembering when a street
 looks clear but drives blocked.
+
+### "Cutout 3D" Visual Mode (`services/overture/footprintMask.ts`, `render/TileClutterFilter.ts` cutout)
+
+Real 3D's buildings with Footprint 3D's solidity: the photogrammetry mesh is
+the building, everything else is satellite ground. The Overture footprints
+(buildings and parts, unioned) are scanline-filled into an R8 stencil
+covering exactly the 1800 m fetch radius both ways (3600 m) and centred on
+the tileset origin, then dilated by a 2 m Euclidean radius so leaning
+facades and roof overhangs survive. The clutter filter's `cutout` mode is
+the only true per-fragment lookup in the filter: every tile fragment takes
+one texture sample at its own world x,z (the `vClutterWorldPos` varying)
+and is discarded when it reads 0. The outer texel ring is cleared and the
+texture clamps, so beyond the extent, where no footprints were fetched,
+reads as street with no extra branch. No flattening runs in this mode.
+
+Cost, kept off weak devices' critical path: the stencil is built once per
+footprint set on first entry to the mode, never per frame or per car move,
+in its own worker (`footprintMaskWorker.ts`; the frame pays about 5 ms to
+pack the polygons into transferable typed arrays). Each polygon fills and
+dilates only inside its own bounding box. Texels are 1 m (3600², 13 MB),
+or 2 m (1800², 3.2 MB, a quarter of the raster and upload) when the device
+looks weak: 4 or fewer cores, 4 GB or less, or a max texture under 4096.
+`?cutoutTexel=` and `?cutoutDilate=` override both for tuning, and
+`window.__cutoutStats()` reports what was chosen and how long it took.
+Switching modes stays a uniform write: with no stencil the same sampler
+uniform points at the 10 m structure mask with a value scale of 255
+(`uFootprintField.w`), so the fallback costs no recompile and no branch.
+The car hits the Overture prism walls (`prismPhysics`), which are built
+but not drawn, so the wall the car hits is the outline the cut follows,
+within the dilation. Ground patches stream under the tiles as in hidden and
+swept.
+
+Dilation was chosen by measurement, not by eye: of tile vertices more than
+18 m above the ground within 600 m of Market and Montgomery, 21 % fall
+outside the undilated stencil, 7.6 % at 1.5 m, 3.9 % at 2 m and 1.7 % at 3 m.
+In Pioneer Square, Portland the same figure plateaus near 7 % (8.0, 7.3, 6.6),
+which is buildings Overture does not have rather than shaving. `?cutoutDilate=`
+overrides it for comparison.
+
+Known v1 limits: where Overture returns nothing for the area, the cut falls
+back to the 10 m structure mask (blocky, but still drawn and solid against
+the classifier boxes). Per-building gaps are not merged: a building the
+classifier sees but Overture lacks is cut away entirely, and the car drives
+through where it stood. `main.ts` logs `cutout coverage` once per tileset
+load (classifier buildings, 4-connected structure cells, with no footprint
+within 3 m) and `window.__cutoutCoverage()` reports it on demand; measured
+SF 13 of 262 (5 %) and Portland 110 to 122 of 426 to 445 (about 27 %),
+up to 567 of 1,991 once the wider field had streamed in.
+Trees and lumps standing inside a dilated footprint, such as a tree canopy
+against a facade, survive the cut. The satellite ground itself carries
+leaning facades and roof images in tall downtown canyons and sits on the
+heightfield's humps, so a "clean" road is only as clean as that imagery.
 
 ## 3D Tiles, Collision & Alternative Architectures
 
