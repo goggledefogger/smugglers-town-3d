@@ -12,6 +12,7 @@
  */
 import type { Footprint } from './buildings.ts';
 import type { Grid } from '../tiles/tileColliders.ts';
+import { traceStencil } from './stencilTrace.ts';
 
 /** Texel value of a footprint cell: 255 so an R8 texture reads 1.0 in the shader. */
 export const MASK_ON = 255;
@@ -231,6 +232,8 @@ export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOpt
   const xs: number[] = [];
   const nPolys = pk.polyRings.length - 1;
   for (let p = 0; p < nPolys; p++) {
+    // cap 0: the mesh never rises over this footprint (an empty lot, a shed): not stencilled
+    if (caps && caps[p] === 0) continue;
     const b = fillPolygon(filled, n, ch, cell, x0, z0, pk, p, xs, caps?.[p] ?? ROOF_NO_CAP);
     if (b) boxes.push(b);
   }
@@ -394,31 +397,6 @@ export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): 
   return painted;
 }
 
-/**
- * The classifier boxes that stand for gap buildings: a box whose cells are
- * at least half gap (and not fewer gap than covered) collides; one mostly
- * over Overture-covered cells duplicates a prism wall and the prism wins.
- */
-export function selectGapBoxes<B extends { min: { x: number; z: number }; max: { x: number; z: number } }>(
-  boxes: readonly B[], cells: Uint8Array, grid: Grid
-): B[] {
-  const { n, cell, half } = grid;
-  const clampI = (v: number) => Math.min(n - 1, Math.max(0, v));
-  const out: B[] = [];
-  for (const b of boxes) {
-    const i0 = clampI(Math.floor((b.min.x + half) / cell)), i1 = clampI(Math.floor((b.max.x - 1e-3 + half) / cell));
-    const j0 = clampI(Math.floor((b.min.z + half) / cell)), j1 = clampI(Math.floor((b.max.z - 1e-3 + half) / cell));
-    let gap = 0, covered = 0;
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
-      const v = cells[j * n + i];
-      if (v === CELL_GAP) gap++;
-      else if (v === CELL_COVERED) covered++;
-    }
-    if (gap > 0 && gap >= covered) out.push(b);
-  }
-  return out;
-}
-
 export interface ClassifierInput {
   /** the classifier's structure grid (1 = building, deck or ramp), a copy the build may keep */
   readonly structure: Uint8Array;
@@ -437,6 +415,11 @@ export interface RoofInput {
   readonly overtureTop: Float32Array;
   /** world units above the roof that survive the cut (parapets, rooftop units, the band's sloping edge) */
   readonly marginM: number;
+  /**
+   * a footprint whose photogrammetry roof stands less than this above its base (or with no
+   * building cell under it at all) is dropped: the mesh does not rise there (default 3)
+   */
+  readonly minRiseM?: number;
 }
 
 /** Point in a packed ring (x,z pairs from s to e), even-odd. */
@@ -455,7 +438,12 @@ function inPackedRing(coords: Float32Array, s: number, e: number, x: number, z: 
  * photogrammetry roof is the MAX over the classifier cells whose centres
  * fall inside the outer ring (the cell holding the ring's box centre when
  * none does), the same cells rebuildPrisms reads: a mean would shave a
- * tall wing off a low podium. No roof sample at all is no cap.
+ * tall wing off a low podium. With roof samples given, a footprint whose
+ * photogrammetry roof is under minRiseM above its base, or that has no
+ * building cell under it, gets 0: dropped from the stencil, since the mesh
+ * does not rise there and a wall would be invisible. Without samples
+ * (no classifier yet) every footprint stays, uncapped unless Overture
+ * knows its height.
  */
 export function polygonRoofCaps(pk: PackedFootprints, roof: RoofInput, top: Float32Array | null, grid: Grid | null): Uint8Array {
   const nPolys = pk.polyRings.length - 1;
@@ -486,6 +474,10 @@ export function polygonRoofCaps(pk: PackedFootprints, roof: RoofInput, top: Floa
       if (!sampled) {
         const i = Math.floor(((x0 + x1) / 2 + half) / cell), j = Math.floor(((z0 + z1) / 2 + half) / cell);
         if (i >= 0 && j >= 0 && i < n && j < n && Number.isFinite(top[j * n + i]!)) photo = top[j * n + i]!;
+      }
+      if (photo === -Infinity || photo - roof.base[p]! < (roof.minRiseM ?? 3)) {
+        caps[p] = 0;
+        continue;
       }
       if (photo > roofY) roofY = photo;
     }
@@ -558,7 +550,11 @@ export function cutoutInputDigest(setId: number, opts: FootprintMaskOptions, cla
 }
 
 export type CutoutBuild =
-  | ({ changed: true; mask: FootprintMask; cells: Uint8Array | null; /** digestBytes of mask.data */ digest: string } & CutoutStats)
+  | ({
+    changed: true; mask: FootprintMask; cells: Uint8Array | null; /** digestBytes of mask.data */ digest: string;
+    /** the mask's R traced into wall segments (stencilTrace.ts, SEG_STRIDE floats each): what the car hits */
+    segments: Float32Array; traceMs: number;
+  } & CutoutStats)
   | ({ changed: false } & CutoutStats);
 
 /**
@@ -590,8 +586,9 @@ export class CutoutStencilBuilder {
     if (!this.packed || this.setId !== job.setId) throw new Error(`cutout: footprint set ${job.setId} was never sent`);
     const key = JSON.stringify(job.opts);
     const cl = job.classifier;
-    // the roof samples stream in with the tiles: a changed cap re-rasters, an unchanged one reuses
-    const caps = job.opts.roofCap && this.roof ? polygonRoofCaps(this.packed, this.roof, cl?.top ?? null, cl?.grid ?? null) : null;
+    // the roof samples stream in with the tiles: a changed cap (or a footprint the mesh turns out
+    // not to rise over) re-rasters, an unchanged one reuses the cached raster
+    const caps = this.roof ? polygonRoofCaps(this.packed, this.roof, cl?.top ?? null, cl?.grid ?? null) : null;
     let baseRebuilt = false;
     if (!this.base || this.baseKey !== key || !sameCells(caps, this.baseCaps)) {
       this.base = footprintMaskPacked(this.packed, job.opts, caps);
@@ -610,7 +607,13 @@ export class CutoutStencilBuilder {
     if (cells && cl) paintGapCells(mask, cells, cl.grid);
     this.lastCells = cells;
     this.lastSent = true;
-    return { changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), coverage, gapCells, baseRebuilt };
+    const t0 = performance.now();
+    const segments = traceStencil(mask);
+    const traceMs = performance.now() - t0;
+    return {
+      changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), segments, traceMs,
+      coverage, gapCells, baseRebuilt
+    };
   }
 }
 

@@ -16,7 +16,8 @@ export const VIEW_MODE_CYCLE: readonly ViewMode[] = [
  * paintsBoxes: collider boxes with photos on their faces (painted-3d, painted-metro)
  * showsPrisms: Overture footprint prisms drawn instead of the boxes (footprint-3d, vector-city)
  * prismPhysics: the cars hit the Overture prism walls rather than the classifier boxes
- *   (footprint-3d, vector-city, and cutout-3d, which collides with them but never draws them)
+ *   (footprint-3d, vector-city). Cutout 3D builds no prisms: its cars hit the walls traced
+ *   from its own stencil, so the picture and the physics have one source
  * proceduralFacades: Metropolis facade on every wall the photos left bare (painted-metro, vector-city)
  * showsTiles: Google 3D tiles on screen, raw, masked, snapped or cut (photoreal, masked-tiles, best-3d, cutout-3d)
  * snapsTiles: those tiles snapped onto the collider boxes (best-3d)
@@ -38,7 +39,7 @@ const F = false, T = true;
 export const VIEW_MODES: Record<ViewMode, ViewModeTraits> = {
   photoreal:      { label: 'VIEW: REAL 3D',            paintsWalls: F, paintsBoxes: F, showsPrisms: F, prismPhysics: F, proceduralFacades: F, showsTiles: T, snapsTiles: F, cutsToFootprints: F },
   'masked-tiles': { label: 'VIEW: MASKED 3D TILES',    paintsWalls: F, paintsBoxes: F, showsPrisms: F, prismPhysics: F, proceduralFacades: F, showsTiles: T, snapsTiles: F, cutsToFootprints: F },
-  'cutout-3d':    { label: 'VIEW: CUTOUT 3D',          paintsWalls: F, paintsBoxes: F, showsPrisms: F, prismPhysics: T, proceduralFacades: F, showsTiles: T, snapsTiles: F, cutsToFootprints: T },
+  'cutout-3d':    { label: 'VIEW: CUTOUT 3D',          paintsWalls: F, paintsBoxes: F, showsPrisms: F, prismPhysics: F, proceduralFacades: F, showsTiles: T, snapsTiles: F, cutsToFootprints: T },
   'best-3d':      { label: 'VIEW: BEST 3D',            paintsWalls: F, paintsBoxes: F, showsPrisms: F, prismPhysics: F, proceduralFacades: F, showsTiles: T, snapsTiles: T, cutsToFootprints: F },
   'painted-3d':   { label: 'VIEW: PAINTED 3D',         paintsWalls: T, paintsBoxes: T, showsPrisms: F, prismPhysics: F, proceduralFacades: F, showsTiles: F, snapsTiles: F, cutsToFootprints: F },
   'painted-metro':{ label: 'VIEW: PAINTED METROPOLIS', paintsWalls: T, paintsBoxes: T, showsPrisms: F, prismPhysics: F, proceduralFacades: T, showsTiles: F, snapsTiles: F, cutsToFootprints: F },

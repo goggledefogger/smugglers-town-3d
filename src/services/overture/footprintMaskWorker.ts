@@ -30,7 +30,7 @@ ctx.onmessage = e => {
   const t0 = performance.now();
   try {
     const build = builder.build(e.data);
-    ctx.postMessage({ id: e.data.id, build, buildMs: performance.now() - t0 }, build.changed ? [build.mask.data.buffer] : []);
+    ctx.postMessage({ id: e.data.id, build, buildMs: performance.now() - t0 }, build.changed ? [build.mask.data.buffer, build.segments.buffer] : []);
   } catch (err) {
     ctx.postMessage({ id: e.data.id, error: String(err) });
   }

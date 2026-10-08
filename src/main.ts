@@ -21,12 +21,14 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, selectGapBoxes, CutoutStencilBuilder, cutoutInputDigest, type CoverageGap, type PackedFootprints, type RoofInput
+  packFootprints, CutoutStencilBuilder, cutoutInputDigest, type CoverageGap, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
+import { StencilColliders } from './services/overture/stencilWalls.ts';
+import { SEG_STRIDE } from './services/overture/stencilTrace.ts';
 import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
 import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
-import { NO_DATA, type Grid } from './services/tiles/tileColliders.ts';
+import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
@@ -367,7 +369,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     log.info('building footprints arrived in background, refreshing colliders');
     refreshColliders();
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
-    // (Cutout 3D: its walls take over the physics and its stencil replaces the structure fallback)
+    // (Cutout 3D: its stencil replaces the structure fallback, and its traced walls the boxes)
     cutoutMaskFor = null;
     cutoutDirty = true;
     cutoutCoverageLogged = false;
@@ -450,7 +452,7 @@ function setViewMode(mode: ViewMode): void {
 
   // In photoreal and masked-tiles modes, real 3D tiles are shown cleanly without collider box occlusion.
   // In all other modes (including best-3d), buildingMeshView provides the physical solid collision geometry.
-  // Cutout 3D: the cut photogrammetry is the building, the prism walls only collide
+  // Cutout 3D: the cut photogrammetry is the building, the walls traced from its stencil collide
   buildingMeshView.visible = !(isRawPhotoreal || isMaskedTiles || isFootprint || isCutout);
   prismView.visible = isFootprint;
   roadRibbons.visible = mode === 'vector-city';
@@ -476,9 +478,11 @@ function setViewMode(mode: ViewMode): void {
   }
 
   renderer.setLightRig((hasTiles || traits(mode).paintsWalls || mode === 'vector-city') && world.terrainProvider.isReal ? 'photo' : 'arcade');
-  // what the car hits follows what it sees: the outline walls in a prism mode (and in
-  // Cutout 3D, whose visible buildings are those same outlines), the boxes elsewhere
+  // what the car hits follows what it sees: the outline walls in a prism mode, the
+  // stencil's traced walls in Cutout 3D, the boxes elsewhere
   if (hasPrisms !== physicsOnWalls) applyTileColliders(lastTileBoxes);
+  // in and out of Cutout 3D: the stencil walls take over from (or hand back to) the boxes
+  else if (carOnStencil !== (isCutout && cutoutWalls.walls !== null)) refreshCarColliders();
   // the wheels ride the captured surface only in a view that shows it
   applySurface();
   updateViewModeUi();
@@ -669,8 +673,12 @@ const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
 const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
-/** Classifier cell states (gap / covered) from the stencil on screen, on the grid they were built on. */
-let cutoutCells: { data: Uint8Array; grid: Grid } | null = null;
+/** Cutout 3D's car colliders: the stencil on screen traced into walls (one source for picture and physics). */
+const cutoutWalls = new StencilColliders();
+/** The car is on the stencil walls right now (Cutout 3D with a stencil landed). */
+let carOnStencil = false;
+/** A footprint the mesh rises less than this over (m) is not stencilled: an empty lot or a shed. */
+const CUTOUT_MIN_RISE_M = 3;
 let cutoutCoverageStat: (CoverageGap & { footprints: number; gapCells: number }) | null = null;
 let cutoutCoverageLogged = false;
 let footprintsLandedAt = Infinity;
@@ -688,6 +696,7 @@ let cutoutStats: {
   footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
   packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean; roofCap?: boolean; uploadMB?: number;
   requests?: number; uploads?: number; unchanged?: number; digestSkips?: number; inputSkips?: number;
+  segments?: number; traceMs?: number; wallsMs?: number; wallBuilds?: number;
 } | null = null;
 let cutoutUploads = 0;
 let cutoutUnchanged = 0;
@@ -721,7 +730,9 @@ function runCutoutBuild(): void {
   if (!polys || polys.length === 0) {
     if (filter.hasFootprintMask) filter.setFootprintMask(null);
     cutoutMaskFor = null;
-    cutoutCells = null;
+    // the structure-mask fallback pairs with the classifier boxes it was drawn from
+    cutoutWalls.clear();
+    refreshCarColliders();
     cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true, roofCap: false };
     cutoutRebuild.done();
     return;
@@ -730,14 +741,15 @@ function runCutoutBuild(): void {
   // copies, transferred: the worker reads the grid as of this collider pass
   const classifier = {
     structure: ts.structureGrid.slice(), grid, reachM: CUTOUT_GAP_REACH_M,
-    top: CUTOUT_ROOF_CAP ? ts.activeTopGrid.slice() : null
+    // the roof tops decide which footprints the mesh rises over, capped or not
+    top: ts.activeTopGrid.slice()
   };
   const t0 = performance.now();
   let packed: PackedFootprints | undefined;
   let roof: RoofInput | undefined;
   if (cutoutBuilderFor !== polys) {
     packed = packFootprints(polys);
-    if (CUTOUT_ROOF_CAP) roof = roofInput(polys);
+    roof = roofInput(polys);
     cutoutBuilderFor = polys;
     cutoutSetId++;
   }
@@ -780,18 +792,22 @@ function runCutoutBuild(): void {
       return;
     }
     cutoutMaskFor = polys;
-    cutoutCells = b.cells ? { data: b.cells, grid } : null;
     cutoutUploads++;
+    // the car's walls come from this same stencil, rebuilt only because it changed
+    const t2 = performance.now();
+    const hf = world.terrainProvider.heightfield;
+    const wallsRebuilt = cutoutWalls.land(b.digest, b.segments, (x, z) => hf.sample(x, z));
+    const wallsMs = performance.now() - t2;
     cutoutStats = {
       footprints: polys.length, texelM: b.mask.cell, n: b.mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
       packMs, buildMs: r.buildMs, uploadQueuedMs: performance.now() - t1, gapCells: b.gapCells, baseRebuilt: b.baseRebuilt,
       roofCap: b.mask.channels === 2, uploadMB: Math.round(b.mask.data.length / 1e4) / 100,
       requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged,
-      digestSkips: cutoutDigestSkips, inputSkips: cutoutInputSkips
+      digestSkips: cutoutDigestSkips, inputSkips: cutoutInputSkips,
+      segments: b.segments.length / SEG_STRIDE, traceMs: b.traceMs, wallsMs, wallBuilds: cutoutWalls.builds
     };
     log.info('cutout stencil built', cutoutStats);
-    // the gap buildings' boxes collide from here on
-    if (physicsOnWalls) game.setBuildingColliders(carColliders(lastColliders, lastTileBoxes.length), [...lastColliders]);
+    if (wallsRebuilt) refreshCarColliders();
     logCutoutCoverage();
   };
   if (typeof Worker === 'undefined') {
@@ -831,7 +847,8 @@ function roofInput(polys: readonly Footprint[]): RoofInput {
     base[k] = fg ? fg.gMin : 0;
     overtureTop[k] = fg && p.height != null ? fg.ground + p.minHeight + p.height : NaN;
   });
-  return { base, overtureTop, marginM: CUTOUT_ROOF_MARGIN_M * world.terrainProvider.reliefBoost };
+  const boost = world.terrainProvider.reliefBoost;
+  return { base, overtureTop, marginM: CUTOUT_ROOF_MARGIN_M * boost, minRiseM: CUTOUT_MIN_RISE_M * boost };
 }
 
 /**
@@ -859,19 +876,24 @@ function logCutoutCoverage(): void {
 }
 
 /**
- * What the cars hit. In a prism mode the outline walls (plus the props);
- * in Cutout 3D also the classifier boxes of the gap buildings the stencil
- * painted from the classifier, but no box that mostly duplicates a prism.
- * Elsewhere the boxes.
+ * What the cars hit. Cutout 3D: the walls traced from the stencil on screen
+ * (plus the props), so every drawn building is solid and nothing undrawn
+ * is; until a stencil lands, the classifier boxes, which the structure-mask
+ * fallback is drawn from. A prism mode: the outline walls (plus the props).
+ * Elsewhere the boxes. The bots and the blocked-ground checks always get
+ * the boxes (the second argument to setBuildingColliders).
  */
 function carColliders(colliders: readonly BuildingCollider[], nTileBoxes: number): BuildingCollider[] {
+  const walls = traits(viewMode).cutsToFootprints ? cutoutWalls.walls : null;
+  carOnStencil = walls !== null;
+  if (walls) return [...walls, ...colliders.slice(nTileBoxes)];
   if (!physicsOnWalls) return colliders as BuildingCollider[];
-  const cells = cutoutCells;
-  const grid = tiles?.activeGrid;
-  const gapBoxes = traits(viewMode).cutsToFootprints && cells && grid && cells.grid.n === grid.n && cells.grid.cell === grid.cell
-    ? selectGapBoxes(colliders.slice(0, nTileBoxes), cells.data, cells.grid)
-    : [];
-  return [...wallColliders(prismView.walls), ...gapBoxes, ...colliders.slice(nTileBoxes)];
+  return [...wallColliders(prismView.walls), ...colliders.slice(nTileBoxes)];
+}
+
+/** Hand the physics the cars' colliders again (a stencil landed, the view changed); the boxes stay as they are. */
+function refreshCarColliders(): void {
+  game.setBuildingColliders(carColliders(lastColliders, lastTileBoxes.length), [...lastColliders]);
 }
 
 /** Vector City streets: the OSM ways draped on the ground the car drives on. */
@@ -894,7 +916,7 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   physicsOnWalls = traits(viewMode).prismPhysics && prismView.count > 0;
   // a prism mode draws the exact outline, so the cars hit the outline (plus the props);
   // the classifier's boxes stay behind it for the bots' routes and the blocked-ground checks
-  // (Cutout 3D adds the boxes of the gap buildings its stencil painted from the classifier)
+  // (Cutout 3D: the walls traced from its stencil instead, once one has landed)
   game.setBuildingColliders(carColliders(colliders, tileBoxes.length), colliders);
   buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
@@ -947,7 +969,7 @@ function clearTiles(): void {
   roadRibbons.clear();
   prismsFor = null;
   cutoutMaskFor = null;
-  cutoutCells = null;
+  cutoutWalls.clear();
   cutoutCoverageStat = null;
   cutoutBuilderFor = null;
   cutoutDirty = true;

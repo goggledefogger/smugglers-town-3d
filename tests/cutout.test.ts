@@ -3,11 +3,14 @@ import { RGFormat } from 'three';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilter.ts';
 import {
-  footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells, selectGapBoxes,
+  footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells,
   CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE, encodeRoofCap, decodeRoofCap, ROOF_NO_CAP, roofCapAt,
   footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest
 } from '../src/services/overture/footprintMask.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
+import { traceStencil, SEG_STRIDE } from '../src/services/overture/stencilTrace.ts';
+import { stencilWallColliders, StencilColliders, WALL_FULL_HEIGHT } from '../src/services/overture/stencilWalls.ts';
+import { sphereVsWall } from '../src/core/physics/collision.ts';
 import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
 
 /** closed square ring, world x,z */
@@ -192,16 +195,6 @@ describe('hybrid stencil: Overture union the classifier gap cells', () => {
     expect(() => b.build({ setId: 2, opts, classifier: null })).toThrow();
   });
 
-  it('collides with a gap box and drops one that duplicates a prism', () => {
-    const cells = new Uint8Array(64);
-    cells[cellAt(1, 1)] = CELL_GAP;
-    cells[cellAt(4, 4)] = CELL_COVERED; cells[cellAt(5, 4)] = CELL_COVERED; cells[cellAt(6, 4)] = CELL_GAP;
-    const box = (x0: number, z0: number, x1: number, z1: number) => ({ min: { x: x0, z: z0 }, max: { x: x1, z: z1 } });
-    const gapBox = box(-30, -30, -20, -20);
-    const prismBox = box(0, 0, 20, 10);
-    const mixed = box(0, 0, 30, 10);
-    expect(selectGapBoxes([gapBox, prismBox, mixed], cells, grid)).toEqual([gapBox]);
-  });
 });
 
 describe('roof cap', () => {
@@ -274,12 +267,15 @@ describe('roof cap', () => {
     const caps = polygonRoofCaps(pk, roof, top, grid);
     // the max (45), not the mean (31): the wing is not shaved
     expect(caps[0]).toBe(45 + 3 - 5);
-    // no roof sample at all: no cap
-    expect(caps[1]).toBe(ROOF_NO_CAP);
+    // no building cell under it at all: the mesh does not rise there, dropped (0)
+    expect(caps[1]).toBe(0);
     // Overture's roof counts when it is the higher
     const withOverture = polygonRoofCaps(pk, { ...roof, overtureTop: Float32Array.from([60, 9]) }, top, grid);
     expect(withOverture[0]).toBe(60 + 3 - 5);
-    expect(withOverture[1]).toBe(9 + 3);
+    // Overture's height does not save a footprint the mesh does not rise over
+    expect(withOverture[1]).toBe(0);
+    // no roof samples yet (no classifier): every footprint stays, capped by Overture alone
+    expect(Array.from(polygonRoofCaps(pk, { ...roof, overtureTop: Float32Array.from([60, 9]) }, null, null))).toEqual([63 - 5, 12]);
     // a footprint too small to hold a cell centre reads the cell under its box centre
     const small = packFootprints([{ ring: square(11, 1, 14, 4), holes: [] }]);
     expect(polygonRoofCaps(small, { base: Float32Array.from([5]), overtureTop: Float32Array.from([NaN]), marginM: 3 }, top, grid)[0]).toBe(43);
@@ -367,6 +363,136 @@ describe('stencil digests: skip the upload and the build when nothing changed', 
   });
 });
 
+describe('one source: the car hits the stencil it sees', () => {
+  const segsOf = (f: Float32Array) => {
+    const out: number[][] = [];
+    for (let o = 0; o < f.length; o += SEG_STRIDE) out.push(Array.from(f.subarray(o, o + SEG_STRIDE)));
+    return out;
+  };
+  /** even-odd point in the traced loops (all segments together) */
+  const insideTrace = (f: Float32Array, x: number, z: number) => {
+    let inside = false;
+    for (let o = 0; o < f.length; o += SEG_STRIDE) {
+      const ax = f[o]!, az = f[o + 1]!, bx = f[o + 2]!, bz = f[o + 3]!;
+      if ((az > z) !== (bz > z) && x < ((bx - ax) * (z - az)) / (bz - az) + ax) inside = !inside;
+    }
+    return inside;
+  };
+
+  it('traces an L-shaped footprint to its six walls, outward normals, solid on the left', () => {
+    // L: x 0..20 by z 0..8, plus x 0..8 by z 8..20
+    const ring = [0, 0, 20, 0, 20, 8, 8, 8, 8, 20, 0, 20, 0, 0];
+    const m = footprintMask1m([{ ring, holes: [] }], { size: 64, cell: 1, dilateM: 0 });
+    const segs = traceStencil(m, 0.5);
+    expect(segs.length / SEG_STRIDE).toBe(6);
+    // the contour is the iso line between texel centres: the polygon edges themselves
+    // (edges at whole metres, texels inside are 0.5..19.5) up to the corner chamfers
+    const verts = new Set(segsOf(segs).map(s => `${s[0]},${s[1]}`));
+    expect(verts.size).toBe(6);
+    for (const v of verts) {
+      const [x, z] = v.split(',').map(Number) as [number, number];
+      expect([0, 8, 20].some(e => Math.abs(x - e) <= 0.5)).toBe(true);
+      expect([0, 8, 20].some(e => Math.abs(z - e) <= 0.5)).toBe(true);
+    }
+    // total length close to the L's perimeter (80 m), less the corner chamfers
+    const len = segsOf(segs).reduce((a, s) => a + Math.hypot(s[2]! - s[0]!, s[3]! - s[1]!), 0);
+    expect(len).toBeGreaterThan(77);
+    expect(len).toBeLessThanOrEqual(80);
+    // every wall's outward normal (right hand) points away from the solid
+    for (const s of segsOf(segs)) {
+      const dx = s[2]! - s[0]!, dz = s[3]! - s[1]!, l = Math.hypot(dx, dz);
+      const mx = (s[0]! + s[2]!) / 2, mz = (s[1]! + s[3]!) / 2;
+      expect(maskAt(m, mx + (dz / l) * 0.6, mz - (dx / l) * 0.6)).toBe(false);
+      expect(maskAt(m, mx - (dz / l) * 0.6, mz + (dx / l) * 0.6)).toBe(true);
+      expect(s[4]).toBe(255);
+    }
+    expect(insideTrace(segs, 15, 4)).toBe(true);
+    expect(insideTrace(segs, 15, 15)).toBe(false);
+  });
+
+  it('traces a courtyard as its own inner walls and a diagonal as one segment', () => {
+    const m = footprintMask1m([{ ring: square(0, 0, 30, 30), holes: [square(10, 10, 20, 20)] }], { size: 64, cell: 1, dilateM: 0 });
+    const segs = traceStencil(m);
+    expect(segs.length / SEG_STRIDE).toBe(8);
+    expect(insideTrace(segs, 15, 15)).toBe(false);
+    expect(insideTrace(segs, 5, 15)).toBe(true);
+    const tri = footprintMask1m([{ ring: [0, 0, 25, 0, 0, 25, 0, 0], holes: [] }], { size: 64, cell: 1, dilateM: 0 });
+    const triSegs = segsOf(traceStencil(tri));
+    // three walls, plus at most a short chamfer at an acute tip; the 45 degree staircase is one segment
+    expect(triSegs.length).toBeLessThanOrEqual(4);
+    expect(triSegs.some(t => Math.hypot(t[2]! - t[0]!, t[3]! - t[1]!) > 33)).toBe(true);
+  });
+
+  it('a point in the dilation band is inside a wall, and a car coming at it is pushed back out', () => {
+    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 1, dilateM: 2 });
+    const segs = traceStencil(m);
+    // the band: drawn (R set) 1.5 m outside the footprint, and now inside the traced walls
+    expect(maskAt(m, -1.5, 5)).toBe(true);
+    expect(insideTrace(segs, -1.5, 5)).toBe(true);
+    expect(insideTrace(segs, -2.6, 5)).toBe(false);
+    const walls = stencilWallColliders(segs, () => 0);
+    const hit = { nx: 0, ny: 0, nz: 0, push: 0 };
+    // a 1 m sphere centred 2.6 m outside the footprint, 1 m up, touches the band's wall
+    const touched = walls.filter(w => sphereVsWall(-2.6, 1, 5, 1, w.wall!, w.min.y, w.max.y, hit));
+    expect(touched.length).toBeGreaterThan(0);
+    expect(hit.nx).toBeLessThan(-0.9);
+    // with no cap, full height
+    expect(walls.every(w => w.max.y === WALL_FULL_HEIGHT && w.min.y < 0)).toBe(true);
+  });
+
+  it('walls take their height from the roof cap', () => {
+    const m = footprintMaskPacked(packFootprints([{ ring: square(0, 0, 10, 10), holes: [] }]), { size: 64, cell: 1, dilateM: 2, roofCap: true }, Uint8Array.from([7]));
+    const walls = stencilWallColliders(traceStencil(m), () => 10);
+    expect(walls.length).toBeGreaterThan(3);
+    for (const w of walls) {
+      expect(w.max.y).toBe(17);
+      expect(w.min.y).toBe(8);
+    }
+  });
+
+  it('drops a footprint the mesh rises less than 3 m over (an empty lot, a shed)', () => {
+    const grid = { n: 8, cell: 10, half: 40 };
+    const top = new Float32Array(64).fill(-Infinity);
+    top[4 * 8 + 4] = 12.5;   // the shed: 2.5 m over ground 10
+    top[1 * 8 + 1] = 25;     // a building: 15 m over ground 10
+    const polys = [{ ring: square(1, 1, 9, 9), holes: [] }, { ring: square(-29, -29, -21, -21), holes: [] }];
+    const roof = { base: Float32Array.from([10, 10]), overtureTop: Float32Array.from([NaN, NaN]), marginM: 3, minRiseM: 3 };
+    const caps = polygonRoofCaps(packFootprints(polys), roof, top, grid);
+    expect(caps[0]).toBe(0);
+    expect(caps[1]).toBe(18);
+    const b = new CutoutStencilBuilder();
+    const built = b.build({
+      setId: 1, packed: packFootprints(polys), roof, opts: { size: 128, cell: 1, dilateM: 2 },
+      classifier: { structure: new Uint8Array(64), grid, top }
+    });
+    if (!built.changed) throw new Error('expected a mask');
+    expect(maskAt(built.mask, 5, 5)).toBe(false);
+    expect(maskAt(built.mask, -25, -25)).toBe(true);
+    // and no wall where nothing is drawn
+    expect(insideTrace(built.segments, 5, 5)).toBe(false);
+    expect(insideTrace(built.segments, -25, -25)).toBe(true);
+  });
+
+  it('refreshes the colliders only when a different stencil lands', () => {
+    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 1, dilateM: 2 });
+    const segs = traceStencil(m);
+    const c = new StencilColliders();
+    let samples = 0;
+    const ground = () => { samples++; return 0; };
+    expect(c.land('aaaa', segs, ground)).toBe(true);
+    const walls = c.walls;
+    const n = samples;
+    expect(c.land('aaaa', segs, ground)).toBe(false);
+    expect(c.walls).toBe(walls);
+    expect(samples).toBe(n);
+    expect(c.land('bbbb', segs, ground)).toBe(true);
+    expect(c.walls).not.toBe(walls);
+    expect(c.builds).toBe(2);
+    c.clear();
+    expect(c.walls).toBeNull();
+  });
+});
+
 describe('CoalescedRebuild', () => {
   const fakeClock = () => {
     let t = 0;
@@ -424,9 +550,9 @@ describe('CoalescedRebuild', () => {
 });
 
 describe('Cutout 3D view mode', () => {
-  it('shows the tiles, cut to footprints, colliding with the prism walls it does not draw', () => {
+  it('shows the tiles, cut to footprints, and builds no prisms (its walls come from the stencil)', () => {
     expect(VIEW_MODES['cutout-3d']).toEqual({
-      label: 'VIEW: CUTOUT 3D', paintsWalls: false, paintsBoxes: false, showsPrisms: false, prismPhysics: true,
+      label: 'VIEW: CUTOUT 3D', paintsWalls: false, paintsBoxes: false, showsPrisms: false, prismPhysics: false,
       proceduralFacades: false, showsTiles: true, snapsTiles: false, cutsToFootprints: true
     });
   });
