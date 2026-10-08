@@ -37,7 +37,7 @@ const UI_OF: Partial<Record<LogicalAction, UiAction>> = {
   uiUp: 'up', uiDown: 'down', uiLeft: 'left', uiRight: 'right',
   uiConfirm: 'confirm', uiBack: 'back', uiTab: 'tab', uiPause: 'pause'
 };
-const HOTKEY_OF: Partial<Record<LogicalAction, Hotkey>> = { camera: 'camera', reset: 'reset', viewMode: 'viewMode', clutterMode: 'clutterMode' };
+const HOTKEY_OF: Partial<Record<LogicalAction, Hotkey>> = { camera: 'camera', reset: 'reset', viewMode: 'viewMode', clutterMode: 'clutterMode', surfaceMode: 'surfaceMode' };
 
 export class GamepadSource implements InputSource {
   private readonly table: BindingTable;

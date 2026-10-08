@@ -11,7 +11,7 @@
  */
 import { Quaternion, Vector3, MathUtils } from 'three';
 import { config } from '../../app/config.ts';
-import type { Heightfield } from '../heightfield.ts';
+import type { HeightSampler } from '../heightfield.ts';
 import type { VehicleInput, VehicleStats } from './vehicleStats.ts';
 import type { Rng } from '../rng.ts';
 import { sphereVsAabb, sphereVsWall, type Contact, type CollisionLayer, type WallSegment } from './collision.ts';
@@ -198,7 +198,7 @@ export class VehicleBody {
   step(
     dt: number,
     input: VehicleInput,
-    ground: Heightfield,
+    ground: HeightSampler,
     buildings: readonly BuildingCollider[],
     surfaceProvider?: SurfaceElevationFn | undefined
   ): void {
@@ -304,7 +304,7 @@ export class VehicleBody {
    * ~6 Hz over the terrain's finest noise.
    */
   private groundUnder(
-    ground: Heightfield,
+    ground: HeightSampler,
     surfaceProvider?: SurfaceElevationFn | undefined
   ): number {
     const { x, z } = this.pos;
@@ -417,7 +417,7 @@ export class VehicleBody {
 
   private integratePosition(
     dt: number,
-    ground: Heightfield,
+    ground: HeightSampler,
     surfaceProvider?: SurfaceElevationFn | undefined
   ): void {
     this.pos.addScaledVector(this.vel, dt);

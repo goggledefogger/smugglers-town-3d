@@ -24,6 +24,7 @@ import { buildHudSnapshot } from './hudSnapshot.ts';
 import type { TerrainProvider } from '../core/terrain/TerrainProvider.ts';
 import type { VehicleInput } from '../core/physics/vehicleStats.ts';
 import type { SurfaceElevationFn } from '../core/physics/VehicleBody.ts';
+import type { HeightSampler } from '../core/heightfield.ts';
 import type { GameEvents } from './events.ts';
 import type { HudSnapshot, Store } from './store.ts';
 
@@ -121,6 +122,17 @@ export class Game {
 
   setSurfaceProvider(fn: SurfaceElevationFn | undefined): void {
     this.surfaceProvider = fn;
+  }
+
+  /**
+   * What the wheels sample, when it is not the terrain's own heightfield
+   * (True Surface). Vehicle ground only: spawning, nav, props and the camera
+   * keep reading `terrainProvider.heightfield`.
+   */
+  private vehicleGround?: HeightSampler | undefined;
+
+  setVehicleGround(ground: HeightSampler | undefined): void {
+    this.vehicleGround = ground;
   }
 
   constructor(
@@ -449,7 +461,7 @@ export class Game {
       } else {
         input = this.remoteInputs.get(actor.control) ?? NEUTRAL_INPUT;
       }
-      actor.body.step(dt, input, this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
+      actor.body.step(dt, input, this.vehicleGround ?? this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
     }
     resolveVehicleCollisions(this.bodies, (a, b) => this.match.onRam(a, b, this.timeS), this.rng);
     for (const actor of this.vehicles) {
@@ -468,7 +480,7 @@ export class Game {
       this.deps.events.emit('match:countdown', { n });
     }
     for (const actor of this.vehicles) {
-      actor.body.step(dt, NEUTRAL_INPUT, this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
+      actor.body.step(dt, NEUTRAL_INPUT, this.vehicleGround ?? this.terrain.heightfield, this.collidersNear(actor.body.pos), this.surfaceProvider);
     }
     this.countdownLeft -= dt;
     if (this.countdownLeft <= 0) {

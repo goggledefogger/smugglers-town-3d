@@ -5,7 +5,16 @@
  */
 import { MathUtils } from 'three';
 
-export class Heightfield {
+/**
+ * The one thing vehicle physics asks of the ground: a height at (x, z).
+ * `Heightfield` satisfies it; so does the True Surface composite, which wraps
+ * the live base field rather than copying it.
+ */
+export interface HeightSampler {
+  sample(x: number, z: number): number;
+}
+
+export class Heightfield implements HeightSampler {
   private readonly data: Float32Array;
   readonly segs: number;
   readonly size: number;

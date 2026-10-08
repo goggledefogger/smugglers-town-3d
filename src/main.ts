@@ -45,11 +45,13 @@ import { FrameProfiler } from './app/frameProfiler.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import type { TileStreamer } from './services/tiles/Tileset.ts';
-import { AmortizedGroundBuilder, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
+import { AmortizedGroundBuilder, TILE_GROUND_GAP, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
 import {
   type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
   loadResolution3D, saveResolution3D
 } from './services/tiles/resolutionProfiles.ts';
+import { SurfaceHeightfield } from './core/terrain/SurfaceHeightfield.ts';
+import { SurfaceCapture, SurfacePreview } from './render/SurfaceCapture.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
 import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
 import { worldToLl } from './core/geo/projection.ts';
@@ -90,6 +92,9 @@ app.innerHTML = `
       </button>
       <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, hide everything but buildings, or sweep the street clean while keeping walls and trees (Hotkey: F)">
         <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
+      </button>
+      <button id="surface-btn" class="hud-btn" type="button" hidden title="True Surface: the wheels ride a 1 m surface captured from the photogrammetry (kerbs, humps, ramps) instead of the 10 m ground grid. Physics, so the host decides online (Hotkey: U)">
+        <span>🛣️</span> <span id="surface-text">SURFACE: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[U]</span>
       </button>
       <button id="audio-btn" class="hud-btn active" type="button" title="Toggle audio mute (Hotkey: M)">
         <span id="audio-icon">🔊</span> <span id="audio-text">AUDIO: ON</span> <span class="mono" style="opacity:0.6;font-size:9px;">[M]</span>
@@ -270,6 +275,96 @@ function cycleClutterMode(): void {
 
 clutterBtn?.addEventListener('click', cycleClutterMode);
 
+// ---- True Surface (physics): wheels sample a 1 m GPU capture of the tiles ----
+// Off by default; ?surface=1 starts with it on. Only the sim's owner may turn
+// it on: online that is the host, and a client only shows the host decides.
+let surfaceOn = new URLSearchParams(window.location.search).get('surface') === '1';
+let surfaceField: SurfaceHeightfield | null = null;
+let surfaceCapture: SurfaceCapture | null = null;
+let surfacePreview: SurfacePreview | null = null;
+let surfacePreviewAt = 0;
+/** The clutter mode True Surface switched off, restored when it turns off. */
+let clutterBeforeSurface: ClutterMode | null = null;
+const surfaceBtn = document.getElementById('surface-btn') as HTMLButtonElement | null;
+const surfaceText = document.getElementById('surface-text') as HTMLSpanElement | null;
+
+/** Online and not the host: the sim, and so the ground, is someone else's. */
+function isOnlineClient(): boolean {
+  return online !== null && (world as unknown) !== game;
+}
+
+function updateSurfaceUi(): void {
+  if (!surfaceBtn || !surfaceText) return;
+  surfaceBtn.hidden = !tiles;
+  const client = isOnlineClient();
+  surfaceBtn.classList.toggle('active', !!surfaceField);
+  surfaceText.textContent = client ? 'SURFACE: HOST DECIDES' : surfaceField ? 'SURFACE: TRUE 1M' : 'SURFACE: OFF';
+}
+
+function disposeSurface(): void {
+  surfaceCapture?.dispose();
+  surfaceCapture = null;
+  surfaceField = null;
+  game.setVehicleGround(undefined);
+  if (surfacePreview) surfacePreview.visible = false;
+}
+
+/** Bring the composite in line with surfaceOn, the loaded tiles and the current game. Idempotent. */
+function applySurface(): void {
+  if (!surfaceOn || !tiles || isOnlineClient()) {
+    disposeSurface();
+    updateSurfaceUi();
+    return;
+  }
+  // wrap the live base object, never a copy: ground refinement writes into it in place
+  const base = game.terrainProvider.heightfield;
+  if (!surfaceField || !surfaceCapture) {
+    surfaceField = new SurfaceHeightfield(base, (x, z) => tiles?.isRoadAt(x, z) ?? false, { liftM: TILE_GROUND_GAP });
+    surfaceCapture = new SurfaceCapture(
+      renderer.renderer, surfaceField, () => tiles?.group ?? null, () => game.terrainProvider.heightfield
+    );
+  } else if (surfaceField.base !== base) {
+    surfaceField.base = base;
+    surfaceField.clear();
+    surfaceCapture.markDirty();
+  }
+  game.setVehicleGround(surfaceField);
+  updateSurfaceUi();
+}
+
+/**
+ * The street clutter filter flattens or hides kerbs and parked cars, so with it
+ * on the wheels would ride bumps nobody can see. True Surface turns it off while
+ * it is on, and hands back whatever mode it found.
+ */
+function setClutterForSurface(on: boolean): void {
+  if (!clutterFilter) return;
+  if (on && clutterMode !== 'off') {
+    clutterBeforeSurface = clutterMode;
+    clutterFilter.mode = clutterMode = 'off';
+  } else if (!on && clutterBeforeSurface && clutterMode === 'off') {
+    clutterFilter.mode = clutterMode = clutterBeforeSurface;
+    clutterBeforeSurface = null;
+  }
+  if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
+  updateClutterUi();
+}
+
+function toggleSurfaceMode(): void {
+  if (isOnlineClient()) {
+    showToast('True Surface changes physics: the host decides');
+    return;
+  }
+  surfaceOn = !surfaceOn;
+  setClutterForSurface(surfaceOn);
+  applySurface();
+  if (!tiles) showToast(`True Surface ${surfaceOn ? 'armed' : 'off'}: it needs a real place with 3D tiles`);
+  else showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface (clutter filter off)' : 'True Surface off: 10 m ground grid');
+}
+
+surfaceBtn?.addEventListener('click', toggleSurfaceMode);
+(window as any).__surface = () => ({ on: surfaceOn, field: surfaceField, capture: surfaceCapture });
+
 /** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
 function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   (window as any).__tiles = streamer; // scripts/clutter-shots.mjs teleports onto a road cell through this
@@ -307,6 +402,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
     if (traits(viewMode).showsPrisms) setViewMode(viewMode);
   };
+  if (surfaceOn) setClutterForSurface(true);
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.group.traverse(o => o.layers.set(1));
@@ -610,6 +706,7 @@ function clearTiles(): void {
   roadRibbons.clear();
   prismsFor = null;
   game.setSurfaceProvider(undefined);
+  disposeSurface();
   groundBuilder = null;
   if (groundStreamer) {
     renderer.scene.remove(groundStreamer.group);
@@ -656,6 +753,7 @@ function startMatch(terrain: TerrainProvider): void {
   prepareTerrain(terrain);
   game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
   game.reset(terrain);
+  applySurface();
   rebuildViews();
   hudEl.classList.add('cinematic');
   cameraRig.intro(config.match.countdownS, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
@@ -885,6 +983,7 @@ async function openOnline(type: number): Promise<void> {
         game.setSurfaceProvider(tiles ? (x, z, cy, gy) => tiles!.surfaceElevation(x, z, cy, gy) : undefined);
         prepareTerrain(terrain, mulberry32(seed));
         game.reset(terrain, seats);
+        applySurface();
         return game;
       },
       onMatch: (match, terrain) => {
@@ -893,6 +992,7 @@ async function openOnline(type: number): Promise<void> {
         world = match.world;
         // a client has no game of its own: seat the same rocks from the same seed
         if (match.world !== game) prepareTerrain(terrain, mulberry32(match.seed));
+        applySurface();
         swapTerrainMesh(terrain);
         log.info('match start', {
           mode: match.world === game ? 'host' : 'client',
@@ -1016,6 +1116,7 @@ diagEl.innerHTML = `
   <span id="diag-car">Car Y: 0.0m</span>
   <span id="diag-status" style="font-weight:700;"></span>
   <span id="diag-tiles">Tiles: off</span>
+  <span id="diag-surface" style="font-weight:600;color:#c4b5fd;display:none;"></span>
   <span id="diag-osm" style="font-weight:600;color:#eab308;">OSM: ⏳ Pending</span>
   <button id="res-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #10b981;color:#34d399;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
     RES: Balanced [F10]
@@ -1036,6 +1137,7 @@ const diagCarEl = diagEl.querySelector('#diag-car') as HTMLElement | null;
 const diagStatusEl = diagEl.querySelector('#diag-status') as HTMLElement | null;
 const diagTilesEl = diagEl.querySelector('#diag-tiles') as HTMLElement | null;
 const diagOsmEl = diagEl.querySelector('#diag-osm') as HTMLElement | null;
+const diagSurfaceEl = diagEl.querySelector('#diag-surface') as HTMLElement | null;
 const resToggleBtn = diagEl.querySelector('#res-toggle-btn') as HTMLButtonElement | null;
 const expToggleBtn = diagEl.querySelector('#exp-toggle-btn') as HTMLButtonElement | null;
 
@@ -1294,6 +1396,24 @@ function step(now: number): void {
       diagOsmEl.style.color = tiles?.hasRoadGrid ? '#38bdf8' : '#eab308';
       diagOsmEl.textContent = `OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}`;
     }
+    if (diagSurfaceEl) {
+      const on = surfaceField !== null && surfaceCapture !== null;
+      diagSurfaceEl.style.display = on ? 'inline' : 'none';
+      if (on) {
+        const t = surfaceCapture!.timings;
+        diagSurfaceEl.textContent = `Surface: ${surfaceField!.sample(b.pos.x, b.pos.z).toFixed(2)}m (Δ ${surfaceField!.deltaAt(b.pos.x, b.pos.z).toFixed(2)}) cap ${t.renderMs.toFixed(1)}/${t.readbackMs.toFixed(0)}/${t.processMs.toFixed(1)}ms ×${t.captures}`;
+      }
+    }
+  }
+
+  // F8 corner view of the captured surface, redrawn at 10 Hz (the field itself only changes per capture)
+  if (showDiagnostic && surfaceField && world.player?.body && now - surfacePreviewAt > 100) {
+    surfacePreviewAt = now;
+    surfacePreview ??= new SurfacePreview();
+    surfacePreview.visible = true;
+    surfacePreview.draw(surfaceField, world.player.body.pos.x, world.player.body.pos.z);
+  } else if (surfacePreview && (!showDiagnostic || !surfaceField)) {
+    surfacePreview.visible = false;
   }
 
   // poll every source each frame so gamepad edges fire on menus too — the
@@ -1322,6 +1442,7 @@ function step(now: number): void {
     if (hot === 'reset') resetPlayer();
     if (hot === 'viewMode') toggleViewMode();
     if (hot === 'clutterMode') cycleClutterMode();
+    if (hot === 'surfaceMode') toggleSurfaceMode();
   }
   const playing = !introEl.isConnected && endEl.hidden;
   if (playing) {
@@ -1333,6 +1454,11 @@ function step(now: number): void {
     simTime += dt;
     profiler.lap('sim');
     const player = world.player?.body ?? null;
+    if (surfaceCapture && tiles && player) {
+      // read before the collider refresh below clears it: new tiles mean a new surface
+      if (tiles.collidersDirty) surfaceCapture.markDirty();
+      surfaceCapture.update(now, player.pos.x, player.pos.z);
+    }
     if (tiles && player) {
       tiles.update(player.pos, now);
       // refined tiles change the building footprints; rebuild at most every 1.5 s
@@ -1360,6 +1486,7 @@ function step(now: number): void {
         if (traits(viewMode).paintsBoxes) facadeBaker.replay();
         roadRibbons.refreshHeights((x, z) => world.terrainProvider.heightfield.sample(x, z));
         if (groundStreamer) groundStreamer.refresh();
+        surfaceCapture?.markDirty();
         groundBuilder = null;
       }
     }

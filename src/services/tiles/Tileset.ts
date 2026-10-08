@@ -678,6 +678,16 @@ export class TileStreamer {
     return this.roadGrid?.mask ?? null;
   }
 
+  /** True where world (x, z) falls in an OSM road cell; false before roads load. O(1), no allocation. */
+  isRoadAt(x: number, z: number): boolean {
+    const rg = this.roadGrid;
+    if (!rg) return false;
+    const { half, cell, n } = rg;
+    const i = Math.floor((x + half) / cell), j = Math.floor((z + half) / cell);
+    if (i < 0 || j < 0 || i >= n || j >= n) return false;
+    return rg.mask[j * n + i] === 1;
+  }
+
   setExperimentMode(mode: ColliderExperimentMode): void {
     if (this.currentExperiment === mode) return;
     this.currentExperiment = mode;
