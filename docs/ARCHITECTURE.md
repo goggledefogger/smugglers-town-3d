@@ -180,6 +180,58 @@ ground/air flickers per run into ~25 real launches with several times the
 height. Landing damage was rebalanced to match, since jumps that reliably wreck
 you are jumps nobody takes.
 
+### True Surface (`core/terrain/SurfaceHeightfield.ts`, `render/SurfaceCapture.ts`)
+
+An opt-in physics mode (hotkey U, HUD button, `?surface=1`). By default the
+wheels sample the 10 m ground grid, so every kerb, camber, hump and ramp the
+player sees in the photogrammetry is invisible to them. True Surface leaves the
+visuals alone and gives the wheels a 1 m surface captured from the GPU:
+
+- **Capture.** Once a second at most, and only when the player has moved a
+  quarter of the window from its centre, or tiles or the base ground changed,
+  an orthographic camera looks straight down over a 768 m square around the
+  player and renders only the tile group (moved into a private scene for the
+  one call) into a 768² `R32F` target whose red channel is world Y. Depth
+  testing keeps the top surface. Where no tile drew, the clear value stays and
+  the base ground is used. The readback is `readRenderTargetPixelsAsync`; r169
+  checks the readable format against whatever framebuffer is bound, so the
+  capture target is bound first or R32F is refused (an RGBA float target is the
+  fallback).
+- **The band rule.** The capture is stored as a delta from the base ground and
+  kept only where it lies within ±1.5 m (`SURF_BAND_M`) of it. A wall, roof or
+  canopy texel sits metres above the base and is rejected, so this mode never
+  creates a wall: walls stay the job of the box colliders, and which streets
+  are drivable does not change. On OSM road cells the delta is also capped at
+  +0.5 m, so an awning or tree over a street is never a ramp. The delta is
+  box-blurred 3×3 and faded to 0 over the last 16 m of the window; processing
+  runs in 1.5 ms slices into a second buffer that is swapped in whole.
+- **Wiring.** `SurfaceHeightfield` wraps the live base `Heightfield` object, so
+  ground refinement (`copyFrom`) flows straight through. `Game.setVehicleGround`
+  hands it to `VehicleBody.step` for vehicle ground only (all cars, bots
+  included); spawning, nav, props, the camera and `VehicleView`'s cosmetic tilt
+  still read the base field. The bridge deck provider still runs on top. The
+  mode turns the street clutter filter off while it is on (it hides or flattens
+  exactly the kerbs and parked cars the wheels now ride) and restores it after.
+  Online it changes the host's physics: only the host can turn it on, a client
+  sees "host decides", and nothing in the protocol changes.
+
+Measured on Pioneer Square, Portland (M-series Mac, 60 Hz, other work running):
+capture submit 2.6 ms CPU p50 (8.5 ms p99, 55 ms for the very first capture),
+0.5-1.7 ms GPU-inclusive when measured between `gl.finish()` calls; readback
+resolves 70-110 ms later without stalling; processing totals 20-40 ms spread
+over ~20 frames. Frame time over 30 s of interleaved driving: p50 16.7 ms both
+ways, p99 67 ms off and 82 ms on, within the noise of that machine's load.
+Driving a street, the surface under the car differed from the base by -0.26 to
++0.5 m and the second difference along a 12 m line ahead was 10-40× the base's.
+
+Known limits: under a bridge or canopy the low deck is lost inside the band
+(the top wins, is rejected, and the base is used); while tiles are still
+streaming the capture is of coarse tiles until the next recapture; the band
+admits melted parked cars (about 1.5 m), so a parking lot rides as lumps, and an
+asymmetric band (say +0.6/-1.5 m) would cut them while keeping kerbs and humps;
+the +0.5 m road cap also clips real road surface where the 10 m base sits low
+(parking aisles); in the Game 3D view the wheels still ride the photogrammetry.
+
 ### `core/physics/collision.ts`
 Collision shapes, kept separate from render meshes and deliberately simple.
 A vehicle's collider is a compound of spheres in body space: `sphereCollider`
