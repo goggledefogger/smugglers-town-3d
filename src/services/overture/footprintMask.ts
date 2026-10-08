@@ -224,33 +224,75 @@ export interface CoverageGap {
   withoutFootprint: number;
 }
 
+/** The mask's world-x,z origin (its min corner). */
+const maskOrigin = (m: FootprintMask): [number, number] => [m.cx - m.size / 2, m.cz - m.size / 2];
+
+/** Classifier cell c lies wholly inside the mask extent (no footprints were fetched beyond it). */
+function cellInExtent(c: number, grid: Grid, m: FootprintMask): boolean {
+  const { n, cell, half } = grid;
+  const [mx0, mz0] = maskOrigin(m);
+  const x = -half + (c % n) * cell, z = -half + Math.floor(c / n) * cell;
+  return x >= mx0 && z >= mz0 && x + cell <= mx0 + m.size && z + cell <= mz0 + m.size;
+}
+
+/** Any set mask texel within `reachM` of classifier cell c's square. */
+function cellNearMask(c: number, grid: Grid, m: FootprintMask, reachM: number): boolean {
+  const { n, cell, half } = grid;
+  const [mx0, mz0] = maskOrigin(m);
+  const x = -half + (c % n) * cell, z = -half + Math.floor(c / n) * cell;
+  const i0 = Math.max(0, Math.floor((x - reachM - mx0) / m.cell));
+  const i1 = Math.min(m.n - 1, Math.floor((x + cell + reachM - mx0) / m.cell));
+  const j0 = Math.max(0, Math.floor((z - reachM - mz0) / m.cell));
+  const j1 = Math.min(m.n - 1, Math.floor((z + cell + reachM - mz0) / m.cell));
+  for (let j = j0; j <= j1; j++) {
+    const row = j * m.n;
+    for (let i = i0; i <= i1; i++) if (m.data[row + i] !== 0) return true;
+  }
+  return false;
+}
+
+/** Classifier cell states on the classifier grid: what the hybrid stencil did with each. */
+export const CELL_NONE = 0;
+/** A building cell Overture lacks: painted into the stencil whole, and its box collides. */
+export const CELL_GAP = 1;
+/** A building cell with an Overture footprint within reach: the polygon (and its prism) stands for it. */
+export const CELL_COVERED = 2;
+
+/**
+ * Per classifier cell: a structure cell inside the mask extent is a gap
+ * when no Overture texel (dilated) lies within `reachM` of its square,
+ * covered otherwise. Per cell, not per group: a block the classifier
+ * merges into one group can hold one building Overture has and one it
+ * lacks, and the far cells of the second are still gaps, while the 10 m
+ * fringe hugging an Overture polygon is not (that is clutter the 1 m
+ * outline already decided about). An uncovered group (classifierGap's
+ * withoutFootprint) is all gap cells.
+ */
+export function classifierCells(structure: Uint8Array, grid: Grid, m: FootprintMask, reachM = 3): Uint8Array {
+  const out = new Uint8Array(grid.n * grid.n);
+  for (let c = 0; c < out.length; c++) {
+    if (structure[c] !== 1 || !cellInExtent(c, grid, m)) continue;
+    out[c] = cellNearMask(c, grid, m, reachM) ? CELL_COVERED : CELL_GAP;
+  }
+  return out;
+}
+
 /**
  * How big the Overture gap is: the classifier's structure cells (1 =
- * building, deck or ramp) grouped 4-connected into buildings, each checked
- * for any footprint texel within `reachM` of its cells. Only groups wholly
- * inside the mask extent count, since no footprints were fetched beyond it.
+ * building, deck or ramp) grouped 4-connected into buildings, a group
+ * covered when any of its cells has a footprint texel within `reachM`.
+ * Only groups wholly inside the mask extent count, since no footprints
+ * were fetched beyond it.
  */
 export function classifierGap(structure: Uint8Array, grid: Grid, m: FootprintMask, reachM = 3): CoverageGap {
-  const { n, cell, half } = grid;
+  return classifierGapFromCells(structure, grid, classifierCells(structure, grid, m, reachM));
+}
+
+/** classifierGap over cell states already computed (the stencil build has them). */
+export function classifierGapFromCells(structure: Uint8Array, grid: Grid, cells: Uint8Array): CoverageGap {
+  const { n } = grid;
   const seen = new Uint8Array(n * n);
   const stack: number[] = [];
-  const mx0 = m.cx - m.size / 2, mz0 = m.cz - m.size / 2;
-  const inExtent = (c: number): boolean => {
-    const x = -half + (c % n) * cell, z = -half + Math.floor(c / n) * cell;
-    return x >= mx0 && z >= mz0 && x + cell <= mx0 + m.size && z + cell <= mz0 + m.size;
-  };
-  const touchesFootprint = (c: number): boolean => {
-    const x = -half + (c % n) * cell, z = -half + Math.floor(c / n) * cell;
-    const i0 = Math.max(0, Math.floor((x - reachM - mx0) / m.cell));
-    const i1 = Math.min(m.n - 1, Math.floor((x + cell + reachM - mx0) / m.cell));
-    const j0 = Math.max(0, Math.floor((z - reachM - mz0) / m.cell));
-    const j1 = Math.min(m.n - 1, Math.floor((z + cell + reachM - mz0) / m.cell));
-    for (let j = j0; j <= j1; j++) {
-      const row = j * m.n;
-      for (let i = i0; i <= i1; i++) if (m.data[row + i] !== 0) return true;
-    }
-    return false;
-  };
   let classifierBuildings = 0, withoutFootprint = 0;
   for (let s = 0; s < n * n; s++) {
     if (structure[s] !== 1 || seen[s]) continue;
@@ -259,8 +301,8 @@ export function classifierGap(structure: Uint8Array, grid: Grid, m: FootprintMas
     let inside = true, covered = false;
     while (stack.length) {
       const c = stack.pop()!;
-      if (!inExtent(c)) inside = false;
-      if (!covered && inside && touchesFootprint(c)) covered = true;
+      if (cells[c] === CELL_NONE) inside = false;
+      else if (cells[c] === CELL_COVERED) covered = true;
       const i = c % n, j = Math.floor(c / n);
       const nb = [i > 0 ? c - 1 : -1, i < n - 1 ? c + 1 : -1, j > 0 ? c - n : -1, j < n - 1 ? c + n : -1];
       for (const d of nb) {
@@ -274,4 +316,130 @@ export function classifierGap(structure: Uint8Array, grid: Grid, m: FootprintMas
     if (!covered) withoutFootprint++;
   }
   return { classifierBuildings, withoutFootprint };
+}
+
+/**
+ * Paint every gap cell into the mask whole, in place: the texels whose
+ * centres fall in the cell. Not dilated: the cell is already the
+ * classifier's coarse hull. The outer texel ring stays clear.
+ */
+export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): number {
+  const [mx0, mz0] = maskOrigin(m);
+  let painted = 0;
+  for (let c = 0; c < cells.length; c++) {
+    if (cells[c] !== CELL_GAP) continue;
+    painted++;
+    const x = -grid.half + (c % grid.n) * grid.cell, z = -grid.half + Math.floor(c / grid.n) * grid.cell;
+    const i0 = Math.max(1, Math.ceil((x - mx0) / m.cell - 0.5)), i1 = Math.min(m.n - 2, Math.ceil((x + grid.cell - mx0) / m.cell - 0.5) - 1);
+    const j0 = Math.max(1, Math.ceil((z - mz0) / m.cell - 0.5)), j1 = Math.min(m.n - 2, Math.ceil((z + grid.cell - mz0) / m.cell - 0.5) - 1);
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) m.data[j * m.n + i] = MASK_ON;
+  }
+  return painted;
+}
+
+/**
+ * The classifier boxes that stand for gap buildings: a box whose cells are
+ * at least half gap (and not fewer gap than covered) collides; one mostly
+ * over Overture-covered cells duplicates a prism wall and the prism wins.
+ */
+export function selectGapBoxes<B extends { min: { x: number; z: number }; max: { x: number; z: number } }>(
+  boxes: readonly B[], cells: Uint8Array, grid: Grid
+): B[] {
+  const { n, cell, half } = grid;
+  const clampI = (v: number) => Math.min(n - 1, Math.max(0, v));
+  const out: B[] = [];
+  for (const b of boxes) {
+    const i0 = clampI(Math.floor((b.min.x + half) / cell)), i1 = clampI(Math.floor((b.max.x - 1e-3 + half) / cell));
+    const j0 = clampI(Math.floor((b.min.z + half) / cell)), j1 = clampI(Math.floor((b.max.z - 1e-3 + half) / cell));
+    let gap = 0, covered = 0;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+      const v = cells[j * n + i];
+      if (v === CELL_GAP) gap++;
+      else if (v === CELL_COVERED) covered++;
+    }
+    if (gap > 0 && gap >= covered) out.push(b);
+  }
+  return out;
+}
+
+export interface ClassifierInput {
+  /** the classifier's structure grid (1 = building, deck or ramp), a copy the build may keep */
+  readonly structure: Uint8Array;
+  readonly grid: Grid;
+  /** a structure cell with an Overture texel this close (m) is covered (default 3) */
+  readonly reachM?: number;
+}
+
+/** One stencil build request: footprints ride along only with a new set id. */
+export interface CutoutJob {
+  readonly setId: number;
+  readonly packed?: PackedFootprints | undefined;
+  readonly opts: FootprintMaskOptions;
+  readonly classifier: ClassifierInput | null;
+}
+
+export interface CutoutStats {
+  coverage: CoverageGap | null;
+  /** classifier cells painted into the stencil */
+  gapCells: number;
+  /** the Overture raster was rebuilt (not the cached one reused) */
+  baseRebuilt: boolean;
+}
+
+export type CutoutBuild =
+  | ({ changed: true; mask: FootprintMask; cells: Uint8Array | null } & CutoutStats)
+  | ({ changed: false } & CutoutStats);
+
+/**
+ * The hybrid stencil, Overture at 1 m UNION the classifier's gap cells.
+ * Holds the footprints and their dilated raster per set, so a classifier
+ * update (tiles streaming in) costs the gap scan and a copy, not a
+ * re-raster; and when the painted cells come out the same as last time it
+ * says so, and the caller skips the upload. Pure: the worker wraps one,
+ * a worker-less runtime calls it directly.
+ */
+export class CutoutStencilBuilder {
+  private setId = -1;
+  private packed: PackedFootprints | null = null;
+  private base: FootprintMask | null = null;
+  private baseKey = '';
+  private lastCells: Uint8Array | null = null;
+  private lastSent = false;
+
+  build(job: CutoutJob): CutoutBuild {
+    if (job.packed) {
+      this.setId = job.setId;
+      this.packed = job.packed;
+      this.base = null;
+      this.lastSent = false;
+    }
+    if (!this.packed || this.setId !== job.setId) throw new Error(`cutout: footprint set ${job.setId} was never sent`);
+    const key = JSON.stringify(job.opts);
+    let baseRebuilt = false;
+    if (!this.base || this.baseKey !== key) {
+      this.base = footprintMaskPacked(this.packed, job.opts);
+      this.baseKey = key;
+      this.lastSent = false;
+      baseRebuilt = true;
+    }
+    const base = this.base;
+    const cl = job.classifier;
+    const cells = cl ? classifierCells(cl.structure, cl.grid, base, cl.reachM ?? 3) : null;
+    const coverage = cl && cells ? classifierGapFromCells(cl.structure, cl.grid, cells) : null;
+    let gapCells = 0;
+    if (cells) for (let c = 0; c < cells.length; c++) if (cells[c] === CELL_GAP) gapCells++;
+    if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, coverage, gapCells, baseRebuilt };
+    const mask: FootprintMask = { ...base, data: base.data.slice() };
+    if (cells && cl) paintGapCells(mask, cells, cl.grid);
+    this.lastCells = cells;
+    this.lastSent = true;
+    return { changed: true, mask, cells: cells ? cells.slice() : null, coverage, gapCells, baseRebuilt };
+  }
+}
+
+function sameCells(a: Uint8Array | null, b: Uint8Array | null): boolean {
+  if (a === null || b === null) return a === b;
+  if (a.length !== b.length) return false;
+  for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return false;
+  return true;
 }

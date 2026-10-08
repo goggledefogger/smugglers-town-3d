@@ -20,10 +20,13 @@ import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
 import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView.ts';
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
-import { packFootprints, footprintMaskPacked, classifierGap, type FootprintMask, type CoverageGap } from './services/overture/footprintMask.ts';
+import {
+  packFootprints, selectGapBoxes, CutoutStencilBuilder, type CoverageGap, type PackedFootprints
+} from './services/overture/footprintMask.ts';
+import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
 import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
-import { NO_DATA } from './services/tiles/tileColliders.ts';
+import { NO_DATA, type Grid } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
 import { PropScatter } from './render/PropScatter.ts';
@@ -366,6 +369,7 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
     // (Cutout 3D: its walls take over the physics and its stencil replaces the structure fallback)
     cutoutMaskFor = null;
+    cutoutDirty = true;
     cutoutCoverageLogged = false;
     footprintsLandedAt = performance.now();
     if (traits(viewMode).prismPhysics || traits(viewMode).cutsToFootprints) setViewMode(viewMode);
@@ -636,89 +640,140 @@ const CUTOUT_TEXEL_M = ((): number => {
 })();
 /** The stencil covers the footprint fetch radius both ways, and no more. */
 const CUTOUT_MASK_OPTS = { size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M };
+/** A classifier building cell with an Overture texel this close (m) is covered; farther, it is a gap. */
+const CUTOUT_GAP_REACH_M = 3;
+/** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
+const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
-let cutoutMask: FootprintMask | null = null;
+/** Classifier cell states (gap / covered) from the stencil on screen, on the grid they were built on. */
+let cutoutCells: { data: Uint8Array; grid: Grid } | null = null;
+let cutoutCoverageStat: (CoverageGap & { footprints: number; gapCells: number }) | null = null;
 let cutoutCoverageLogged = false;
 let footprintsLandedAt = Infinity;
-/** The footprint set a worker job is building for, so a stale result is dropped. */
-let cutoutJobFor: readonly Footprint[] | null = null;
+/** Inputs moved since the last build (footprints, classifier grid, tileset). */
+let cutoutDirty = true;
+/** The footprint set the stencil builder holds, and its id; a new set is packed and sent once. */
+let cutoutBuilderFor: readonly Footprint[] | null = null;
+let cutoutSetId = 0;
 let cutoutJobId = 0;
 let cutoutWorker: Worker | null = null;
+/** Worker-less runtimes build on this thread with the same builder. */
+let cutoutLocalBuilder: CutoutStencilBuilder | null = null;
 /** Cutout 3D's last stencil build, for the survey script. */
 let cutoutStats: {
   footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
-  packMs?: number; buildMs?: number; uploadQueuedMs?: number;
+  packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean;
+  requests?: number; uploads?: number; unchanged?: number;
 } | null = null;
+let cutoutUploads = 0;
+let cutoutUnchanged = 0;
+const cutoutRebuild = new CoalescedRebuild(runCutoutBuild, CUTOUT_REBUILD_MS);
 
 /**
- * Cutout 3D's stencil: built once per footprint set, on first entry to the
- * mode, in a worker (the frame pays only the pack into typed arrays), then
- * uploaded once. Never per frame and never per car move: it is centred on
- * the tileset origin, which only changes with a new tileset. Until it lands,
- * and when Overture has nothing here, cutout reads the structure mask.
+ * Cutout 3D's stencil: Overture at 1 m union the classifier's gap cells,
+ * rebuilt when either input moves (the footprints land, a collider pass
+ * rewrites the classifier grid), coalesced to one build per
+ * CUTOUT_REBUILD_MS and one in flight, never per frame. Centred on the
+ * tileset origin, so a car move never rebuilds it. Until it lands, and when
+ * Overture has nothing here, cutout reads the structure mask.
  */
 function rebuildCutoutMask(): void {
-  if (!clutterFilter || !tiles) return;
-  const polys = tiles.footprints;
-  if (!polys || polys.length === 0) {
-    if (clutterFilter.hasFootprintMask) clutterFilter.setFootprintMask(null);
-    cutoutMaskFor = null;
-    cutoutMask = null;
-    cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
+  if (!clutterFilter || !tiles || !cutoutDirty) return;
+  cutoutRebuild.request();
+}
+
+function runCutoutBuild(): void {
+  const filter = clutterFilter, ts = tiles;
+  if (!filter || !ts || !traits(viewMode).cutsToFootprints) {
+    cutoutRebuild.done();
     return;
   }
-  if ((cutoutMaskFor === polys && clutterFilter.hasFootprintMask) || cutoutJobFor === polys) return;
-  const filter = clutterFilter;
-  const apply = (mask: FootprintMask, stats: { packMs: number; buildMs: number }): void => {
-    if (clutterFilter !== filter || tiles?.footprints !== polys) return;
-    const t0 = performance.now();
-    filter.setFootprintMask(mask);
-    cutoutMask = mask;
+  cutoutDirty = false;
+  const polys = ts.footprints;
+  if (!polys || polys.length === 0) {
+    if (filter.hasFootprintMask) filter.setFootprintMask(null);
+    cutoutMaskFor = null;
+    cutoutCells = null;
+    cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
+    cutoutRebuild.done();
+    return;
+  }
+  const grid = { ...ts.activeGrid };
+  const classifier = { structure: ts.structureGrid.slice(), grid, reachM: CUTOUT_GAP_REACH_M };
+  const t0 = performance.now();
+  let packed: PackedFootprints | undefined;
+  if (cutoutBuilderFor !== polys) {
+    packed = packFootprints(polys);
+    cutoutBuilderFor = polys;
+    cutoutSetId++;
+  }
+  const packMs = performance.now() - t0;
+  const job: FootprintMaskJob = { id: ++cutoutJobId, setId: cutoutSetId, packed, opts: CUTOUT_MASK_OPTS, classifier };
+  const finish = (r: FootprintMaskResult): void => {
+    cutoutRebuild.done();
+    if (r.error !== undefined) {
+      log.warn('cutout stencil build failed', r.error);
+      cutoutBuilderFor = null;
+      cutoutDirty = true;
+      return;
+    }
+    if (clutterFilter !== filter || tiles !== ts || ts.footprints !== polys) return;
+    const b = r.build;
+    cutoutCoverageStat = b.coverage ? { footprints: polys.length, gapCells: b.gapCells, ...b.coverage } : null;
+    if (!b.changed) {
+      cutoutUnchanged++;
+      if (cutoutStats) cutoutStats.unchanged = cutoutUnchanged;
+      logCutoutCoverage();
+      return;
+    }
+    const t1 = performance.now();
+    filter.setFootprintMask(b.mask);
     cutoutMaskFor = polys;
+    cutoutCells = b.cells ? { data: b.cells, grid } : null;
+    cutoutUploads++;
     cutoutStats = {
-      footprints: polys.length, texelM: mask.cell, n: mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
-      ...stats, uploadQueuedMs: performance.now() - t0
+      footprints: polys.length, texelM: b.mask.cell, n: b.mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
+      packMs, buildMs: r.buildMs, uploadQueuedMs: performance.now() - t1, gapCells: b.gapCells, baseRebuilt: b.baseRebuilt,
+      requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged
     };
     log.info('cutout stencil built', cutoutStats);
+    // the gap buildings' boxes collide from here on
+    if (physicsOnWalls) game.setBuildingColliders(carColliders(lastColliders, lastTileBoxes.length), [...lastColliders]);
     logCutoutCoverage();
   };
-  const t0 = performance.now();
-  const packed = packFootprints(polys);
-  const packMs = performance.now() - t0;
   if (typeof Worker === 'undefined') {
+    cutoutLocalBuilder ??= new CutoutStencilBuilder();
     const t1 = performance.now();
-    apply(footprintMaskPacked(packed, CUTOUT_MASK_OPTS), { packMs, buildMs: performance.now() - t1 });
+    try {
+      finish({ id: job.id, build: cutoutLocalBuilder.build(job), buildMs: performance.now() - t1 });
+    } catch (e) {
+      finish({ id: job.id, error: String(e) });
+    }
     return;
   }
   cutoutWorker ??= new Worker(new URL('./services/overture/footprintMaskWorker.ts', import.meta.url), { type: 'module' });
-  const id = ++cutoutJobId;
-  cutoutJobFor = polys;
   cutoutWorker.onmessage = (e: MessageEvent<FootprintMaskResult>) => {
-    if (e.data.id !== cutoutJobId) return;
-    cutoutJobFor = null;
-    apply(e.data.mask, { packMs, buildMs: e.data.buildMs });
+    if (e.data.id === cutoutJobId) finish(e.data);
   };
-  cutoutWorker.onerror = e => { cutoutJobFor = null; log.warn('cutout stencil worker failed', e.message); };
-  const job: FootprintMaskJob = { id, packed, opts: CUTOUT_MASK_OPTS };
-  cutoutWorker.postMessage(job, [packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer]);
+  cutoutWorker.onerror = e => finish({ id: job.id, error: e.message });
+  cutoutWorker.postMessage(job, packed ? [packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer] : []);
 }
 
 /**
- * How many classifier buildings have no Overture footprint within 3 m.
- * Reads the stencil Cutout 3D already built, never builds one: null until then.
+ * How many classifier buildings have no Overture footprint within 3 m (the
+ * gap the stencil fills from the classifier). From the last stencil build,
+ * never builds one: null until then.
  */
-function cutoutCoverage(): (CoverageGap & { footprints: number }) | null {
-  const polys = tiles?.footprints;
-  if (!tiles || !polys || polys.length === 0 || !cutoutMask || cutoutMaskFor !== polys) return null;
-  return { footprints: polys.length, ...classifierGap(tiles.structureGrid, tiles.activeGrid, cutoutMask, 3) };
+function cutoutCoverage(): (CoverageGap & { footprints: number; gapCells: number }) | null {
+  return tiles?.footprints && cutoutMaskFor === tiles.footprints ? cutoutCoverageStat : null;
 }
 (window as any).__cutoutCoverage = () => cutoutCoverage();
 (window as any).__cutoutStats = () => cutoutStats;
 
 /**
  * Once per tileset load, after the footprints have had time to meet a
- * streamed-in neighbourhood: the size of the Overture gap the v1 fallback
- * leaves (a classifier building with no footprint is cut away in Cutout 3D).
+ * streamed-in neighbourhood: the size of the Overture gap the classifier
+ * cells fill in Cutout 3D.
  */
 function logCutoutCoverage(): void {
   if (cutoutCoverageLogged || performance.now() - footprintsLandedAt < 10000) return;
@@ -726,6 +781,22 @@ function logCutoutCoverage(): void {
   if (!c) return;
   cutoutCoverageLogged = true;
   log.info('cutout coverage', c);
+}
+
+/**
+ * What the cars hit. In a prism mode the outline walls (plus the props);
+ * in Cutout 3D also the classifier boxes of the gap buildings the stencil
+ * painted from the classifier, but no box that mostly duplicates a prism.
+ * Elsewhere the boxes.
+ */
+function carColliders(colliders: readonly BuildingCollider[], nTileBoxes: number): BuildingCollider[] {
+  if (!physicsOnWalls) return colliders as BuildingCollider[];
+  const cells = cutoutCells;
+  const grid = tiles?.activeGrid;
+  const gapBoxes = traits(viewMode).cutsToFootprints && cells && grid && cells.grid.n === grid.n && cells.grid.cell === grid.cell
+    ? selectGapBoxes(colliders.slice(0, nTileBoxes), cells.data, cells.grid)
+    : [];
+  return [...wallColliders(prismView.walls), ...gapBoxes, ...colliders.slice(nTileBoxes)];
 }
 
 /** Vector City streets: the OSM ways draped on the ground the car drives on. */
@@ -748,13 +819,13 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   physicsOnWalls = traits(viewMode).prismPhysics && prismView.count > 0;
   // a prism mode draws the exact outline, so the cars hit the outline (plus the props);
   // the classifier's boxes stay behind it for the bots' routes and the blocked-ground checks
-  game.setBuildingColliders(
-    physicsOnWalls ? [...wallColliders(prismView.walls), ...colliders.slice(tileBoxes.length)] : colliders,
-    colliders
-  );
+  // (Cutout 3D adds the boxes of the gap buildings its stencil painted from the classifier)
+  game.setBuildingColliders(carColliders(colliders, tileBoxes.length), colliders);
   buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
-  logCutoutCoverage();
+  // the classifier grid moved: Cutout 3D's gap cells follow, coalesced
+  cutoutDirty = true;
+  if (traits(viewMode).cutsToFootprints) rebuildCutoutMask();
   if (traits(viewMode).paintsBoxes) {
     facadeBaker.setColliders(colliders);
   } else if (viewMode === 'footprint-3d' && prismsRebuilt) {
@@ -801,8 +872,13 @@ function clearTiles(): void {
   roadRibbons.clear();
   prismsFor = null;
   cutoutMaskFor = null;
-  cutoutMask = null;
-  cutoutJobFor = null;
+  cutoutCells = null;
+  cutoutCoverageStat = null;
+  cutoutBuilderFor = null;
+  cutoutDirty = true;
+  cutoutUploads = 0;
+  cutoutUnchanged = 0;
+  cutoutRebuild.reset();
   cutoutCoverageLogged = false;
   footprintsLandedAt = Infinity;
   game.setSurfaceProvider(undefined);

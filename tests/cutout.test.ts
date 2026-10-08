@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilter.ts';
-import { footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON } from '../src/services/overture/footprintMask.ts';
+import {
+  footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells, selectGapBoxes,
+  CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE
+} from '../src/services/overture/footprintMask.ts';
+import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
 import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
 
 /** closed square ring, world x,z */
@@ -118,6 +122,139 @@ describe('classifierGap', () => {
     s[0] = 1;
     const m = footprintMask1m([], { size: 20, cell: 1, dilateM: 0 });
     expect(classifierGap(s, grid, m, 3)).toEqual({ classifierBuildings: 0, withoutFootprint: 0 });
+  });
+});
+
+describe('hybrid stencil: Overture union the classifier gap cells', () => {
+  // classifier: 8 x 10 m cells over x,z in [-40, 40); mask 128 m at 1 m
+  const grid = { n: 8, cell: 10, half: 40 };
+  const opts = { size: 128, cell: 1, dilateM: 2 };
+  const cellAt = (i: number, j: number) => j * 8 + i;
+  // cell (4,4) = world x,z 0..10 holds an Overture square; cell (1,1) = -30..-20 has no footprint
+  const structure = () => {
+    const s = new Uint8Array(64);
+    s[cellAt(4, 4)] = 1; s[cellAt(1, 1)] = 1; s[cellAt(5, 4)] = 1;
+    return s;
+  };
+  const polys = [{ ring: square(2, 2, 8, 8), holes: [] }];
+
+  it('marks a cell with an Overture texel in reach covered and a far one a gap', () => {
+    const m = footprintMask1m(polys, opts);
+    const cells = classifierCells(structure(), grid, m, 3);
+    expect(cells[cellAt(4, 4)]).toBe(CELL_COVERED);
+    // (5,4) = x 10..20: the dilated square reaches x 10, inside 3 m
+    expect(cells[cellAt(5, 4)]).toBe(CELL_COVERED);
+    expect(cells[cellAt(1, 1)]).toBe(CELL_GAP);
+    expect(cells[cellAt(0, 0)]).toBe(CELL_NONE);
+  });
+
+  it('paints a gap cell whole and leaves a covered cell to its 1 m outline', () => {
+    const m = footprintMask1m(polys, opts);
+    const before = m.data.slice();
+    const cells = classifierCells(structure(), grid, m, 3);
+    expect(paintGapCells(m, cells, grid)).toBe(1);
+    // the gap cell, every texel of it
+    for (const [x, z] of [[-29.5, -29.5], [-20.5, -20.5], [-25, -25]] as const) expect(maskAt(m, x, z)).toBe(true);
+    expect(maskAt(m, -19.5, -25)).toBe(false);
+    expect(maskAt(m, -30.5, -25)).toBe(false);
+    // the covered cells are untouched: their 10 m squares are not painted
+    expect(maskAt(m, 9.5, 9.5)).toBe(false);
+    expect(maskAt(m, 15, 5)).toBe(false);
+    let changed = 0;
+    for (let k = 0; k < m.data.length; k++) if (m.data[k] !== before[k]) changed++;
+    expect(changed).toBe(100);
+  });
+
+  it('builder: unions, reuses the Overture raster, and reports an unchanged classifier', () => {
+    const b = new CutoutStencilBuilder();
+    const first = b.build({ setId: 1, packed: packFootprints(polys), opts, classifier: { structure: structure(), grid } });
+    expect(first.changed).toBe(true);
+    expect(first.baseRebuilt).toBe(true);
+    expect(first.gapCells).toBe(1);
+    expect(first.coverage).toEqual({ classifierBuildings: 2, withoutFootprint: 1 });
+    if (!first.changed) throw new Error('unreachable');
+    expect(maskAt(first.mask, -25, -25)).toBe(true);
+    expect(maskAt(first.mask, 5, 5)).toBe(true);
+    expect(first.cells?.[cellAt(1, 1)]).toBe(CELL_GAP);
+    const again = b.build({ setId: 1, opts, classifier: { structure: structure(), grid } });
+    expect(again.changed).toBe(false);
+    expect(again.baseRebuilt).toBe(false);
+    // a new building streams in: the raster is reused, the gap repainted
+    const s = structure();
+    s[cellAt(1, 6)] = 1;
+    const grown = b.build({ setId: 1, opts, classifier: { structure: s, grid } });
+    expect(grown.changed).toBe(true);
+    expect(grown.baseRebuilt).toBe(false);
+    expect(grown.gapCells).toBe(2);
+    if (grown.changed) expect(maskAt(grown.mask, -25, 25)).toBe(true);
+    expect(() => b.build({ setId: 2, opts, classifier: null })).toThrow();
+  });
+
+  it('collides with a gap box and drops one that duplicates a prism', () => {
+    const cells = new Uint8Array(64);
+    cells[cellAt(1, 1)] = CELL_GAP;
+    cells[cellAt(4, 4)] = CELL_COVERED; cells[cellAt(5, 4)] = CELL_COVERED; cells[cellAt(6, 4)] = CELL_GAP;
+    const box = (x0: number, z0: number, x1: number, z1: number) => ({ min: { x: x0, z: z0 }, max: { x: x1, z: z1 } });
+    const gapBox = box(-30, -30, -20, -20);
+    const prismBox = box(0, 0, 20, 10);
+    const mixed = box(0, 0, 30, 10);
+    expect(selectGapBoxes([gapBox, prismBox, mixed], cells, grid)).toEqual([gapBox]);
+  });
+});
+
+describe('CoalescedRebuild', () => {
+  const fakeClock = () => {
+    let t = 0;
+    const timers: { at: number; fn: () => void }[] = [];
+    return {
+      now: () => t,
+      setTimeout: (fn: () => void, ms: number) => { const h = { at: t + ms, fn }; timers.push(h); return h; },
+      clearTimeout: (h: unknown) => { const k = timers.indexOf(h as any); if (k >= 0) timers.splice(k, 1); },
+      advance(ms: number) {
+        t += ms;
+        for (const h of timers.filter(x => x.at <= t)) { timers.splice(timers.indexOf(h), 1); h.fn(); }
+      }
+    };
+  };
+
+  it('runs the first request now and folds a burst into one run per interval', () => {
+    const clock = fakeClock();
+    let runs = 0;
+    const r = new CoalescedRebuild(() => { runs++; r.done(); }, 2000, clock);
+    r.request();
+    expect(runs).toBe(1);
+    for (let k = 0; k < 20; k++) { clock.advance(100); r.request(); }
+    // 20 requests over 2 s: the first ran, the rest folded into the run at 2 s, and the
+    // request that landed just after that run started folds into one more at 4 s
+    expect(runs).toBe(2);
+    clock.advance(2000);
+    expect(runs).toBe(3);
+    clock.advance(10000);
+    expect(runs).toBe(3);
+    r.request();
+    expect(runs).toBe(4);
+  });
+
+  it('keeps one build in flight and runs once more after it for requests made meanwhile', () => {
+    const clock = fakeClock();
+    let runs = 0;
+    const r = new CoalescedRebuild(() => { runs++; }, 2000, clock);
+    r.request();
+    r.request(); r.request();
+    clock.advance(5000);
+    expect(runs).toBe(1);
+    r.done();
+    expect(runs).toBe(2);
+    r.done();
+    expect(runs).toBe(2);
+    r.request();
+    clock.advance(1999);
+    expect(runs).toBe(2);
+    clock.advance(1);
+    expect(runs).toBe(3);
+    r.reset();
+    r.request();
+    expect(runs).toBe(4);
   });
 });
 
