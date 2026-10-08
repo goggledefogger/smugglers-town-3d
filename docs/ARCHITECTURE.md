@@ -212,8 +212,10 @@ visuals alone and gives the wheels a 1 m surface captured from the GPU:
   hands it to `VehicleBody.step` for vehicle ground only (all cars, bots
   included); spawning, nav, props, the camera and `VehicleView`'s cosmetic tilt
   still read the base field. The bridge deck provider still runs on top. The
-  mode turns the street clutter filter off while it is on (it hides or flattens
-  exactly the kerbs and parked cars the wheels now ride) and restores it after.
+  street clutter filter is left as the player set it: the capture's override
+  material replaces the tile materials, clutter patch included, so it always
+  sees the raw tiles, and the band already rejects the parked cars the filter
+  hides.
   Online it changes the host's physics: only the host can turn it on, a client
   sees "host decides", and nothing in the protocol changes.
 

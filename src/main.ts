@@ -286,8 +286,6 @@ let surfaceField: SurfaceHeightfield | null = null;
 let surfaceCapture: SurfaceCapture | null = null;
 let surfacePreview: SurfacePreview | null = null;
 let surfacePreviewAt = 0;
-/** The clutter mode True Surface switched off, restored when it turns off. */
-let clutterBeforeSurface: ClutterMode | null = null;
 const surfaceBtn = document.getElementById('surface-btn') as HTMLButtonElement | null;
 const surfaceText = document.getElementById('surface-text') as HTMLSpanElement | null;
 
@@ -336,34 +334,15 @@ function applySurface(): void {
   updateSurfaceUi();
 }
 
-/**
- * The street clutter filter flattens or hides kerbs and parked cars, so with it
- * on the wheels would ride bumps nobody can see. True Surface turns it off while
- * it is on, and hands back whatever mode it found.
- */
-function setClutterForSurface(on: boolean): void {
-  if (!clutterFilter) return;
-  if (on && clutterMode !== 'off') {
-    clutterBeforeSurface = clutterMode;
-    clutterFilter.mode = clutterMode = 'off';
-  } else if (!on && clutterBeforeSurface && clutterMode === 'off') {
-    clutterFilter.mode = clutterMode = clutterBeforeSurface;
-    clutterBeforeSurface = null;
-  }
-  if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
-  updateClutterUi();
-}
-
 function toggleSurfaceMode(): void {
   if (isOnlineClient()) {
     showToast('True Surface changes physics: the host decides');
     return;
   }
   surfaceOn = !surfaceOn;
-  setClutterForSurface(surfaceOn);
   applySurface();
   if (!tiles) showToast(`True Surface ${surfaceOn ? 'armed' : 'off'}: it needs a real place with 3D tiles`);
-  else showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface (clutter filter off)' : 'True Surface off: 10 m ground grid');
+  else showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface' : 'True Surface off: 10 m ground grid');
 }
 
 surfaceBtn?.addEventListener('click', toggleSurfaceMode);
@@ -406,7 +385,6 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     // the prisms exist now: the mode re-applies so they replace the boxes and queue for the baker
     if (traits(viewMode).showsPrisms) setViewMode(viewMode);
   };
-  if (surfaceOn) setClutterForSurface(true);
   clutterFilter.patch(streamer.group);
   renderer.warm(streamer.group);
   streamer.group.traverse(o => o.layers.set(1));
