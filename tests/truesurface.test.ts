@@ -29,19 +29,27 @@ describe('SurfaceHeightfield.sample', () => {
     expect(f.sample(-7.3, 11.1)).toBeCloseTo(10.4, 3);
   });
 
-  it('returns the base where the capture is a wall or roof (outside the band) or was never drawn', () => {
+  it('returns the base where the capture is a wall, roof or parked car (outside the band) or was never drawn', () => {
     const f = field();
     f.ingest(0, 0, capture(25));
+    expect(f.sample(0, 0)).toBe(10);
+    f.ingest(0, 0, capture(11.4)); // a melted parked car: above the 0.6 m upper band
     expect(f.sample(0, 0)).toBe(10);
     f.ingest(0, 0, new Float32Array(RES * RES)); // the clear value
     expect(f.sample(0, 0)).toBe(10);
   });
 
-  it('caps road cells at the base plus the road cap (canopy over a street)', () => {
+  it('accepts dips down to the lower band, which is wider than the upper', () => {
+    const f = field();
+    f.ingest(0, 0, capture(9.0));
+    expect(f.sample(0, 0)).toBeCloseTo(9.0, 3);
+  });
+
+  it('caps road cells at the base plus the road cap', () => {
     const f = field(x => x < 0);
-    f.ingest(0, 0, capture(11.2));
+    f.ingest(0, 0, capture(10.58));
     expect(f.sample(-10, 0)).toBeCloseTo(10.5, 3);
-    expect(f.sample(10, 0)).toBeCloseTo(11.2, 3);
+    expect(f.sample(10, 0)).toBeCloseTo(10.58, 3);
   });
 
   it('tracks the live base: refinement written into it flows through', () => {

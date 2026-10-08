@@ -198,8 +198,10 @@ visuals alone and gives the wheels a 1 m surface captured from the GPU:
   capture target is bound first or R32F is refused (an RGBA float target is the
   fallback).
 - **The band rule.** The capture is stored as a delta from the base ground and
-  kept only where it lies within ±1.5 m (`SURF_BAND_M`) of it. A wall, roof or
-  canopy texel sits metres above the base and is rejected, so this mode never
+  kept only where it lies at most 0.6 m above it (`SURF_BAND_UP_M`) or 1.5 m
+  below it (`SURF_BAND_DOWN_M`). Kerbs, humps and ramps fit; a melted parked
+  car (~1.5 m) does not. A wall, roof or canopy texel sits metres above the
+  base and is rejected too, so this mode never
   creates a wall: walls stay the job of the box colliders, and which streets
   are drivable does not change. On OSM road cells the delta is also capped at
   +0.5 m, so an awning or tree over a street is never a ramp. The delta is
@@ -221,15 +223,16 @@ capture submit 2.6 ms CPU p50 (8.5 ms p99, 55 ms for the very first capture),
 resolves 70-110 ms later without stalling; processing totals 20-40 ms spread
 over ~20 frames. Frame time over 30 s of interleaved driving: p50 16.7 ms both
 ways, p99 67 ms off and 82 ms on, within the noise of that machine's load.
-Driving a street, the surface under the car differed from the base by -0.26 to
-+0.5 m and the second difference along a 12 m line ahead was 10-40× the base's.
+Driving a street with the earlier symmetric ±1.5 m band, the surface under the
+car differed from the base by -0.26 to +0.5 m and the second difference along a
+12 m line ahead was 10-40× the base's; part of that was parked cars, which the
+asymmetric band now rejects.
 
 Known limits: under a bridge or canopy the low deck is lost inside the band
 (the top wins, is rejected, and the base is used); while tiles are still
-streaming the capture is of coarse tiles until the next recapture; the band
-admits melted parked cars (about 1.5 m), so a parking lot rides as lumps, and an
-asymmetric band (say +0.6/-1.5 m) would cut them while keeping kerbs and humps;
-the +0.5 m road cap also clips real road surface where the 10 m base sits low
+streaming the capture is of coarse tiles until the next recapture; a ramp or
+grade change that rises more than 0.6 m above the 10 m base inside one base
+cell is cut back to the base; the +0.5 m road cap also clips real road surface where the 10 m base sits low
 (parking aisles); in the Game 3D view the wheels still ride the photogrammetry.
 
 ### `core/physics/collision.ts`

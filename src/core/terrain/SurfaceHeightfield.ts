@@ -10,9 +10,9 @@
  * of accepted kerb down to the base, it blurs to it. On constant inputs this is
  * exactly the rule "captured value inside the band, base outside it".
  *
- * The band (`SURF_BAND_M` either side of the base) is what keeps walls,
- * canopies and rooftops from becoming ground: a facade texel is tens of metres
- * above the base and is rejected, so the box colliders still do their job and
+ * The band (`SURF_BAND_UP_M` above the base, `SURF_BAND_DOWN_M` below) is
+ * what keeps walls, canopies, rooftops and parked cars from becoming ground: a
+ * facade texel is tens of metres above the base and is rejected, so the box colliders still do their job and
  * this field never creates a wall. On OSM road cells the delta is also capped
  * at `SURF_ROAD_CAP_M`, so a canopy or awning over a street is never a ramp.
  *
@@ -26,8 +26,14 @@ import type { HeightSampler } from '../heightfield.ts';
 export const SURF_EXTENT_M = 768;
 /** Texels per side: 768 over 768 m is 1 m cells. */
 export const SURF_RES = 768;
-/** Captured heights further than this from the base ground are not ground. */
-export const SURF_BAND_M = 1.5;
+/**
+ * Captured heights more than this above the base ground are not ground. Low
+ * enough to reject melted parked cars (~1.5 m) and canopies, high enough for
+ * kerbs, humps and ramps.
+ */
+export const SURF_BAND_UP_M = 0.6;
+/** Captured heights more than this below the base ground are not ground (dips and cuts the 10 m grid smoothed over). */
+export const SURF_BAND_DOWN_M = 1.5;
 /** On road cells the surface never rises more than this above the base (canopy over streets). */
 export const SURF_ROAD_CAP_M = 0.5;
 /** Texels over which the delta fades to 0 at the window edge, so a recentre cannot step. */
@@ -47,7 +53,8 @@ export type RoadLookup = (x: number, z: number) => boolean;
 export interface SurfaceOptions {
   readonly extentM?: number;
   readonly res?: number;
-  readonly bandM?: number;
+  readonly bandUpM?: number;
+  readonly bandDownM?: number;
   readonly roadCapM?: number;
   /** Added to every captured height before comparing (the base sits this far above the tile mesh). */
   readonly liftM?: number;
@@ -60,7 +67,8 @@ export class SurfaceHeightfield implements HeightSampler {
   readonly extentM: number;
   readonly res: number;
   readonly cell: number;
-  readonly bandM: number;
+  readonly bandUpM: number;
+  readonly bandDownM: number;
   readonly roadCapM: number;
   readonly liftM: number;
   private readonly edgeFade: number;
@@ -95,7 +103,8 @@ export class SurfaceHeightfield implements HeightSampler {
     this.extentM = opts.extentM ?? SURF_EXTENT_M;
     this.res = opts.res ?? SURF_RES;
     this.cell = this.extentM / this.res;
-    this.bandM = opts.bandM ?? SURF_BAND_M;
+    this.bandUpM = opts.bandUpM ?? SURF_BAND_UP_M;
+    this.bandDownM = opts.bandDownM ?? SURF_BAND_DOWN_M;
     this.roadCapM = opts.roadCapM ?? SURF_ROAD_CAP_M;
     this.liftM = opts.liftM ?? 0;
     this.edgeFade = opts.edgeFade ?? SURF_EDGE_FADE;
@@ -228,7 +237,7 @@ export class SurfaceHeightfield implements HeightSampler {
     const res = this.res, cell = this.cell;
     const z = this.pendZ0 + (r + 0.5) * cell;
     const raw = this.readBuffer, out = this.next, road = this.road;
-    const band = this.bandM, cap = this.roadCapM;
+    const up = this.bandUpM, down = this.bandDownM, cap = this.roadCapM;
     const shift = this.liftM - SURF_ENCODE_OFFSET;
     const roads = this.roads;
     for (let i = 0; i < res; i++) {
@@ -240,7 +249,7 @@ export class SurfaceHeightfield implements HeightSampler {
       // the clear value is 0 and every real surface encodes to ~SURF_ENCODE_OFFSET
       if (!(v > 1)) { out[k] = 0; continue; }
       let d = v + shift - this.base.sample(x, z);
-      if (d > band || d < -band) d = 0;
+      if (d > up || d < -down) d = 0;
       else if (isRoad && d > cap) d = cap;
       out[k] = d;
     }

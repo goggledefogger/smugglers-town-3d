@@ -303,8 +303,8 @@ function baseRange(hf: HeightSampler, cx: number, cz: number, half: number): { l
 
 /**
  * The F8 corner view of what the wheels see: the captured delta from the base
- * ground, grey 128 = on the base, lighter = above, darker = below (±band maps
- * to white/black), with the player as a dot. Redrawn on each new capture; the
+ * ground, grey 128 = on the base, lighter = above, darker = below (±the lower
+ * band maps to white/black), with the player as a dot. Redrawn on each new capture; the
  * dot moves at the caller's pace.
  */
 export class SurfacePreview {
@@ -334,7 +334,7 @@ export class SurfacePreview {
     if (field.version !== this.version) {
       this.version = field.version;
       const d = field.activeDelta, px8 = this.img.data;
-      const step = res / size, k = 127 / field.bandM;
+      const step = res / size, k = 127 / field.bandDownM;
       for (let y = 0; y < size; y++) {
         // canvas y down = world z ascending: north (-z) is up, as on the radar's north tick
         const r = Math.floor((y + 0.5) * step);
