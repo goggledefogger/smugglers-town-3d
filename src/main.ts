@@ -716,6 +716,9 @@ let cutoutStats: {
   segments?: number; traceMs?: number; wallsMs?: number; wallBuilds?: number;
 } | null = null;
 let cutoutUploads = 0;
+/** Each stencil that landed: when (performance.now), its main-thread ms, its segment count. */
+const cutoutLandings: { at: number; ms: number; segments: number }[] = [];
+(window as any).__cutoutLandings = () => cutoutLandings;
 let cutoutUnchanged = 0;
 let cutoutDigestSkips = 0;
 let cutoutInputSkips = 0;
@@ -785,6 +788,7 @@ function runCutoutBuild(): void {
   cutoutLastInputDigest = inputDigest;
   const job: FootprintMaskJob = { id: ++cutoutJobId, setId: cutoutSetId, packed, roof, opts: CUTOUT_MASK_OPTS, classifier };
   const finish = (r: FootprintMaskResult): void => {
+    const tf = performance.now();
     cutoutRebuild.done();
     if (r.error !== undefined) {
       log.warn('cutout stencil build failed', r.error);
@@ -833,6 +837,8 @@ function runCutoutBuild(): void {
         + `${cutoutInputSkips} input, ${cutoutUnchanged} unchanged`);
     }
     if (wallsRebuilt) refreshCarColliders();
+    // every landing's main-thread cost (upload queue, walls, physics hand-over), for the perf survey
+    cutoutLandings.push({ at: tf, ms: performance.now() - tf, segments: b.segments.length / SEG_STRIDE });
     logCutoutCoverage();
   };
   if (typeof Worker === 'undefined') {
