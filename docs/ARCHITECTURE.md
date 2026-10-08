@@ -638,54 +638,101 @@ looks clear but drives blocked.
 ### "Cutout 3D" Visual Mode (`services/overture/footprintMask.ts`, `render/TileClutterFilter.ts` cutout)
 
 Real 3D's buildings with Footprint 3D's solidity: the photogrammetry mesh is
-the building, everything else is satellite ground. The Overture footprints
-(buildings and parts, unioned) are scanline-filled into an R8 stencil
-covering exactly the 1800 m fetch radius both ways (3600 m) and centred on
-the tileset origin, then dilated by a 2 m Euclidean radius so leaning
-facades and roof overhangs survive. The clutter filter's `cutout` mode is
-the only true per-fragment lookup in the filter: every tile fragment takes
-one texture sample at its own world x,z (the `vClutterWorldPos` varying)
-and is discarded when it reads 0. The outer texel ring is cleared and the
-texture clamps, so beyond the extent, where no footprints were fetched,
-reads as street with no extra branch. No flattening runs in this mode.
+the building, everything else is satellite ground. The stencil is hybrid.
+The Overture footprints (buildings and parts, unioned) are scanline-filled
+covering exactly the 1800 m fetch radius both ways (3600 m), centred on the
+tileset origin, and dilated by a 2 m Euclidean radius so leaning facades and
+roof overhangs survive. Then every classifier building cell
+(`Tileset.structureGrid`, 10 m, 5 m in high_res) with no Overture texel
+within 3 m of its square is painted in whole: 1 m edges where Overture has
+the building, coarse cells only in its gaps. The test is per cell, not per
+4-connected group, so a block the classifier merges still gets the far
+cells of the building Overture lacks, while the 10 m fringe hugging an
+Overture outline stays cut. `cutout coverage` is derived from the same cell
+states, so it still reports the Overture gap, plus `gapCells` painted.
 
-Cost, kept off weak devices' critical path: the stencil is built once per
-footprint set on first entry to the mode, never per frame or per car move,
-in its own worker (`footprintMaskWorker.ts`; the frame pays about 5 ms to
-pack the polygons into transferable typed arrays). Each polygon fills and
-dilates only inside its own bounding box. Texels are 1 m (3600², 13 MB),
-or 2 m (1800², 3.2 MB, a quarter of the raster and upload) when the device
-looks weak: 4 or fewer cores, 4 GB or less, or a max texture under 4096.
-`?cutoutTexel=` and `?cutoutDilate=` override both for tuning, and
-`window.__cutoutStats()` reports what was chosen and how long it took.
-Switching modes stays a uniform write: with no stencil the same sampler
-uniform points at the 10 m structure mask with a value scale of 255
-(`uFootprintField.w`), so the fallback costs no recompile and no branch.
-The car hits the Overture prism walls (`prismPhysics`), which are built
-but not drawn, so the wall the car hits is the outline the cut follows,
-within the dilation. Ground patches stream under the tiles as in hidden and
-swept.
+The clutter filter's `cutout` mode is the only true per-fragment lookup in
+the filter: every tile fragment takes one texture sample at its own world
+x,z (the `vClutterWorldPos` varying) and is discarded when R reads 0. The
+outer texel ring is cleared and the texture clamps, so beyond the extent,
+where no footprints were fetched, reads as street with no extra branch. No
+flattening runs in this mode.
+
+Roof cap: the stencil is RG8, and G is each footprint's roof plus 3 m, in
+whole metres (rounded up) above the footprint's lowest ring-vertex ground,
+which is the prism's own base, so the cap agrees with the wall the car hits.
+The roof is the higher of Overture's (placed as the prism places it) and the
+photogrammetry's, the latter the MAX of the classifier's per-cell tops over
+the cells whose centres fall inside the ring (the cell under the box centre
+for a footprint too small to hold one). Max, not mean, so a tall wing is not
+shaved to its podium. Overlaps keep the higher cap, and the dilation band
+carries its building's cap, treating a step down to a lower neighbour as a
+boundary: a tower's cap spreads 2 m over the low block it shares a wall with,
+so the linear filter never halves the cap on the tower's own facade. The
+fragment compares its height above the ground (the vertex stage's
+interpolated `vClutterRiseVal`, no second sample) against `g * 255`. 255 is
+"no cap": no roof sample, a classifier gap cell (its top would include the
+canopy anyway), outside every footprint (so filtering at an edge only ever
+loosens a cap), or over 254 m. Tree canopy over a low building or plaza
+structure inside a footprint is trimmed at roof plus 3 m.
+
+Cost: the build runs in its own worker (`footprintMaskWorker.ts`, wrapping
+`CutoutStencilBuilder`), never per frame or per car move. Footprints are
+packed and transferred once per set; each rebuild sends only copies of the
+classifier grid and tops (0.1 and 0.5 MB at 10 m). The worker keeps the
+dilated Overture raster, re-rastering only when a footprint's cap byte
+changes, so a classifier-only change costs the gap scan and a copy; when
+the painted cells and caps come out unchanged it sends no mask and nothing
+is uploaded. Rebuilds follow both inputs (footprints landing, each collider
+pass) through `CoalescedRebuild`: at most one per 2 s and one in flight.
+While a city streams, collider passes run at most every 1.5 s, so expect
+a stencil build every 2 s until the tiles and their roof tops settle, then
+none. A same-size stencil reuses its texture (a sub-image upload, no
+reallocation).
+
+Sizes: 1 m RG8 (3600², 25.9 MB) normally. A device that looks weak (4 or
+fewer cores, 4 GB or less, or a max texture under 4096) keeps 2 m R8
+(1800², 3.2 MB) with no roof cap, the same upload as before; 1 m R8 would be
+13 MB, 2 m RG8 6.5 MB. `?cutoutTexel=`, `?cutoutDilate=` and
+`?cutoutCap=0|1` override, and `window.__cutoutStats()` reports texel, cap,
+upload size, build timings, gap cells and rebuild, upload and unchanged
+counts. Switching modes stays a uniform write: with no stencil the same
+sampler uniform points at the 10 m structure mask with a value scale of 255
+(`uFootprintField.w`) and `uFootprintNoCap` lifts the cap out of reach, so
+the fallback costs no recompile and no branch.
+
+What collides in Cutout 3D: the Overture prism walls (`prismPhysics`, built
+but not drawn), the props, and the classifier boxes of the gap buildings: a
+box whose cells are at least half gap and no fewer gap than covered. A box
+mostly over Overture-covered cells duplicates a prism and is dropped, so the
+prism wins. Gap boxes are refreshed when a stencil lands, without a collider
+rebuild. Ground patches stream under the tiles as in hidden and swept.
 
 Dilation was chosen by measurement, not by eye: of tile vertices more than
 18 m above the ground within 600 m of Market and Montgomery, 21 % fall
 outside the undilated stencil, 7.6 % at 1.5 m, 3.9 % at 2 m and 1.7 % at 3 m.
 In Pioneer Square, Portland the same figure plateaus near 7 % (8.0, 7.3, 6.6),
-which is buildings Overture does not have rather than shaving. `?cutoutDilate=`
-overrides it for comparison.
+which is buildings Overture does not have rather than shaving (now filled by
+the classifier cells). `?cutoutDilate=` overrides it for comparison.
 
-Known v1 limits: where Overture returns nothing for the area, the cut falls
-back to the 10 m structure mask (blocky, but still drawn and solid against
-the classifier boxes). Per-building gaps are not merged: a building the
-classifier sees but Overture lacks is cut away entirely, and the car drives
-through where it stood. `main.ts` logs `cutout coverage` once per tileset
-load (classifier buildings, 4-connected structure cells, with no footprint
-within 3 m) and `window.__cutoutCoverage()` reports it on demand; measured
-SF 13 of 262 (5 %) and Portland 110 to 122 of 426 to 445 (about 27 %),
-up to 567 of 1,991 once the wider field had streamed in.
-Trees and lumps standing inside a dilated footprint, such as a tree canopy
-against a facade, survive the cut. The satellite ground itself carries
-leaning facades and roof images in tall downtown canyons and sits on the
-heightfield's humps, so a "clean" road is only as clean as that imagery.
+Known limits: where Overture returns nothing for the area, the cut falls
+back to the 10 m structure mask (blocky, uncapped, still solid against the
+classifier boxes). Gap buildings are 10 m (or 5 m) blocks, edges and all,
+and a gap box that half overlaps a prism is either kept (an invisible
+stretch of box past the prism) or dropped (a gap building the car drives
+through), by the majority rule. A classifier cell within 3 m of an
+Overture outline is never painted, so a building Overture lacks right next
+to one it has loses its near strip. The cap is measured from the
+footprint's lowest ground, so on a slope the uphill side is looser, and a
+footprint with no roof sample and no Overture height is uncapped. Canopy
+lower than the roof, or inside a gap cell, survives. Each changed stencil
+re-uploads in full (25.9 MB at 1 m; three r169 has no partial texture
+update), at most every 2 s while tiles stream. Measured gap before the
+hybrid: SF 13 of 262 classifier buildings (5 %), Portland 110 to 122 of 426
+to 445 (about 27 %), up to 567 of 1,991 once the wider field had streamed
+in. The satellite ground itself carries leaning facades and roof images in
+tall downtown canyons and sits on the heightfield's humps, so a "clean" road
+is only as clean as that imagery.
 
 ## 3D Tiles, Collision & Alternative Architectures
 

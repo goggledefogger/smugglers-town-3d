@@ -15,6 +15,24 @@ import type { Grid } from '../tiles/tileColliders.ts';
 
 /** Texel value of a footprint cell: 255 so an R8 texture reads 1.0 in the shader. */
 export const MASK_ON = 255;
+/** Roof cap byte meaning "no cap": no roof sample, a gap cell, outside every footprint, or over 254 m. */
+export const ROOF_NO_CAP = 255;
+
+/**
+ * A roof cap in metres above the footprint's ground as the G byte: whole
+ * metres rounded up (never below the roof), 1..254, and ROOF_NO_CAP for no
+ * cap or anything taller than 254 m. 0 is reserved for "unset" during a build.
+ */
+export function encodeRoofCap(h: number | null): number {
+  if (h == null || !Number.isFinite(h)) return ROOF_NO_CAP;
+  const v = Math.max(1, Math.ceil(h - 1e-6));
+  return v > 254 ? ROOF_NO_CAP : v;
+}
+
+/** The G byte back to metres; Infinity for no cap. The shader reads it as g * 255. */
+export function decodeRoofCap(v: number): number {
+  return v >= ROOF_NO_CAP ? Infinity : v;
+}
 
 export interface FootprintMask {
   /** side in texels; data[j * n + i], i along world x, j along world z */
@@ -26,6 +44,8 @@ export interface FootprintMask {
   readonly cz: number;
   /** side in metres (n * cell) */
   readonly size: number;
+  /** 1: R8, the inside flag. 2: RG8, interleaved, G the roof cap (encodeRoofCap) */
+  readonly channels: 1 | 2;
   readonly data: Uint8Array;
 }
 
@@ -74,7 +94,7 @@ export function packFootprints(polys: readonly PolyLike[]): PackedFootprints {
  * bounding box [i0, j0, i1, j1], or null when it misses the mask.
  */
 function fillPolygon(
-  data: Uint8Array, n: number, cell: number, x0: number, z0: number, pk: PackedFootprints, p: number, xs: number[]
+  data: Uint8Array, n: number, ch: number, cell: number, x0: number, z0: number, pk: PackedFootprints, p: number, xs: number[], cap: number
 ): [number, number, number, number] | null {
   const { coords, ringStarts, polyRings } = pk;
   const r0 = polyRings[p]!, r1 = polyRings[p + 1]!;
@@ -110,7 +130,16 @@ function fillPolygon(
     for (let k = 0; k + 1 < xs.length; k += 2) {
       const i0 = Math.max(0, Math.ceil((xs[k]! - x0) / cell - 0.5));
       const i1 = Math.min(n - 1, Math.ceil((xs[k + 1]! - x0) / cell - 0.5) - 1);
-      for (let i = i0; i <= i1; i++) data[row + i] = MASK_ON;
+      if (ch === 1) {
+        for (let i = i0; i <= i1; i++) data[row + i] = MASK_ON;
+      } else {
+        // overlapping polygons keep the highest cap: a part over its building never shaves it
+        for (let i = i0; i <= i1; i++) {
+          const o = (row + i) * 2;
+          data[o] = MASK_ON;
+          if (data[o + 1]! < cap) data[o + 1] = cap;
+        }
+      }
     }
   }
   return [bi0, j0, bi1, j1];
@@ -130,19 +159,31 @@ function discOffsets(radiusTexels: number): number[] {
 /**
  * Stamp the disc from every boundary texel of `src` inside [i0..i1] x
  * [j0..j1] into `out`. Interior texels (all four neighbours set) cannot grow
- * the mask, so the cost is the outline length, not the area.
+ * the mask, so the cost is the outline length, not the area. With two
+ * channels the stamped texels carry the source texel's roof cap, keeping
+ * the highest where bands overlap, so a leaning facade in the band is
+ * capped by its own building's roof.
  */
-function dilateBox(src: Uint8Array, out: Uint8Array, n: number, offs: number[], i0: number, j0: number, i1: number, j1: number): void {
+function dilateBox(
+  src: Uint8Array, out: Uint8Array, n: number, ch: number, offs: number[], i0: number, j0: number, i1: number, j1: number
+): void {
   for (let j = j0; j <= j1; j++) {
     for (let i = i0; i <= i1; i++) {
       const c = j * n + i;
-      if (src[c] === 0) continue;
+      if (src[c * ch] === 0) continue;
+      const cap = ch === 2 ? src[c * 2 + 1]! : 0;
+      // interior: all four neighbours set and, with caps, none lower than this one (a tower
+      // beside a low block is a boundary too, so its cap spreads over the shared wall)
       if (i > 0 && i < n - 1 && j > 0 && j < n - 1
-        && src[c - 1] !== 0 && src[c + 1] !== 0 && src[c - n] !== 0 && src[c + n] !== 0) continue;
+        && src[(c - 1) * ch] !== 0 && src[(c + 1) * ch] !== 0 && src[(c - n) * ch] !== 0 && src[(c + n) * ch] !== 0
+        && (ch === 1 || (src[(c - 1) * 2 + 1]! >= cap && src[(c + 1) * 2 + 1]! >= cap
+          && src[(c - n) * 2 + 1]! >= cap && src[(c + n) * 2 + 1]! >= cap))) continue;
       for (let k = 0; k < offs.length; k += 2) {
         const x = i + offs[k]!, y = j + offs[k + 1]!;
         if (x < 0 || y < 0 || x >= n || y >= n) continue;
-        out[y * n + x] = MASK_ON;
+        const o = (y * n + x) * ch;
+        out[o] = MASK_ON;
+        if (ch === 2 && out[o + 1]! < cap) out[o + 1] = cap;
       }
     }
   }
@@ -152,7 +193,7 @@ function dilateBox(src: Uint8Array, out: Uint8Array, n: number, offs: number[], 
 export function dilateMask(data: Uint8Array, n: number, radiusTexels: number): Uint8Array {
   if (Math.floor(radiusTexels) < 1) return data;
   const out = data.slice();
-  dilateBox(data, out, n, discOffsets(radiusTexels), 0, 0, n - 1, n - 1);
+  dilateBox(data, out, n, 1, discOffsets(radiusTexels), 0, 0, n - 1, n - 1);
   return out;
 }
 
@@ -166,6 +207,8 @@ export interface FootprintMaskOptions {
   /** world x,z of the mask centre (default the tileset origin, 0,0) */
   cx?: number;
   cz?: number;
+  /** RG8 with a roof cap in G (default false: R8, the inside flag only) */
+  roofCap?: boolean;
 }
 
 /**
@@ -175,18 +218,20 @@ export interface FootprintMaskOptions {
  * dilation then walks only those boxes plus the radius. The outermost texel
  * ring is cleared so a clamped lookup beyond the extent reads "no footprint".
  */
-export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOptions = {}): FootprintMask {
+export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOptions = {}, caps: Uint8Array | null = null): FootprintMask {
   const cell = opts.cell ?? 1, dilateM = opts.dilateM ?? 2;
   const n = Math.ceil((opts.size ?? 3600) / cell);
   const size = n * cell;
   const cx = opts.cx ?? 0, cz = opts.cz ?? 0;
   const x0 = cx - size / 2, z0 = cz - size / 2;
-  const filled = new Uint8Array(n * n);
+  const ch: 1 | 2 = opts.roofCap ? 2 : 1;
+  // two channels: G starts 0 ("unset") so overlapping polygons and bands can keep the max
+  const filled = new Uint8Array(n * n * ch);
   const boxes: [number, number, number, number][] = [];
   const xs: number[] = [];
   const nPolys = pk.polyRings.length - 1;
   for (let p = 0; p < nPolys; p++) {
-    const b = fillPolygon(filled, n, cell, x0, z0, pk, p, xs);
+    const b = fillPolygon(filled, n, ch, cell, x0, z0, pk, p, xs, caps?.[p] ?? ROOF_NO_CAP);
     if (b) boxes.push(b);
   }
   const rad = dilateM / cell;
@@ -194,15 +239,17 @@ export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOpt
   if (Math.floor(rad) >= 1) {
     data = filled.slice();
     const offs = discOffsets(rad);
-    for (const [i0, j0, i1, j1] of boxes) dilateBox(filled, data, n, offs, i0, j0, i1, j1);
+    for (const [i0, j0, i1, j1] of boxes) dilateBox(filled, data, n, ch, offs, i0, j0, i1, j1);
   }
   for (let k = 0; k < n; k++) {
-    data[k] = 0;
-    data[(n - 1) * n + k] = 0;
-    data[k * n] = 0;
-    data[k * n + n - 1] = 0;
+    data[k * ch] = 0;
+    data[((n - 1) * n + k) * ch] = 0;
+    data[k * n * ch] = 0;
+    data[(k * n + n - 1) * ch] = 0;
   }
-  return { n, cell, cx, cz, size, data };
+  // outside every footprint the cap is "none", so the linear filter only ever loosens a cap at an edge
+  if (ch === 2) for (let o = 0; o < data.length; o += 2) if (data[o] === 0 || data[o + 1] === 0) data[o + 1] = ROOF_NO_CAP;
+  return { n, cell, cx, cz, size, channels: ch, data };
 }
 
 export function footprintMask1m(polys: readonly PolyLike[], opts: FootprintMaskOptions = {}): FootprintMask {
@@ -214,7 +261,16 @@ export function maskAt(m: FootprintMask, x: number, z: number): boolean {
   const i = Math.floor((x - (m.cx - m.size / 2)) / m.cell);
   const j = Math.floor((z - (m.cz - m.size / 2)) / m.cell);
   if (i < 0 || j < 0 || i >= m.n || j >= m.n) return false;
-  return m.data[j * m.n + i] !== 0;
+  return m.data[(j * m.n + i) * m.channels] !== 0;
+}
+
+/** The roof cap (m above the footprint's ground) at a world x,z; Infinity for none or an R8 mask. */
+export function roofCapAt(m: FootprintMask, x: number, z: number): number {
+  if (m.channels !== 2) return Infinity;
+  const i = Math.floor((x - (m.cx - m.size / 2)) / m.cell);
+  const j = Math.floor((z - (m.cz - m.size / 2)) / m.cell);
+  if (i < 0 || j < 0 || i >= m.n || j >= m.n) return Infinity;
+  return decodeRoofCap(m.data[(j * m.n + i) * 2 + 1]!);
 }
 
 export interface CoverageGap {
@@ -246,7 +302,7 @@ function cellNearMask(c: number, grid: Grid, m: FootprintMask, reachM: number): 
   const j1 = Math.min(m.n - 1, Math.floor((z + cell + reachM - mz0) / m.cell));
   for (let j = j0; j <= j1; j++) {
     const row = j * m.n;
-    for (let i = i0; i <= i1; i++) if (m.data[row + i] !== 0) return true;
+    for (let i = i0; i <= i1; i++) if (m.data[(row + i) * m.channels] !== 0) return true;
   }
   return false;
 }
@@ -332,7 +388,8 @@ export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): 
     const x = -grid.half + (c % grid.n) * grid.cell, z = -grid.half + Math.floor(c / grid.n) * grid.cell;
     const i0 = Math.max(1, Math.ceil((x - mx0) / m.cell - 0.5)), i1 = Math.min(m.n - 2, Math.ceil((x + grid.cell - mx0) / m.cell - 0.5) - 1);
     const j0 = Math.max(1, Math.ceil((z - mz0) / m.cell - 0.5)), j1 = Math.min(m.n - 2, Math.ceil((z + grid.cell - mz0) / m.cell - 0.5) - 1);
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) m.data[j * m.n + i] = MASK_ON;
+    // G is already ROOF_NO_CAP here: a gap cell has no Overture texel, so no cap
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) m.data[(j * m.n + i) * m.channels] = MASK_ON;
   }
   return painted;
 }
@@ -368,12 +425,81 @@ export interface ClassifierInput {
   readonly grid: Grid;
   /** a structure cell with an Overture texel this close (m) is covered (default 3) */
   readonly reachM?: number;
+  /** photogrammetry top (world y) of every building cell, -Infinity elsewhere: the roof samples */
+  readonly top?: Float32Array | null;
 }
 
-/** One stencil build request: footprints ride along only with a new set id. */
+/** Per footprint, what its roof cap is measured from and against. */
+export interface RoofInput {
+  /** world y the cap is measured from: the lowest ground under the ring, the prism's own base */
+  readonly base: Float32Array;
+  /** Overture's roof in world y (ground + minHeight + height, as the prism), NaN when it has no height */
+  readonly overtureTop: Float32Array;
+  /** world units above the roof that survive the cut (parapets, rooftop units, the band's sloping edge) */
+  readonly marginM: number;
+}
+
+/** Point in a packed ring (x,z pairs from s to e), even-odd. */
+function inPackedRing(coords: Float32Array, s: number, e: number, x: number, z: number): boolean {
+  let inside = false;
+  for (let a = s, b = e - 2; a < e; b = a, a += 2) {
+    const xa = coords[a]!, za = coords[a + 1]!, xb = coords[b]!, zb = coords[b + 1]!;
+    if ((za > z) !== (zb > z) && x < ((xb - xa) * (z - za)) / (zb - za) + xa) inside = !inside;
+  }
+  return inside;
+}
+
+/**
+ * Each footprint's roof cap byte: the higher of Overture's roof and the
+ * photogrammetry's, plus the margin, above the footprint's base. The
+ * photogrammetry roof is the MAX over the classifier cells whose centres
+ * fall inside the outer ring (the cell holding the ring's box centre when
+ * none does), the same cells rebuildPrisms reads: a mean would shave a
+ * tall wing off a low podium. No roof sample at all is no cap.
+ */
+export function polygonRoofCaps(pk: PackedFootprints, roof: RoofInput, top: Float32Array | null, grid: Grid | null): Uint8Array {
+  const nPolys = pk.polyRings.length - 1;
+  const caps = new Uint8Array(nPolys);
+  const { coords, ringStarts, polyRings } = pk;
+  for (let p = 0; p < nPolys; p++) {
+    const s = ringStarts[polyRings[p]!]!, e = ringStarts[polyRings[p]! + 1]!;
+    let roofY = Number.isFinite(roof.overtureTop[p]!) ? roof.overtureTop[p]! : -Infinity;
+    if (top && grid && e > s) {
+      let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+      for (let k = s; k < e; k += 2) {
+        const x = coords[k]!, z = coords[k + 1]!;
+        if (x < x0) x0 = x;
+        if (x > x1) x1 = x;
+        if (z < z0) z0 = z;
+        if (z > z1) z1 = z;
+      }
+      const { n, cell, half } = grid;
+      const i0 = Math.max(0, Math.floor((x0 + half) / cell)), i1 = Math.min(n - 1, Math.floor((x1 + half) / cell));
+      const j0 = Math.max(0, Math.floor((z0 + half) / cell)), j1 = Math.min(n - 1, Math.floor((z1 + half) / cell));
+      let photo = -Infinity, sampled = false;
+      for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) {
+        if (!inPackedRing(coords, s, e, -half + (i + 0.5) * cell, -half + (j + 0.5) * cell)) continue;
+        sampled = true;
+        const t = top[j * n + i]!;
+        if (Number.isFinite(t) && t > photo) photo = t;
+      }
+      if (!sampled) {
+        const i = Math.floor(((x0 + x1) / 2 + half) / cell), j = Math.floor(((z0 + z1) / 2 + half) / cell);
+        if (i >= 0 && j >= 0 && i < n && j < n && Number.isFinite(top[j * n + i]!)) photo = top[j * n + i]!;
+      }
+      if (photo > roofY) roofY = photo;
+    }
+    caps[p] = roofY > -Infinity ? encodeRoofCap(roofY + roof.marginM - roof.base[p]!) : ROOF_NO_CAP;
+  }
+  return caps;
+}
+
+/** One stencil build request: footprints (and their roof input) ride along only with a new set id. */
 export interface CutoutJob {
   readonly setId: number;
   readonly packed?: PackedFootprints | undefined;
+  /** with `packed`, when opts.roofCap is on */
+  readonly roof?: RoofInput | undefined;
   readonly opts: FootprintMaskOptions;
   readonly classifier: ClassifierInput | null;
 }
@@ -401,8 +527,10 @@ export type CutoutBuild =
 export class CutoutStencilBuilder {
   private setId = -1;
   private packed: PackedFootprints | null = null;
+  private roof: RoofInput | null = null;
   private base: FootprintMask | null = null;
   private baseKey = '';
+  private baseCaps: Uint8Array | null = null;
   private lastCells: Uint8Array | null = null;
   private lastSent = false;
 
@@ -410,20 +538,24 @@ export class CutoutStencilBuilder {
     if (job.packed) {
       this.setId = job.setId;
       this.packed = job.packed;
+      this.roof = job.roof ?? null;
       this.base = null;
       this.lastSent = false;
     }
     if (!this.packed || this.setId !== job.setId) throw new Error(`cutout: footprint set ${job.setId} was never sent`);
     const key = JSON.stringify(job.opts);
+    const cl = job.classifier;
+    // the roof samples stream in with the tiles: a changed cap re-rasters, an unchanged one reuses
+    const caps = job.opts.roofCap && this.roof ? polygonRoofCaps(this.packed, this.roof, cl?.top ?? null, cl?.grid ?? null) : null;
     let baseRebuilt = false;
-    if (!this.base || this.baseKey !== key) {
-      this.base = footprintMaskPacked(this.packed, job.opts);
+    if (!this.base || this.baseKey !== key || !sameCells(caps, this.baseCaps)) {
+      this.base = footprintMaskPacked(this.packed, job.opts, caps);
       this.baseKey = key;
+      this.baseCaps = caps;
       this.lastSent = false;
       baseRebuilt = true;
     }
     const base = this.base;
-    const cl = job.classifier;
     const cells = cl ? classifierCells(cl.structure, cl.grid, base, cl.reachM ?? 3) : null;
     const coverage = cl && cells ? classifierGapFromCells(cl.structure, cl.grid, cells) : null;
     let gapCells = 0;

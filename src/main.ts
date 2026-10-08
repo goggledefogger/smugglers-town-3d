@@ -21,7 +21,7 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, selectGapBoxes, CutoutStencilBuilder, type CoverageGap, type PackedFootprints
+  packFootprints, selectGapBoxes, CutoutStencilBuilder, type CoverageGap, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
@@ -568,6 +568,24 @@ function refreshColliders(): void {
     });
 }
 
+/**
+ * The ground a footprint stands on, from the heightfield under its ring's
+ * vertices: the mean (its roof is measured from it) and the lowest (its
+ * prism's base, and Cutout 3D's roof cap reference), plus its box.
+ */
+function footprintGround(p: Footprint, hf: { sample(x: number, z: number): number }):
+  { ground: number; gMin: number; x0: number; x1: number; z0: number; z1: number } | null {
+  let gMin = Infinity, gSum = 0, n = 0;
+  let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+  for (let i = 0; i + 3 < p.ring.length; i += 2) {
+    const x = p.ring[i]!, z = p.ring[i + 1]!;
+    const g = hf.sample(x, z);
+    gMin = Math.min(gMin, g); gSum += g; n++;
+    x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
+  }
+  return n === 0 ? null : { ground: gSum / n, gMin, x0, x1, z0, z1 };
+}
+
 /** Height a footprint without an Overture height gets (m): two storeys, so it at least stands. */
 const PRISM_FALLBACK_M = 6;
 
@@ -589,16 +607,9 @@ function rebuildPrisms(): boolean {
   const tops = tiles.activeTopGrid;
   const prisms: Prism[] = [];
   for (const p of polys) {
-    let gMin = Infinity, gSum = 0, n = 0;
-    let x0 = Infinity, x1 = -Infinity, z0 = Infinity, z1 = -Infinity;
-    for (let i = 0; i + 3 < p.ring.length; i += 2) {
-      const x = p.ring[i]!, z = p.ring[i + 1]!;
-      const g = hf.sample(x, z);
-      gMin = Math.min(gMin, g); gSum += g; n++;
-      x0 = Math.min(x0, x); x1 = Math.max(x1, x); z0 = Math.min(z0, z); z1 = Math.max(z1, z);
-    }
-    if (n === 0) continue;
-    const ground = gSum / n;
+    const fg = footprintGround(p, hf);
+    if (!fg) continue;
+    const { ground, gMin, x0, x1, z0, z1 } = fg;
     let height = p.height;
     if (height == null) {
       let top = -Infinity;
@@ -630,16 +641,29 @@ const CUTOUT_DILATE_M = Number(new URLSearchParams(window.location.search).get('
  * (4 or fewer cores, 4 GB or less, or a max texture under 4096), which
  * quarters the raster, the 13 MB upload and the texture memory. ?cutoutTexel= overrides.
  */
+const CUTOUT_WEAK_DEVICE = ((): boolean => {
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  return (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
+    || renderer.renderer.capabilities.maxTextureSize < 4096;
+})();
 const CUTOUT_TEXEL_M = ((): number => {
   const q = Number(new URLSearchParams(window.location.search).get('cutoutTexel') ?? '');
-  if (q > 0) return q;
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  const weak = (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
-    || renderer.renderer.capabilities.maxTextureSize < 4096;
-  return weak ? 2 : 1;
+  return q > 0 ? q : CUTOUT_WEAK_DEVICE ? 2 : 1;
 })();
+/**
+ * Cutout 3D roof cap: the stencil goes RG8, G the footprint's roof plus
+ * CUTOUT_ROOF_MARGIN_M, and canopy above it is cut. Doubles the upload
+ * (26 MB at 1 m), so a weak device keeps the R8 stencil (3.2 MB at 2 m)
+ * uncapped. ?cutoutCap=1 / 0 overrides.
+ */
+const CUTOUT_ROOF_CAP = ((): boolean => {
+  const q = new URLSearchParams(window.location.search).get('cutoutCap');
+  return q === '1' ? true : q === '0' ? false : !CUTOUT_WEAK_DEVICE;
+})();
+/** Metres above the sampled roof that survive the cap: parapets, rooftop units, the dilation band's roof edge. */
+const CUTOUT_ROOF_MARGIN_M = 3;
 /** The stencil covers the footprint fetch radius both ways, and no more. */
-const CUTOUT_MASK_OPTS = { size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M };
+const CUTOUT_MASK_OPTS = { size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M, roofCap: CUTOUT_ROOF_CAP };
 /** A classifier building cell with an Overture texel this close (m) is covered; farther, it is a gap. */
 const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
@@ -662,7 +686,7 @@ let cutoutLocalBuilder: CutoutStencilBuilder | null = null;
 /** Cutout 3D's last stencil build, for the survey script. */
 let cutoutStats: {
   footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
-  packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean;
+  packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean; roofCap?: boolean; uploadMB?: number;
   requests?: number; uploads?: number; unchanged?: number;
 } | null = null;
 let cutoutUploads = 0;
@@ -694,21 +718,27 @@ function runCutoutBuild(): void {
     if (filter.hasFootprintMask) filter.setFootprintMask(null);
     cutoutMaskFor = null;
     cutoutCells = null;
-    cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
+    cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true, roofCap: false };
     cutoutRebuild.done();
     return;
   }
   const grid = { ...ts.activeGrid };
-  const classifier = { structure: ts.structureGrid.slice(), grid, reachM: CUTOUT_GAP_REACH_M };
+  // copies, transferred: the worker reads the grid as of this collider pass
+  const classifier = {
+    structure: ts.structureGrid.slice(), grid, reachM: CUTOUT_GAP_REACH_M,
+    top: CUTOUT_ROOF_CAP ? ts.activeTopGrid.slice() : null
+  };
   const t0 = performance.now();
   let packed: PackedFootprints | undefined;
+  let roof: RoofInput | undefined;
   if (cutoutBuilderFor !== polys) {
     packed = packFootprints(polys);
+    if (CUTOUT_ROOF_CAP) roof = roofInput(polys);
     cutoutBuilderFor = polys;
     cutoutSetId++;
   }
   const packMs = performance.now() - t0;
-  const job: FootprintMaskJob = { id: ++cutoutJobId, setId: cutoutSetId, packed, opts: CUTOUT_MASK_OPTS, classifier };
+  const job: FootprintMaskJob = { id: ++cutoutJobId, setId: cutoutSetId, packed, roof, opts: CUTOUT_MASK_OPTS, classifier };
   const finish = (r: FootprintMaskResult): void => {
     cutoutRebuild.done();
     if (r.error !== undefined) {
@@ -734,6 +764,7 @@ function runCutoutBuild(): void {
     cutoutStats = {
       footprints: polys.length, texelM: b.mask.cell, n: b.mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
       packMs, buildMs: r.buildMs, uploadQueuedMs: performance.now() - t1, gapCells: b.gapCells, baseRebuilt: b.baseRebuilt,
+      roofCap: b.mask.channels === 2, uploadMB: Math.round(b.mask.data.length / 1e4) / 100,
       requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged
     };
     log.info('cutout stencil built', cutoutStats);
@@ -756,7 +787,29 @@ function runCutoutBuild(): void {
     if (e.data.id === cutoutJobId) finish(e.data);
   };
   cutoutWorker.onerror = e => finish({ id: job.id, error: e.message });
-  cutoutWorker.postMessage(job, packed ? [packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer] : []);
+  const transfer: Transferable[] = [classifier.structure.buffer];
+  if (classifier.top) transfer.push(classifier.top.buffer);
+  if (packed) transfer.push(packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer);
+  if (roof) transfer.push(roof.base.buffer, roof.overtureTop.buffer);
+  cutoutWorker.postMessage(job, transfer);
+}
+
+/**
+ * Per footprint, what its roof cap is measured from: the prism's own
+ * ground (the lowest ring-vertex sample, so the cap agrees with the wall
+ * the car hits and never tightens on the downhill side) and Overture's
+ * roof as the prism places it. The photogrammetry roof joins in the worker,
+ * from the classifier's tops as they stream in.
+ */
+function roofInput(polys: readonly Footprint[]): RoofInput {
+  const hf = world.terrainProvider.heightfield;
+  const base = new Float32Array(polys.length), overtureTop = new Float32Array(polys.length);
+  polys.forEach((p, k) => {
+    const fg = footprintGround(p, hf);
+    base[k] = fg ? fg.gMin : 0;
+    overtureTop[k] = fg && p.height != null ? fg.ground + p.minHeight + p.height : NaN;
+  });
+  return { base, overtureTop, marginM: CUTOUT_ROOF_MARGIN_M * world.terrainProvider.reliefBoost };
 }
 
 /**

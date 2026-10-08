@@ -1,9 +1,11 @@
 import { describe, it, expect } from 'vitest';
+import { RGFormat } from 'three';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilter.ts';
 import {
   footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells, selectGapBoxes,
-  CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE
+  CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE, encodeRoofCap, decodeRoofCap, ROOF_NO_CAP, roofCapAt,
+  footprintMaskPacked, polygonRoofCaps
 } from '../src/services/overture/footprintMask.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
 import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
@@ -202,6 +204,112 @@ describe('hybrid stencil: Overture union the classifier gap cells', () => {
   });
 });
 
+describe('roof cap', () => {
+  const opts = { size: 64, cell: 1, dilateM: 2, roofCap: true };
+
+  it('encodes whole metres rounded up and round-trips', () => {
+    for (const h of [1, 3, 17, 120, 254]) expect(decodeRoofCap(encodeRoofCap(h))).toBe(h);
+    expect(encodeRoofCap(17.2)).toBe(18);
+    expect(decodeRoofCap(encodeRoofCap(17.2))).toBeGreaterThanOrEqual(17.2);
+    // never 0: that byte means "unset" while a build runs
+    expect(encodeRoofCap(0)).toBe(1);
+    expect(encodeRoofCap(-4)).toBe(1);
+  });
+
+  it('uses 255 as the no-cap sentinel: unknown, infinite, or over 254 m', () => {
+    expect(ROOF_NO_CAP).toBe(255);
+    expect(encodeRoofCap(null)).toBe(255);
+    expect(encodeRoofCap(NaN)).toBe(255);
+    expect(encodeRoofCap(Infinity)).toBe(255);
+    expect(encodeRoofCap(254.5)).toBe(255);
+    expect(decodeRoofCap(255)).toBe(Infinity);
+  });
+
+  it('writes RG8: each footprint its cap, the higher where they overlap, the band its own, none outside', () => {
+    const low = { ring: square(0, 0, 10, 10), holes: [] };
+    const tower = { ring: square(10, 0, 20, 10), holes: [] };
+    const part = { ring: square(2, 2, 6, 6), holes: [] };
+    const m = footprintMaskPacked(packFootprints([low, tower, part]), opts, Uint8Array.from([12, 90, 30]));
+    expect(m.channels).toBe(2);
+    expect(m.data.length).toBe(64 * 64 * 2);
+    // the low block clear of the tower's and the part's bands
+    expect(roofCapAt(m, 1, 8.5)).toBe(12);
+    expect(roofCapAt(m, 15, 5)).toBe(90);
+    // the part over its building: the higher cap
+    expect(roofCapAt(m, 4, 4)).toBe(30);
+    // the tower's band reaches 2 m into the low block it shares a wall with and carries the
+    // tower's cap there, so the linear filter never halves the cap on the tower's own wall
+    expect(roofCapAt(m, 8.5, 5)).toBe(90);
+    expect(roofCapAt(m, 9.5, 5)).toBe(90);
+    expect(roofCapAt(m, 7.5, 5)).toBe(30);
+    // the low block's band beyond its own outer wall
+    expect(roofCapAt(m, -1.5, 5)).toBe(12);
+    expect(maskAt(m, -1.5, 5)).toBe(true);
+    // outside every footprint (and the cleared outer ring): no cap
+    expect(roofCapAt(m, -20, -20)).toBe(Infinity);
+    expect(m.data[1]).toBe(ROOF_NO_CAP);
+    // R is unchanged by the second channel
+    const r8 = footprintMaskPacked(packFootprints([low, tower, part]), { ...opts, roofCap: false });
+    for (let k = 0; k < r8.data.length; k++) expect(m.data[k * 2]).toBe(r8.data[k]);
+  });
+
+  it('a polygon with no cap leaves 255, and that wins an overlap', () => {
+    const a = { ring: square(0, 0, 10, 10), holes: [] };
+    const b = { ring: square(5, 0, 15, 10), holes: [] };
+    const m = footprintMaskPacked(packFootprints([a, b]), opts, Uint8Array.from([20, ROOF_NO_CAP]));
+    expect(roofCapAt(m, 2, 5)).toBe(20);
+    expect(roofCapAt(m, 7, 5)).toBe(Infinity);
+  });
+
+  // roof samples on a 10 m grid, cells over x,z in [-40, 40)
+  const grid = { n: 8, cell: 10, half: 40 };
+  const cellAt = (i: number, j: number) => j * 8 + i;
+
+  it('caps at the max photogrammetry roof over the footprint, above its base, plus the margin', () => {
+    const top = new Float32Array(64).fill(-Infinity);
+    // a 20 x 10 m building over cells (4,4) and (5,4): a 12 m podium and a 40 m wing, ground at 5
+    top[cellAt(4, 4)] = 17; top[cellAt(5, 4)] = 45;
+    const pk = packFootprints([{ ring: square(0, 0, 20, 10), holes: [] }, { ring: square(-30, -30, -20, -20), holes: [] }]);
+    const roof = { base: Float32Array.from([5, 0]), overtureTop: Float32Array.from([NaN, NaN]), marginM: 3 };
+    const caps = polygonRoofCaps(pk, roof, top, grid);
+    // the max (45), not the mean (31): the wing is not shaved
+    expect(caps[0]).toBe(45 + 3 - 5);
+    // no roof sample at all: no cap
+    expect(caps[1]).toBe(ROOF_NO_CAP);
+    // Overture's roof counts when it is the higher
+    const withOverture = polygonRoofCaps(pk, { ...roof, overtureTop: Float32Array.from([60, 9]) }, top, grid);
+    expect(withOverture[0]).toBe(60 + 3 - 5);
+    expect(withOverture[1]).toBe(9 + 3);
+    // a footprint too small to hold a cell centre reads the cell under its box centre
+    const small = packFootprints([{ ring: square(11, 1, 14, 4), holes: [] }]);
+    expect(polygonRoofCaps(small, { base: Float32Array.from([5]), overtureTop: Float32Array.from([NaN]), marginM: 3 }, top, grid)[0]).toBe(43);
+  });
+
+  it('builder: gap cells get no cap, and a roof sample streaming in re-rasters the cap', () => {
+    const b = new CutoutStencilBuilder();
+    const polys = [{ ring: square(2, 2, 8, 8), holes: [] }];
+    const structure = new Uint8Array(64);
+    structure[cellAt(4, 4)] = 1; structure[cellAt(1, 1)] = 1;
+    const top = new Float32Array(64).fill(-Infinity);
+    const roof = { base: Float32Array.from([0]), overtureTop: Float32Array.from([NaN]), marginM: 3 };
+    const o = { size: 128, cell: 1, dilateM: 2, roofCap: true };
+    const first = b.build({ setId: 1, packed: packFootprints(polys), roof, opts: o, classifier: { structure, grid, top } });
+    if (!first.changed) throw new Error('expected a mask');
+    expect(roofCapAt(first.mask, 5, 5)).toBe(Infinity);
+    expect(maskAt(first.mask, -25, -25)).toBe(true);
+    expect(roofCapAt(first.mask, -25, -25)).toBe(Infinity);
+    const top2 = top.slice();
+    top2[cellAt(4, 4)] = 20;
+    const second = b.build({ setId: 1, opts: o, classifier: { structure, grid, top: top2 } });
+    expect(second.baseRebuilt).toBe(true);
+    if (!second.changed) throw new Error('expected a mask');
+    expect(roofCapAt(second.mask, 5, 5)).toBe(23);
+    expect(roofCapAt(second.mask, -25, -25)).toBe(Infinity);
+    const third = b.build({ setId: 1, opts: o, classifier: { structure, grid, top: top2.slice() } });
+    expect(third.changed).toBe(false);
+  });
+});
+
 describe('CoalescedRebuild', () => {
   const fakeClock = () => {
     let t = 0;
@@ -312,7 +420,10 @@ describe('TileClutterFilter cutout', () => {
     expect(shader.fragmentShader).toContain('uniform sampler2D uFootprintMask');
     expect(shader.fragmentShader).toContain('uniform vec4 uFootprintField');
     expect(shader.fragmentShader).toContain('uClutterMode > 3.5');
-    expect(shader.fragmentShader).toContain('texture2D(uFootprintMask, (vClutterWorldPos.xz - uFootprintField.xy) / uFootprintField.z + 0.5).r * uFootprintField.w < 0.5) discard');
+    expect(shader.fragmentShader).toContain('vec4 cFoot = texture2D(uFootprintMask, (vClutterWorldPos.xz - uFootprintField.xy) / uFootprintField.z + 0.5);');
+    expect(shader.fragmentShader).toContain('cFoot.r * uFootprintField.w < 0.5 || vClutterRiseVal > cFoot.g * 255.0 + step(0.999, cFoot.g) * 1e6 + uFootprintNoCap) discard');
+    // no stencil: the cap is out of reach (the structure mask has no G)
+    expect(shader.uniforms.uFootprintNoCap?.value).toBe(1e6);
     // one sample, no branch of its own
     const cut = shader.fragmentShader.slice(shader.fragmentShader.indexOf('uClutterMode > 3.5) {'), shader.fragmentShader.indexOf('} else if (uClutterMode > 2.5'));
     expect(cut.match(/texture2D/g)?.length).toBe(1);
@@ -342,5 +453,25 @@ describe('TileClutterFilter cutout', () => {
     expect(a.uniforms.uFootprintMask!.value).toBe(a.uniforms.uClutterMask!.value);
     expect(a.uniforms.uFootprintField!.value.toArray()).toEqual([0, 0, 40, 255]);
     expect(() => f.setFootprintMask({ data: new Uint8Array(3), n: 2, cx: 0, cz: 0, size: 2 })).toThrow();
+  });
+
+  it('loads an RG8 stencil with the cap live, reuses its texture, and an R8 one leaves the cap off', () => {
+    const f = new TileClutterFilter(hf(), new Uint8Array(16), 4);
+    const a = litShader();
+    patchOne(f).onBeforeCompile(a, {});
+    const capped = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 1, dilateM: 0, roofCap: true });
+    f.setFootprintMask(capped);
+    expect(f.hasRoofCap).toBe(true);
+    expect(a.uniforms.uFootprintNoCap!.value).toBe(0);
+    const tex = a.uniforms.uFootprintMask!.value;
+    expect(tex.format).toBe(RGFormat);
+    const again = { ...capped, data: capped.data.slice() };
+    f.setFootprintMask(again);
+    expect(a.uniforms.uFootprintMask!.value).toBe(tex);
+    expect(tex.image.data).toBe(again.data);
+    f.setFootprintMask(footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 1, dilateM: 0 }));
+    expect(f.hasRoofCap).toBe(false);
+    expect(a.uniforms.uFootprintNoCap!.value).toBe(1e6);
+    expect(() => f.setFootprintMask({ ...capped, data: new Uint8Array(64 * 64) })).toThrow();
   });
 });
