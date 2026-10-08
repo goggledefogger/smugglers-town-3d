@@ -31,7 +31,7 @@ describe('fetchElevationGrid geodesy and orientation', () => {
           lat() { return this._lat; }
           lng() { return this._lng; }
         },
-        ElevationService: vi.fn(() => mockElevator)
+        ElevationService: vi.fn(function () { return mockElevator; })
       }
     });
 

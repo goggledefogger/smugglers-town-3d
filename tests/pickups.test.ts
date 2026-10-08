@@ -1,11 +1,11 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest';
 import { Group, Mesh, Vector3 } from 'three';
 import { Pickups } from '../src/render/Pickups.ts';
 import type { MatchState } from '../src/core/gameplay/MatchRules.ts';
 import type { Heightfield } from '../src/core/heightfield.ts';
 
 describe('Pickups & Terrain-Projected Base Visuals', () => {
-  let mockScene: { add: ReturnType<typeof vi.fn> };
+  let mockScene: { add: Mock<(o: Group) => void> };
   let mockHeightfield: Heightfield;
   let origDoc: unknown;
 
