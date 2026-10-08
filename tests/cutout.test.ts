@@ -5,7 +5,7 @@ import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilte
 import {
   footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells, selectGapBoxes,
   CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE, encodeRoofCap, decodeRoofCap, ROOF_NO_CAP, roofCapAt,
-  footprintMaskPacked, polygonRoofCaps
+  footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest
 } from '../src/services/overture/footprintMask.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
 import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
@@ -307,6 +307,63 @@ describe('roof cap', () => {
     expect(roofCapAt(second.mask, -25, -25)).toBe(Infinity);
     const third = b.build({ setId: 1, opts: o, classifier: { structure, grid, top: top2.slice() } });
     expect(third.changed).toBe(false);
+  });
+});
+
+describe('stencil digests: skip the upload and the build when nothing changed', () => {
+  const grid = { n: 8, cell: 10, half: 40 };
+  const opts = { size: 128, cell: 1, dilateM: 2, roofCap: true };
+
+  it('digests bytes: equal for equal content, different for one flipped byte, length and tail included', () => {
+    const a = new Uint8Array(1003).map((_, k) => k * 7);
+    expect(digestBytes(a)).toMatch(/^[0-9a-f]{16}$/);
+    expect(digestBytes(a.slice())).toBe(digestBytes(a));
+    for (const k of [0, 500, 1002]) {
+      const b = a.slice();
+      b[k] = b[k]! ^ 1;
+      expect(digestBytes(b)).not.toBe(digestBytes(a));
+    }
+    expect(digestBytes(a.subarray(0, 1002))).not.toBe(digestBytes(a));
+    expect(digestBytes(new Uint8Array(4), new Uint8Array(4))).not.toBe(digestBytes(new Uint8Array(8)));
+  });
+
+  it('input unchanged: same set, cells and roof tops digest the same; a cell, a top or a new set does not', () => {
+    const structure = new Uint8Array(64); structure[3] = 1;
+    const top = new Float32Array(64).fill(-Infinity); top[3] = 20;
+    const d = cutoutInputDigest(1, opts, { structure, grid, top });
+    expect(cutoutInputDigest(1, opts, { structure: structure.slice(), grid, top: top.slice() })).toBe(d);
+    const s2 = structure.slice(); s2[9] = 1;
+    expect(cutoutInputDigest(1, opts, { structure: s2, grid, top })).not.toBe(d);
+    const t2 = top.slice(); t2[3] = 21;
+    expect(cutoutInputDigest(1, opts, { structure, grid, top: t2 })).not.toBe(d);
+    expect(cutoutInputDigest(2, opts, { structure, grid, top })).not.toBe(d);
+    expect(cutoutInputDigest(1, { ...opts, roofCap: false }, { structure, grid, top })).not.toBe(d);
+  });
+
+  it('digest skip: an identical stencil leaves the texture untouched, a changed one uploads', () => {
+    const f = new TileClutterFilter(new Heightfield(40, 4, new Float32Array(25).fill(10)), new Uint8Array(16), 4);
+    const polys = [{ ring: square(2, 2, 8, 8), holes: [] }];
+    const b1 = new CutoutStencilBuilder(), b2 = new CutoutStencilBuilder();
+    const job = { setId: 1, packed: packFootprints(polys), opts, classifier: null };
+    const first = b1.build(job);
+    // a second builder (as after a worker restart) makes the same bytes: the same digest
+    const twin = b2.build({ ...job, packed: packFootprints(polys) });
+    if (!first.changed || !twin.changed) throw new Error('expected masks');
+    expect(twin.digest).toBe(first.digest);
+    expect(twin.digest).toBe(digestBytes(twin.mask.data));
+    expect(f.setFootprintMask(first.mask, first.digest)).toBe(true);
+    const tex = (f as any).footprintTex;
+    const version = tex.version;
+    expect(f.setFootprintMask(twin.mask, twin.digest)).toBe(false);
+    expect(tex.version).toBe(version);
+    expect(tex.image.data).toBe(first.mask.data);
+    const other = b2.build({ setId: 2, packed: packFootprints([{ ring: square(2, 2, 9, 9), holes: [] }]), opts, classifier: null });
+    if (!other.changed) throw new Error('expected a mask');
+    expect(other.digest).not.toBe(first.digest);
+    expect(f.setFootprintMask(other.mask, other.digest)).toBe(true);
+    expect(tex.version).toBeGreaterThan(version);
+    // no digest given: always uploads, as before
+    expect(f.setFootprintMask(other.mask)).toBe(true);
   });
 });
 

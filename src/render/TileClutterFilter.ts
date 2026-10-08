@@ -431,6 +431,8 @@ export class TileClutterFilter {
   /** 0 with an RG8 stencil (the roof cap is live), 1e6 otherwise */
   private readonly uFootprintNoCap = { value: 1e6 };
   private footprintTex: DataTexture | null = null;
+  /** digest of the stencil the texture holds, when the caller gave one */
+  private footprintDigest: string | null = null;
 
   /** Diagnostic: tint snapped tile fragments green so they can be told from the box fill. */
   get debugTint(): boolean {
@@ -496,13 +498,19 @@ export class TileClutterFilter {
    * on world (cx, cz). Null clears it, so cutout falls back to the
    * structure mask. A new stencil is one texture upload, never a
    * recompile; one of the same size and format reuses the texture, so the
-   * upload is a sub-image, not a reallocation.
+   * upload is a sub-image, not a reallocation. With a `digest` equal to
+   * the loaded stencil's, nothing is touched and it returns false: an
+   * identical stencil is never uploaded twice.
    */
-  setFootprintMask(mask: { data: Uint8Array; n: number; cx: number; cz: number; size: number; channels?: 1 | 2 } | null): void {
+  setFootprintMask(
+    mask: { data: Uint8Array; n: number; cx: number; cz: number; size: number; channels?: 1 | 2 } | null, digest: string | null = null
+  ): boolean {
     const ch = mask?.channels ?? 1;
     if (mask && mask.data.length !== mask.n * mask.n * ch) {
       throw new Error(`footprint mask length ${mask.data.length} != n^2 * ${ch} (${mask.n * mask.n * ch})`);
     }
+    if (mask && digest !== null && this.footprintTex && digest === this.footprintDigest) return false;
+    this.footprintDigest = mask ? digest : null;
     const old = this.footprintTex;
     if (mask && old && old.image.width === mask.n && old.format === (ch === 2 ? RGFormat : RedFormat)) {
       old.image.data = mask.data;
@@ -513,11 +521,12 @@ export class TileClutterFilter {
     }
     if (!mask) {
       this.useStructureFallback();
-      return;
+      return true;
     }
     this.uFootprintMask.value = this.footprintTex!;
     this.uFootprintField.value.set(mask.cx, mask.cz, mask.size, 1);
     this.uFootprintNoCap.value = ch === 2 ? 0 : 1e6;
+    return true;
   }
 
   /** True when the loaded stencil carries a roof cap (RG8). */

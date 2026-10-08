@@ -21,7 +21,7 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, selectGapBoxes, CutoutStencilBuilder, type CoverageGap, type PackedFootprints, type RoofInput
+  packFootprints, selectGapBoxes, CutoutStencilBuilder, cutoutInputDigest, type CoverageGap, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
@@ -687,10 +687,14 @@ let cutoutLocalBuilder: CutoutStencilBuilder | null = null;
 let cutoutStats: {
   footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
   packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean; roofCap?: boolean; uploadMB?: number;
-  requests?: number; uploads?: number; unchanged?: number;
+  requests?: number; uploads?: number; unchanged?: number; digestSkips?: number; inputSkips?: number;
 } | null = null;
 let cutoutUploads = 0;
 let cutoutUnchanged = 0;
+let cutoutDigestSkips = 0;
+let cutoutInputSkips = 0;
+/** cutoutInputDigest of the last job posted; cleared on a failure or a new tileset */
+let cutoutLastInputDigest: string | null = null;
 const cutoutRebuild = new CoalescedRebuild(runCutoutBuild, CUTOUT_REBUILD_MS);
 
 /**
@@ -738,12 +742,22 @@ function runCutoutBuild(): void {
     cutoutSetId++;
   }
   const packMs = performance.now() - t0;
+  // the same footprint set, cells and roof tops as the last posted job: the build would match it
+  const inputDigest = cutoutInputDigest(cutoutSetId, CUTOUT_MASK_OPTS, classifier);
+  if (!packed && inputDigest === cutoutLastInputDigest && cutoutMaskFor === polys) {
+    cutoutInputSkips++;
+    if (cutoutStats) cutoutStats.inputSkips = cutoutInputSkips;
+    cutoutRebuild.done();
+    return;
+  }
+  cutoutLastInputDigest = inputDigest;
   const job: FootprintMaskJob = { id: ++cutoutJobId, setId: cutoutSetId, packed, roof, opts: CUTOUT_MASK_OPTS, classifier };
   const finish = (r: FootprintMaskResult): void => {
     cutoutRebuild.done();
     if (r.error !== undefined) {
       log.warn('cutout stencil build failed', r.error);
       cutoutBuilderFor = null;
+      cutoutLastInputDigest = null;
       cutoutDirty = true;
       return;
     }
@@ -757,7 +771,14 @@ function runCutoutBuild(): void {
       return;
     }
     const t1 = performance.now();
-    filter.setFootprintMask(b.mask);
+    // a stencil byte-identical to the one on the GPU: drop it, the texture is untouched
+    if (!filter.setFootprintMask(b.mask, b.digest)) {
+      cutoutDigestSkips++;
+      cutoutMaskFor = polys;
+      if (cutoutStats) cutoutStats.digestSkips = cutoutDigestSkips;
+      logCutoutCoverage();
+      return;
+    }
     cutoutMaskFor = polys;
     cutoutCells = b.cells ? { data: b.cells, grid } : null;
     cutoutUploads++;
@@ -765,7 +786,8 @@ function runCutoutBuild(): void {
       footprints: polys.length, texelM: b.mask.cell, n: b.mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
       packMs, buildMs: r.buildMs, uploadQueuedMs: performance.now() - t1, gapCells: b.gapCells, baseRebuilt: b.baseRebuilt,
       roofCap: b.mask.channels === 2, uploadMB: Math.round(b.mask.data.length / 1e4) / 100,
-      requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged
+      requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged,
+      digestSkips: cutoutDigestSkips, inputSkips: cutoutInputSkips
     };
     log.info('cutout stencil built', cutoutStats);
     // the gap buildings' boxes collide from here on
@@ -932,6 +954,9 @@ function clearTiles(): void {
   cutoutUploads = 0;
   cutoutUnchanged = 0;
   cutoutRebuild.reset();
+  cutoutLastInputDigest = null;
+  cutoutDigestSkips = 0;
+  cutoutInputSkips = 0;
   cutoutCoverageLogged = false;
   footprintsLandedAt = Infinity;
   game.setSurfaceProvider(undefined);

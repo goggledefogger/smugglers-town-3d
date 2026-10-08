@@ -512,8 +512,53 @@ export interface CutoutStats {
   baseRebuilt: boolean;
 }
 
+/**
+ * A 64-bit digest of byte arrays, as 16 hex digits: two independent
+ * multiply-xor lanes over 32-bit words (bytes for the tail), each array's
+ * length mixed in. Reads every byte, but a word at a time with two imuls,
+ * about a tenth of what the raster that produced a stencil costs. Not
+ * cryptographic: it only has to tell one stencil (or one set of inputs)
+ * from the next.
+ */
+export function digestBytes(...parts: ArrayBufferView[]): string {
+  let h1 = 0x811c9dc5 | 0, h2 = 0x9747b28c | 0;
+  for (const part of parts) {
+    const bytes = new Uint8Array(part.buffer, part.byteOffset, part.byteLength);
+    const words = bytes.byteOffset % 4 === 0 ? Math.floor(bytes.byteLength / 4) : 0;
+    const w = new Uint32Array(bytes.buffer, bytes.byteOffset, words);
+    for (let k = 0; k < words; k++) {
+      const v = w[k]!;
+      h1 = Math.imul(h1 ^ v, 0x01000193);
+      h2 = Math.imul(h2 ^ v, 0x5bd1e995) ^ (h2 >>> 15);
+    }
+    for (let k = words * 4; k < bytes.byteLength; k++) {
+      h1 = Math.imul(h1 ^ bytes[k]!, 0x01000193);
+      h2 = Math.imul(h2 ^ bytes[k]!, 0x5bd1e995) ^ (h2 >>> 15);
+    }
+    h1 = Math.imul(h1 ^ bytes.byteLength, 0x01000193);
+    h2 = Math.imul(h2 ^ bytes.byteLength, 0x5bd1e995) ^ (h2 >>> 15);
+  }
+  return (h1 >>> 0).toString(16).padStart(8, '0') + (h2 >>> 0).toString(16).padStart(8, '0');
+}
+
+/**
+ * Everything a stencil build reads, digested before posting: the footprint
+ * set (by id; a new set always posts), the options, and the classifier's
+ * building cells and roof tops byte for byte. The same digest as the last
+ * posted job means the build would come out the same, so it is not posted.
+ */
+export function cutoutInputDigest(setId: number, opts: FootprintMaskOptions, classifier: ClassifierInput | null): string {
+  const head = new TextEncoder().encode(`${setId}|${JSON.stringify(opts)}|${classifier ? `${classifier.grid.n},${classifier.grid.cell},${classifier.grid.half},${classifier.reachM ?? 3}` : '-'}`);
+  const parts: ArrayBufferView[] = [head];
+  if (classifier) {
+    parts.push(classifier.structure);
+    if (classifier.top) parts.push(classifier.top);
+  }
+  return digestBytes(...parts);
+}
+
 export type CutoutBuild =
-  | ({ changed: true; mask: FootprintMask; cells: Uint8Array | null } & CutoutStats)
+  | ({ changed: true; mask: FootprintMask; cells: Uint8Array | null; /** digestBytes of mask.data */ digest: string } & CutoutStats)
   | ({ changed: false } & CutoutStats);
 
 /**
@@ -565,7 +610,7 @@ export class CutoutStencilBuilder {
     if (cells && cl) paintGapCells(mask, cells, cl.grid);
     this.lastCells = cells;
     this.lastSent = true;
-    return { changed: true, mask, cells: cells ? cells.slice() : null, coverage, gapCells, baseRebuilt };
+    return { changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), coverage, gapCells, baseRebuilt };
   }
 }
 
