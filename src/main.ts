@@ -357,6 +357,7 @@ surfaceBtn?.addEventListener('click', toggleSurfaceMode);
 /** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
 function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
   (window as any).__tiles = streamer; // scripts/clutter-shots.mjs teleports onto a road cell through this
+  cutoutTerrain = terrain;
   clutterFilter = new TileClutterFilter(
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
@@ -694,6 +695,8 @@ const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
 const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
+/** The terrain the attached tileset plays on: the stencil's roof caps and tops share its frame. */
+let cutoutTerrain: TerrainProvider | null = null;
 /** A footprint the mesh rises less than this over (m) is not stencilled: an empty lot or a shed. */
 const CUTOUT_MIN_RISE_M = 3;
 let cutoutCoverageStat: (CoverageGap & { footprints: number; gapCells: number }) | null = null;
@@ -872,14 +875,19 @@ function runCutoutBuild(): void {
  * from the classifier's tops as they stream in.
  */
 function roofInput(polys: readonly Footprint[]): RoofInput {
-  const hf = world.terrainProvider.heightfield;
+  // the tiles' own ground, not the live game's: the footprints land and the first stencil builds
+  // before the match starts, while `world` is still the lobby's desert, and a base sampled off a
+  // dune dropped 6022 of 6101 downtown Portland footprints for "no rise" (the square's invisible
+  // walls, 2026-10-08: the buildings came back as classifier gap cells and the plaza rode along)
+  const tp = cutoutTerrain ?? world.terrainProvider;
+  const hf = tp.heightfield;
   const base = new Float32Array(polys.length), overtureTop = new Float32Array(polys.length);
   polys.forEach((p, k) => {
     const fg = footprintGround(p, hf);
     base[k] = fg ? fg.gMin : 0;
     overtureTop[k] = fg && p.height != null ? fg.ground + p.minHeight + p.height : NaN;
   });
-  const boost = world.terrainProvider.reliefBoost;
+  const boost = tp.reliefBoost;
   return { base, overtureTop, marginM: CUTOUT_ROOF_MARGIN_M * boost, minRiseM: CUTOUT_MIN_RISE_M * boost };
 }
 
@@ -1043,6 +1051,7 @@ function clearTiles(): void {
   cutoutDebugOverlay?.clear();
   cutoutCoverageStat = null;
   cutoutBuilderFor = null;
+  cutoutTerrain = null;
   cutoutDirty = true;
   cutoutUploads = 0;
   cutoutUnchanged = 0;
