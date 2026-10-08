@@ -27,7 +27,9 @@ import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
 import { SEG_STRIDE } from './services/overture/stencilTrace.ts';
 import { CutoutDebugOverlay } from './render/CutoutDebugOverlay.ts';
-import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
+import type { FootprintMaskJob, FootprintMaskResult, HeightMessage, HeightReply } from './services/overture/footprintMaskWorker.ts';
+import { HeightCapture } from './render/HeightCapture.ts';
+import type { HeightState } from './services/overture/heightField.ts';
 import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
@@ -742,6 +744,21 @@ function rebuildCutoutMask(): void {
   cutoutRebuild.request();
 }
 
+/** The stencil job in flight, if any: the worker's one onmessage routes its result here. */
+let cutoutFinish: ((r: FootprintMaskResult) => void) | null = null;
+
+function ensureCutoutWorker(): Worker {
+  if (!cutoutWorker) {
+    cutoutWorker = new Worker(new URL('./services/overture/footprintMaskWorker.ts', import.meta.url), { type: 'module' });
+    cutoutWorker.onmessage = (e: MessageEvent<FootprintMaskResult | HeightReply>) => {
+      const d = e.data;
+      if (d.kind !== undefined) onHeightReply(d);
+      else if (d.id === cutoutJobId) cutoutFinish?.(d);
+    };
+  }
+  return cutoutWorker;
+}
+
 function runCutoutBuild(): void {
   const filter = clutterFilter, ts = tiles;
   if (!filter || !ts || !traits(viewMode).cutsToFootprints) {
@@ -854,17 +871,15 @@ function runCutoutBuild(): void {
     }
     return;
   }
-  cutoutWorker ??= new Worker(new URL('./services/overture/footprintMaskWorker.ts', import.meta.url), { type: 'module' });
-  cutoutWorker.onmessage = (e: MessageEvent<FootprintMaskResult>) => {
-    if (e.data.id === cutoutJobId) finish(e.data);
-  };
-  cutoutWorker.onerror = e => finish({ id: job.id, error: e.message });
+  ensureCutoutWorker();
+  cutoutFinish = finish;
+  ensureCutoutWorker().onerror = e => finish({ id: job.id, error: e.message });
   const transfer: Transferable[] = [classifier.structure.buffer];
   if (classifier.top) transfer.push(classifier.top.buffer);
   transfer.push(classifier.lowRise.buffer);
   if (packed) transfer.push(packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer);
   if (roof) transfer.push(roof.base.buffer, roof.overtureTop.buffer);
-  cutoutWorker.postMessage(job, transfer);
+  ensureCutoutWorker().postMessage(job, transfer);
 }
 
 /**
@@ -900,7 +915,72 @@ function cutoutCoverage(): (CoverageGap & { footprints: number; gapCells: number
   return tiles?.footprints && cutoutMaskFor === tiles.footprints ? cutoutCoverageStat : null;
 }
 (window as any).__cutoutCoverage = () => cutoutCoverage();
-(window as any).__cutoutStats = () => cutoutStats;
+(window as any).__cutoutStats = () => ({ ...(cutoutStats ?? {}), heights: heightStats() });
+
+/**
+ * Cutout height field, stage 1 (docs/plans/2026-10-08-cutout-per-texel-heights.md): measured and recorded
+ * only, behind ?cutoutDebug=1. The capture renders the loaded tiles top-down in 900 m chunks and posts each to
+ * the cutout worker, which keeps the byte field; nothing here rebuilds the stencil from it yet (stage 2).
+ */
+let heightCapture: HeightCapture | null = null;
+/** The terrain the worker's field was last seeded from; a new tileset sends it again and starts a fresh field. */
+let heightsTerrainSent: TerrainProvider | null = null;
+const heightChunkStats = new Map<number, { known: number; kept: number; changed: number }>();
+const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
+let heightAtReq = 0;
+
+function heightStats(): { chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number } {
+  let known = 0, kept = 0;
+  for (const c of heightChunkStats.values()) {
+    known += c.known;
+    kept += c.kept;
+  }
+  const t = heightCapture?.timings;
+  return { chunks: heightChunkStats.size, captured: t?.captured ?? 0, renderMs: t?.renderMs ?? 0, readbackMs: t?.readbackMs ?? 0, known, kept };
+}
+
+function onHeightReply(r: HeightReply): void {
+  if (r.kind === 'heightsApplied') {
+    heightChunkStats.set(r.chunk, { known: r.known, kept: r.kept, changed: r.changed });
+    return;
+  }
+  heightAtPending.get(r.req)?.(r);
+  heightAtPending.delete(r.req);
+}
+
+/** Per frame: advance the height capture while the view cuts to footprints (debug only until stage 2). */
+function updateHeights(nowMs: number): void {
+  const ts = tiles, tp = cutoutTerrain;
+  const active = cutoutDebug && !!ts && !!tp && typeof Worker !== 'undefined' && traits(viewMode).cutsToFootprints;
+  if (!active || !ts || !tp) return;
+  const worker = ensureCutoutWorker();
+  if (heightsTerrainSent !== tp) {
+    const hf = tp.heightfield;
+    const terrain = { size: hf.size, segs: hf.segs, data: hf.raw.slice() };
+    worker.postMessage({ kind: 'terrain', terrain } satisfies HeightMessage, [terrain.data.buffer]);
+    heightsTerrainSent = tp;
+    heightChunkStats.clear();
+    heightCapture?.reset();
+  }
+  heightCapture ??= new HeightCapture(
+    renderer.renderer, () => tiles, () => (cutoutTerrain ?? world.terrainProvider).heightfield,
+    (chunk, data) => {
+      if (!cutoutWorker || heightsTerrainSent !== cutoutTerrain) return;
+      const boost = (cutoutTerrain ?? world.terrainProvider).reliefBoost;
+      cutoutWorker.postMessage({ kind: 'heights', chunk, data, keepRiseM: CUTOUT_MIN_RISE_M * boost } satisfies HeightMessage, [data.buffer]);
+    }
+  );
+  heightCapture.update(nowMs, true);
+}
+
+/** Debug: the height field at world (x, z), asked of the worker that holds it (a round trip, not a mirror). */
+(window as any).__cutoutHeightAt = (x: number, z: number): Promise<{ rise: number; state: HeightState; chunk: number }> =>
+  new Promise(resolve => {
+    if (!cutoutWorker) return resolve({ rise: NaN, state: 'never', chunk: -1 });
+    const req = ++heightAtReq;
+    heightAtPending.set(req, resolve);
+    cutoutWorker.postMessage({ kind: 'heightAt', req, x, z } satisfies HeightMessage);
+  });
 
 /**
  * Once per tileset load, after the footprints have had time to meet a
@@ -1052,6 +1132,9 @@ function clearTiles(): void {
   cutoutCoverageStat = null;
   cutoutBuilderFor = null;
   cutoutTerrain = null;
+  heightCapture?.reset();
+  heightsTerrainSent = null;
+  heightChunkStats.clear();
   cutoutDirty = true;
   cutoutUploads = 0;
   cutoutUnchanged = 0;
@@ -1817,6 +1900,7 @@ function step(now: number): void {
       // its own lap, so a slow-frame line names the capture rather than 'world'
       profiler.lap('surface');
     }
+    updateHeights(now);
     if (tiles && player) {
       tiles.update(player.pos, now);
       // refined tiles change the building footprints; rebuild at most every 1.5 s

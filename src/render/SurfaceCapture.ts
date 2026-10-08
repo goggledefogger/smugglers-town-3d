@@ -127,7 +127,7 @@ export class SurfaceCapture {
  * margin either way): ~1k samples rather than the whole 315k-node field.
  */
 const _range = { lo: 0, hi: 0 };
-function baseRange(hf: HeightSampler, cx: number, cz: number, half: number): { lo: number; hi: number } {
+export function baseRange(hf: HeightSampler, cx: number, cz: number, half: number): { lo: number; hi: number } {
   let lo = Infinity, hi = -Infinity;
   const n = 32, step = (2 * half) / n;
   for (let j = 0; j <= n; j++) {

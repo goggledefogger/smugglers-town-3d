@@ -716,6 +716,17 @@ that is still the lobby's procedural desert, so every base was a dune and
 178a21a). Classifier gap cells stay as they
 are, since they exist because the mesh rose there.
 
+Height field (cutout, stage 1; design `docs/plans/2026-10-08-cutout-per-texel-heights.md`):
+`render/HeightCapture.ts` renders the fine tiles (geometric error up to 8 m) top-down through
+`render/TopDownCapture.ts` (the core True Surface shares) into 900 m chunks of a fixed 4x4 lattice over
+the 3600 m stencil square from x,z = -1800, 1 m texels, one chunk per frame at most, only after a
+chunk's tiles were quiet for 1 s (`TileStreamer.dirtyRect`, `forEachTile`). The chunk goes, transferred,
+to the cutout worker, where `services/overture/heightField.ts` keeps one byte per texel: bits 0-6 rise
+above the 10 m terrain in 0.5 m steps (cap 63 m, 127 unknown), bit 7 kept (on at 3 m x relief, off below
+half of it). Unknown texels are NaN on the wire and keep their byte. Measured and recorded only, behind
+`?cutoutDebug=1` (`__cutoutStats().heights`, `await __cutoutHeightAt(x, z)`): no stencil, wall or
+collider reads it. Stage 2, the consumers (`polygonRoofCaps`, `fillPolygon`, gap cells), is pending.
+
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
 building when its TALLEST geometry rises 3.5 m above the ground estimate, so
 a light pole, a tree, a column or a stepped terrace over open paving makes

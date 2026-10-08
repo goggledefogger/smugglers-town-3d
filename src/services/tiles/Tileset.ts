@@ -20,7 +20,7 @@
  *   ~5k triangles, 100–450 KB.
  */
 import {
-  Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
+  Box3, Matrix4, Vector3, Group, LinearMipmapLinearFilter, LinearFilter,
   type Object3D, type Mesh, type Material, type Texture
 } from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -348,6 +348,7 @@ interface LoadedTile extends CollectedTile {
   done: boolean;
 }
 
+const _dirtyBox = new Box3();
 const _ecef = new Vector3();
 const _lookahead = new Vector3();
 const _dirEcef = new Vector3();
@@ -473,6 +474,37 @@ export class TileStreamer {
 
   get tileCount(): number {
     return this.tiles.length;
+  }
+
+  /**
+   * The world x/z rectangle (metres) that tiles were added to, removed from or refined within since the last
+   * `takeDirtyRect()`: widened by every add/remove/refine, so a consumer of the picture (the Cutout height
+   * field) re-measures only what changed. Null when nothing has.
+   */
+  dirtyRect: { minX: number; maxX: number; minZ: number; maxZ: number } | null = null;
+
+  /** The accumulated `dirtyRect`, cleared. */
+  takeDirtyRect(): { minX: number; maxX: number; minZ: number; maxZ: number } | null {
+    const r = this.dirtyRect;
+    this.dirtyRect = null;
+    return r;
+  }
+
+  /** Visit every loaded tile with its scene group and its geometric error (m): coarse ones have a large one. */
+  forEachTile(cb: (group: Group, geometricError: number) => void): void {
+    for (const t of this.tiles) cb(t.group, t.node.geometricError ?? 0);
+  }
+
+  private widenDirty(g: Group): void {
+    const b = _dirtyBox.setFromObject(g);
+    if (b.isEmpty()) return;
+    const r = this.dirtyRect;
+    if (!r) {
+      this.dirtyRect = { minX: b.min.x, maxX: b.max.x, minZ: b.min.z, maxZ: b.max.z };
+      return;
+    }
+    r.minX = Math.min(r.minX, b.min.x); r.maxX = Math.max(r.maxX, b.max.x);
+    r.minZ = Math.min(r.minZ, b.min.z); r.maxZ = Math.max(r.maxZ, b.max.z);
   }
 
   /** True once tiles changed since the last `colliders()` call. */
@@ -1089,6 +1121,7 @@ export class TileStreamer {
     if (!loaded) return null;
     this.group.add(loaded.group);
     this.tiles.push(loaded);
+    this.widenDirty(loaded.group);
     this.dirty = true;
     return loaded;
   }
@@ -1135,6 +1168,7 @@ export class TileStreamer {
   }
 
   private remove(tile: LoadedTile): void {
+    this.widenDirty(tile.group);
     this.group.remove(tile.group);
     disposeTiles(tile.group);
     const i = this.tiles.indexOf(tile);
@@ -1157,12 +1191,14 @@ export class TileStreamer {
     }
     // Atomic swap: remove parent and add children in the exact same frame
     // so parent and child meshes never co-exist in the scene fighting/flickering
+    this.widenDirty(tile.group);
     this.group.remove(tile.group);
     disposeTiles(tile.group);
     const i = this.tiles.indexOf(tile);
     if (i >= 0) this.tiles.splice(i, 1, ...(loaded as LoadedTile[]));
     for (const l of loaded as LoadedTile[]) {
       this.group.add(l.group);
+      this.widenDirty(l.group);
     }
     this.dirty = true;
   }
