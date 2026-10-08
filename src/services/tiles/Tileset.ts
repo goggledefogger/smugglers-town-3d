@@ -39,7 +39,7 @@ import { fetchRoadRasters, fetchBuildingRaster, type RoadRaster } from '../maps/
 import { fetchFootprints, footprintRasterFromPolygons, type Footprint } from '../overture/buildings.ts';
 
 /** Overture footprints are fetched this far from the origin (m): the inner field, like the zoom-16 road layer. */
-const FOOTPRINT_RADIUS_M = 1800;
+export const FOOTPRINT_RADIUS_M = 1800;
 import type { ColliderJob, ColliderResult } from './colliderWorker.ts';
 import {
   gridFor, sampleTerrain, rasterizeTile, collidersFromRasters, tileGroundOffset, groundField,

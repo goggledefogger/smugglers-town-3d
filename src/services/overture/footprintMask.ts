@@ -1,5 +1,5 @@
 /**
- * Cutout 3D stencil: Overture footprints rasterised at 1 m into a square,
+ * Cutout 3D stencil: Overture footprints rasterised at 1 m (2 m on weak devices) into a square,
  * world-fixed mask centred on the tileset origin (where the footprints were
  * fetched), then dilated so leaning facades and roof overhangs survive the
  * cut. The tile shader samples it per fragment and discards everything
@@ -32,35 +32,80 @@ export interface FootprintMask {
 type PolyLike = Pick<Footprint, 'ring' | 'holes'>;
 
 /**
- * Even-odd scanline fill of one polygon (outer ring plus holes) into `data`,
- * OR-ing so polygons and their parts union. A texel is in when its centre is.
+ * Footprints flattened into typed arrays so a worker can take them as
+ * transferables instead of structured-cloning ten thousand objects.
+ * Polygon p owns rings polyRings[p] .. polyRings[p + 1] - 1; ring r owns
+ * coords ringStarts[r] .. ringStarts[r + 1] - 1 (x,z pairs).
  */
-function fillPolygon(data: Uint8Array, n: number, cell: number, x0: number, z0: number, rings: readonly number[][]): void {
-  let zMin = Infinity, zMax = -Infinity;
-  for (const r of rings) {
-    for (let k = 1; k < r.length; k += 2) {
-      zMin = Math.min(zMin, r[k]!);
-      zMax = Math.max(zMax, r[k]!);
+export interface PackedFootprints {
+  readonly coords: Float32Array;
+  readonly ringStarts: Uint32Array;
+  readonly polyRings: Uint32Array;
+}
+
+export function packFootprints(polys: readonly PolyLike[]): PackedFootprints {
+  let nCoords = 0, nRings = 0;
+  for (const p of polys) {
+    nCoords += p.ring.length;
+    nRings += 1 + p.holes.length;
+    for (const h of p.holes) nCoords += h.length;
+  }
+  const coords = new Float32Array(nCoords);
+  const ringStarts = new Uint32Array(nRings + 1);
+  const polyRings = new Uint32Array(polys.length + 1);
+  let c = 0, r = 0;
+  polys.forEach((p, k) => {
+    polyRings[k] = r;
+    for (const ring of [p.ring, ...p.holes]) {
+      ringStarts[r++] = c;
+      coords.set(ring, c);
+      c += ring.length;
     }
+  });
+  ringStarts[r] = c;
+  polyRings[polys.length] = r;
+  return { coords, ringStarts, polyRings };
+}
+
+/**
+ * Even-odd scanline fill of polygon p (outer ring plus holes) into `data`,
+ * OR-ing so polygons and their parts union. A texel is in when its centre
+ * is. Only the polygon's own rows and spans are touched; returns its texel
+ * bounding box [i0, j0, i1, j1], or null when it misses the mask.
+ */
+function fillPolygon(
+  data: Uint8Array, n: number, cell: number, x0: number, z0: number, pk: PackedFootprints, p: number, xs: number[]
+): [number, number, number, number] | null {
+  const { coords, ringStarts, polyRings } = pk;
+  const r0 = polyRings[p]!, r1 = polyRings[p + 1]!;
+  let xMin = Infinity, xMax = -Infinity, zMin = Infinity, zMax = -Infinity;
+  for (let k = ringStarts[r0]!; k < ringStarts[r1]!; k += 2) {
+    const x = coords[k]!, z = coords[k + 1]!;
+    if (x < xMin) xMin = x;
+    if (x > xMax) xMax = x;
+    if (z < zMin) zMin = z;
+    if (z > zMax) zMax = z;
   }
   const j0 = Math.max(0, Math.ceil((zMin - z0) / cell - 0.5));
   const j1 = Math.min(n - 1, Math.floor((zMax - z0) / cell - 0.5));
-  const xs: number[] = [];
+  const bi0 = Math.max(0, Math.floor((xMin - x0) / cell));
+  const bi1 = Math.min(n - 1, Math.floor((xMax - x0) / cell));
+  if (j0 > j1 || bi0 > bi1) return null;
   for (let j = j0; j <= j1; j++) {
     const zc = z0 + (j + 0.5) * cell;
     xs.length = 0;
-    for (const r of rings) {
+    for (let r = r0; r < r1; r++) {
       // closed or open ring: walk every edge including last -> first
-      const m = r.length >> 1;
+      const s = ringStarts[r]!, m = (ringStarts[r + 1]! - s) >> 1;
       for (let a = 0, b = m - 1; a < m; b = a, a++) {
-        const za = r[a * 2 + 1]!, zb = r[b * 2 + 1]!;
+        const za = coords[s + a * 2 + 1]!, zb = coords[s + b * 2 + 1]!;
         if ((za > zc) === (zb > zc)) continue;
-        const xa = r[a * 2]!, xb = r[b * 2]!;
+        const xa = coords[s + a * 2]!, xb = coords[s + b * 2]!;
         xs.push(xa + ((zc - za) * (xb - xa)) / (zb - za));
       }
     }
     if (xs.length < 2) continue;
-    xs.sort((p, q) => p - q);
+    xs.sort((u, v) => u - v);
     const row = j * n;
     for (let k = 0; k + 1 < xs.length; k += 2) {
       const i0 = Math.max(0, Math.ceil((xs[k]! - x0) / cell - 0.5));
@@ -68,30 +113,32 @@ function fillPolygon(data: Uint8Array, n: number, cell: number, x0: number, z0: 
       for (let i = i0; i <= i1; i++) data[row + i] = MASK_ON;
     }
   }
+  return [bi0, j0, bi1, j1];
 }
 
-/**
- * Grow every set texel by a Euclidean radius (metres): stamped from the
- * boundary texels only, so the cost is the outline length, not the area.
- */
-export function dilateMask(data: Uint8Array, n: number, radiusTexels: number): Uint8Array {
-  const r = Math.floor(radiusTexels);
-  if (r < 1) return data;
-  const r2 = radiusTexels * radiusTexels;
+function discOffsets(radiusTexels: number): number[] {
+  const r = Math.floor(radiusTexels), r2 = radiusTexels * radiusTexels;
   const offs: number[] = [];
   for (let dy = -r; dy <= r; dy++) {
     for (let dx = -r; dx <= r; dx++) {
       if ((dx !== 0 || dy !== 0) && dx * dx + dy * dy <= r2) offs.push(dx, dy);
     }
   }
-  const out = data.slice();
-  for (let j = 0; j < n; j++) {
-    for (let i = 0; i < n; i++) {
+  return offs;
+}
+
+/**
+ * Stamp the disc from every boundary texel of `src` inside [i0..i1] x
+ * [j0..j1] into `out`. Interior texels (all four neighbours set) cannot grow
+ * the mask, so the cost is the outline length, not the area.
+ */
+function dilateBox(src: Uint8Array, out: Uint8Array, n: number, offs: number[], i0: number, j0: number, i1: number, j1: number): void {
+  for (let j = j0; j <= j1; j++) {
+    for (let i = i0; i <= i1; i++) {
       const c = j * n + i;
-      if (data[c] === 0) continue;
-      // interior texels (all four neighbours set) cannot grow the mask
+      if (src[c] === 0) continue;
       if (i > 0 && i < n - 1 && j > 0 && j < n - 1
-        && data[c - 1] !== 0 && data[c + 1] !== 0 && data[c - n] !== 0 && data[c + n] !== 0) continue;
+        && src[c - 1] !== 0 && src[c + 1] !== 0 && src[c - n] !== 0 && src[c + n] !== 0) continue;
       for (let k = 0; k < offs.length; k += 2) {
         const x = i + offs[k]!, y = j + offs[k + 1]!;
         if (x < 0 || y < 0 || x >= n || y >= n) continue;
@@ -99,13 +146,20 @@ export function dilateMask(data: Uint8Array, n: number, radiusTexels: number): U
       }
     }
   }
+}
+
+/** Grow every set texel by a Euclidean radius in texels (whole-mask form, for tests and small masks). */
+export function dilateMask(data: Uint8Array, n: number, radiusTexels: number): Uint8Array {
+  if (Math.floor(radiusTexels) < 1) return data;
+  const out = data.slice();
+  dilateBox(data, out, n, discOffsets(radiusTexels), 0, 0, n - 1, n - 1);
   return out;
 }
 
 export interface FootprintMaskOptions {
-  /** side in texels (default 4096: 16 MB R8, within every GPU's texture limit) */
-  n?: number;
-  /** metres per texel (default 1) */
+  /** side in metres (default 3600: the 1800 m footprint fetch radius, both ways) */
+  size?: number;
+  /** metres per texel (default 1; 2 on weak devices quarters the raster and the upload) */
   cell?: number;
   /** dilation radius in metres (default 2) */
   dilateM?: number;
@@ -115,18 +169,44 @@ export interface FootprintMaskOptions {
 }
 
 /**
- * Every footprint and building part as one 1 m stencil, dilated. Each
- * polygon fills on its own (ring and holes even-odd) and the results union,
- * so a part over its building never cancels it out.
+ * Every footprint and building part as one stencil, dilated. Each polygon
+ * fills on its own (ring and holes even-odd) inside its bounding box and the
+ * results union, so a part over its building never cancels it out; the
+ * dilation then walks only those boxes plus the radius. The outermost texel
+ * ring is cleared so a clamped lookup beyond the extent reads "no footprint".
  */
-export function footprintMask1m(polys: readonly PolyLike[], opts: FootprintMaskOptions = {}): FootprintMask {
-  const n = opts.n ?? 4096, cell = opts.cell ?? 1, dilateM = opts.dilateM ?? 2;
-  const cx = opts.cx ?? 0, cz = opts.cz ?? 0;
+export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOptions = {}): FootprintMask {
+  const cell = opts.cell ?? 1, dilateM = opts.dilateM ?? 2;
+  const n = Math.ceil((opts.size ?? 3600) / cell);
   const size = n * cell;
+  const cx = opts.cx ?? 0, cz = opts.cz ?? 0;
   const x0 = cx - size / 2, z0 = cz - size / 2;
-  const data = new Uint8Array(n * n);
-  for (const p of polys) fillPolygon(data, n, cell, x0, z0, [p.ring, ...p.holes]);
-  return { n, cell, cx, cz, size, data: dilateMask(data, n, dilateM / cell) };
+  const filled = new Uint8Array(n * n);
+  const boxes: [number, number, number, number][] = [];
+  const xs: number[] = [];
+  const nPolys = pk.polyRings.length - 1;
+  for (let p = 0; p < nPolys; p++) {
+    const b = fillPolygon(filled, n, cell, x0, z0, pk, p, xs);
+    if (b) boxes.push(b);
+  }
+  const rad = dilateM / cell;
+  let data = filled;
+  if (Math.floor(rad) >= 1) {
+    data = filled.slice();
+    const offs = discOffsets(rad);
+    for (const [i0, j0, i1, j1] of boxes) dilateBox(filled, data, n, offs, i0, j0, i1, j1);
+  }
+  for (let k = 0; k < n; k++) {
+    data[k] = 0;
+    data[(n - 1) * n + k] = 0;
+    data[k * n] = 0;
+    data[k * n + n - 1] = 0;
+  }
+  return { n, cell, cx, cz, size, data };
+}
+
+export function footprintMask1m(polys: readonly PolyLike[], opts: FootprintMaskOptions = {}): FootprintMask {
+  return footprintMaskPacked(packFootprints(polys), opts);
 }
 
 /** The mask at a world x,z: true inside a (dilated) footprint, false outside it or the extent. */

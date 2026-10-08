@@ -10,7 +10,7 @@ const count = (d: Uint8Array) => d.reduce((a, v) => a + (v ? 1 : 0), 0);
 
 describe('footprintMask1m', () => {
   // 64 m mask at 1 m, centred on the origin: texel i covers x in [-32 + i, -31 + i)
-  const opts = { n: 64, cell: 1, dilateM: 0 };
+  const opts = { size: 64, cell: 1, dilateM: 0 };
 
   it('fills exactly the cells of a square footprint', () => {
     const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], opts);
@@ -60,6 +60,40 @@ describe('footprintMask1m', () => {
     expect(maskAt(r2, -0.5, -0.5)).toBe(true);
   });
 
+  it('clears the outer texel ring so a clamped lookup past the extent reads 0', () => {
+    const m = footprintMask1m([{ ring: square(-40, -40, 40, 40), holes: [] }], opts);
+    expect(m.data[0]).toBe(0);
+    expect(m.data[63 * 64 + 10]).toBe(0);
+    expect(m.data[10 * 64 + 63]).toBe(0);
+    expect(m.data[1 * 64 + 1]).toBe(MASK_ON);
+  });
+
+  it('2 m texels quarter the mask and still cover the square', () => {
+    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 2, dilateM: 0 });
+    expect(m.n).toBe(32);
+    expect(m.size).toBe(64);
+    expect(count(m.data)).toBe(25);
+    expect(maskAt(m, 5, 5)).toBe(true);
+    expect(maskAt(m, 11, 5)).toBe(false);
+  });
+
+  it('defaults to 3600 m at 1 m texels, dilated 2 m', () => {
+    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }]);
+    expect(m.n).toBe(3600);
+    expect(maskAt(m, -1.5, 5)).toBe(true);
+    expect(maskAt(m, -2.5, 5)).toBe(false);
+  });
+
+  it('bounding-box dilation matches a whole-grid dilation', () => {
+    const polys = [
+      { ring: square(-20, -5, -3, 9), holes: [square(-15, 0, -10, 4)] },
+      { ring: [4, 4, 20, 6, 12, 25, 4, 4], holes: [] }
+    ];
+    const local = footprintMask1m(polys, { size: 64, dilateM: 2.5 });
+    const ref = dilateMask(footprintMask1m(polys, { size: 64, dilateM: 0 }).data, 64, 2.5);
+    expect(Array.from(local.data)).toEqual(Array.from(ref));
+  });
+
   it('dilation leaves a mask alone below one texel', () => {
     const d = new Uint8Array(9);
     d[4] = MASK_ON;
@@ -76,13 +110,13 @@ describe('classifierGap', () => {
     s[4 * 8 + 4] = 1; s[4 * 8 + 5] = 1;
     // group B: cell (1,1) = world x -30..-20, z -30..-20, nothing there
     s[1 * 8 + 1] = 1;
-    const m = footprintMask1m([{ ring: square(2, 2, 8, 8), holes: [] }], { n: 128, cell: 1, dilateM: 0 });
+    const m = footprintMask1m([{ ring: square(2, 2, 8, 8), holes: [] }], { size: 128, cell: 1, dilateM: 0 });
     expect(classifierGap(s, grid, m, 3)).toEqual({ classifierBuildings: 2, withoutFootprint: 1 });
   });
   it('ignores groups outside the mask extent', () => {
     const s = new Uint8Array(64);
     s[0] = 1;
-    const m = footprintMask1m([], { n: 20, cell: 1, dilateM: 0 });
+    const m = footprintMask1m([], { size: 20, cell: 1, dilateM: 0 });
     expect(classifierGap(s, grid, m, 3)).toEqual({ classifierBuildings: 0, withoutFootprint: 0 });
   });
 });
@@ -135,14 +169,17 @@ describe('TileClutterFilter cutout', () => {
     const f = new TileClutterFilter(hf(), new Uint8Array(16), 4);
     const shader = litShader();
     patchOne(f).onBeforeCompile(shader, {});
-    expect(shader.uniforms.uFootprintMask?.value).toBeDefined();
-    expect(shader.uniforms.uFootprintField?.value.z).toBe(0);
+    // no stencil yet: the cutout sampler is the structure mask, scaled so its 1 reads 1
+    expect(shader.uniforms.uFootprintMask?.value).toBe(shader.uniforms.uClutterMask?.value);
+    expect(shader.uniforms.uFootprintField?.value.w).toBe(255);
     expect(shader.fragmentShader).toContain('uniform sampler2D uFootprintMask');
-    expect(shader.fragmentShader).toContain('uniform vec3 uFootprintField');
+    expect(shader.fragmentShader).toContain('uniform vec4 uFootprintField');
     expect(shader.fragmentShader).toContain('uClutterMode > 3.5');
-    expect(shader.fragmentShader).toContain('texture2D(uFootprintMask, fuv)');
-    expect(shader.fragmentShader).toContain('vClutterWorldPos.xz - uFootprintField.xy');
-    expect(shader.fragmentShader).toContain('if (cIn < 0.5) discard');
+    expect(shader.fragmentShader).toContain('texture2D(uFootprintMask, (vClutterWorldPos.xz - uFootprintField.xy) / uFootprintField.z + 0.5).r * uFootprintField.w < 0.5) discard');
+    // one sample, no branch of its own
+    const cut = shader.fragmentShader.slice(shader.fragmentShader.indexOf('uClutterMode > 3.5) {'), shader.fragmentShader.indexOf('} else if (uClutterMode > 2.5'));
+    expect(cut.match(/texture2D/g)?.length).toBe(1);
+    expect(cut.match(/\bif\b/g)?.length).toBe(1);
     // the cutout branch is tested before swept's (> 2.5) catches mode 4
     expect(shader.fragmentShader.indexOf('uClutterMode > 3.5')).toBeLessThan(shader.fragmentShader.indexOf('uClutterMode > 2.5'));
     // no flattening in cutout: facades inside a footprint keep their ground floors
@@ -156,15 +193,17 @@ describe('TileClutterFilter cutout', () => {
     patchOne(f).onBeforeCompile(b, {});
     expect(b.uniforms.uFootprintMask).toBe(a.uniforms.uFootprintMask);
     expect(b.uniforms.uFootprintField).toBe(a.uniforms.uFootprintField);
-    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { n: 64, cell: 1, dilateM: 1.5 });
+    const m = footprintMask1m([{ ring: square(0, 0, 10, 10), holes: [] }], { size: 64, cell: 1, dilateM: 1.5 });
     f.setFootprintMask(m);
     expect(f.hasFootprintMask).toBe(true);
     expect(a.uniforms.uFootprintMask!.value.image.width).toBe(64);
     expect(a.uniforms.uFootprintMask!.value.image.data).toBe(m.data);
-    expect(a.uniforms.uFootprintField!.value.toArray()).toEqual([0, 0, 64]);
+    expect(a.uniforms.uFootprintField!.value.toArray()).toEqual([0, 0, 64, 1]);
     f.setFootprintMask(null);
     expect(f.hasFootprintMask).toBe(false);
-    expect(a.uniforms.uFootprintField!.value.z).toBe(0);
+    // fallback: the same sampler now reads the structure mask over the whole ground field
+    expect(a.uniforms.uFootprintMask!.value).toBe(a.uniforms.uClutterMask!.value);
+    expect(a.uniforms.uFootprintField!.value.toArray()).toEqual([0, 0, 40, 255]);
     expect(() => f.setFootprintMask({ data: new Uint8Array(3), n: 2, cx: 0, cz: 0, size: 2 })).toThrow();
   });
 });

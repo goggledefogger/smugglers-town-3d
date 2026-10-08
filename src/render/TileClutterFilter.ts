@@ -25,8 +25,8 @@
  *   a 1 m footprint stencil (Overture polygons, dilated) at its own world
  *   x,z and is discarded outside it, so the photogrammetry keeps exactly its
  *   buildings and the satellite ground shows everywhere else. With no
- *   stencil loaded (Overture had nothing here) it falls back to the 10 m
- *   structure mask, sampled per fragment the same way. No flattening.
+ *   stencil loaded (Overture had nothing here) the same sampler points at
+ *   the 10 m structure mask, sampled per fragment the same way. No flattening.
  *
  * Facade snap (Best 3D) rides on the same patch: with `snap` on, a tile
  * vertex within reach of a collider box moves onto the box's nearest outer
@@ -42,7 +42,7 @@
  */
 import {
   DataTexture, RedFormat, RGFormat, RGBAFormat, FloatType, UnsignedByteType, NearestFilter, LinearFilter,
-  ClampToEdgeWrapping, Vector2, Vector3,
+  ClampToEdgeWrapping, Vector2, Vector4,
   type Object3D, type Mesh, type Material, type WebGLProgramParametersWithUniforms
 } from 'three';
 import type { Heightfield } from '../core/heightfield.ts';
@@ -259,7 +259,7 @@ if (uSnapDebug > 0.5 && vSnapped > 0.999) gl_FragColor.rgb = mix(gl_FragColor.rg
 const FRAGMENT_PARS = `
 uniform sampler2D uClutterMask;
 uniform sampler2D uFootprintMask;
-uniform vec3 uFootprintField;
+uniform vec4 uFootprintField;
 uniform vec2 uClutterField;
 uniform float uClutterMode;
 uniform float uClutterRise;
@@ -282,20 +282,16 @@ varying float vSnapFaceS;
  * Only ground-level road clutter (< uClutterRise) is discarded; building walls and roofs are preserved.
  * Swept: the flag interpolates to exactly 1 only when all three vertices flattened, a car, not a wall's base;
  * and any triangle with a vertex flattened in the open goes whole, so nothing tents up from the road.
- * Cutout: the one real per-fragment lookup. uFootprintField = (centre x, centre z, size m) of the 1 m
- * stencil; size 0 means none loaded, so the 10 m structure mask stands in. Outside the stencil's extent
- * no footprints were fetched, so it reads as street. Linear filtering puts the edge between texels.
+ * Cutout: the one real per-fragment lookup, a single texture sample and no branch beyond the mode
+ * test. uFootprintField = (centre x, centre z, size m, value scale). With a stencil loaded the sampler
+ * is the stencil (255 = in, scale 1); without one it is the 10 m structure mask itself (1 = in, so
+ * scale 255), swapped in by uniform value. The stencil's outer texel ring is 0 and clamps, so
+ * beyond its extent, where no footprints were fetched, reads as street. Linear filtering puts
+ * the edge between texels.
  */
 const FRAGMENT_CUT = `
 if (uClutterMode > 3.5) {
-  float cIn;
-  if (uFootprintField.z > 0.0) {
-    vec2 fuv = (vClutterWorldPos.xz - uFootprintField.xy) / uFootprintField.z + 0.5;
-    cIn = (fuv.x < 0.0 || fuv.y < 0.0 || fuv.x > 1.0 || fuv.y > 1.0) ? 0.0 : texture2D(uFootprintMask, fuv).r;
-  } else {
-    cIn = min(1.0, texture2D(uClutterMask, clamp(vClutterWorldPos.xz / uClutterField.x + 0.5, 0.0, 1.0)).r * 255.0);
-  }
-  if (cIn < 0.5) discard;
+  if (texture2D(uFootprintMask, (vClutterWorldPos.xz - uFootprintField.xy) / uFootprintField.z + 0.5).r * uFootprintField.w < 0.5) discard;
 } else if (uClutterMode > 2.5) {
   if (vClutterFlat > 0.999) discard;
 } else if (uClutterMode > 1.5) {
@@ -347,6 +343,8 @@ function footprintTexture(data: Uint8Array, n: number): DataTexture {
   tex.minFilter = tex.magFilter = LinearFilter;
   tex.wrapS = tex.wrapT = ClampToEdgeWrapping;
   tex.generateMipmaps = false;
+  // rows of any width (2 m texels make an odd-sized mask possible)
+  tex.unpackAlignment = 1;
   tex.needsUpdate = true;
   return tex;
 }
@@ -416,9 +414,11 @@ export class TileClutterFilter {
   private readonly uSnap = { value: 0 };
   private readonly uSnapIn = { value: 10 };
   private readonly uSnapDebug = { value: 0 };
-  private readonly uFootprintMask = { value: footprintTexture(new Uint8Array(1), 1) };
-  /** stencil centre x, z and side in metres; side 0 = no stencil, cutout uses the structure mask */
-  private readonly uFootprintField = { value: new Vector3(0, 0, 0) };
+  /** the stencil, or the structure mask texture itself while there is none (the fallback) */
+  private readonly uFootprintMask: { value: DataTexture };
+  /** stencil centre x, z, side in metres, and the scale that makes an "in" texel read 1 */
+  private readonly uFootprintField = { value: new Vector4(0, 0, 1, 255) };
+  private footprintTex: DataTexture | null = null;
 
   /** Diagnostic: tint snapped tile fragments green so they can be told from the box fill. */
   get debugTint(): boolean {
@@ -445,6 +445,15 @@ export class TileClutterFilter {
     this.uRise = { value: CLUTTER_RISE_M * riseScale };
     this.uSnapIds = { value: idTexture(new Float32Array(2), 1) };
     this.uSnapBoxes = { value: snapBoxTexture([]) };
+    this.uFootprintMask = { value: this.uMask.value };
+    this.useStructureFallback();
+  }
+
+  /** Cutout with no stencil: point its sampler at the structure mask, over the whole ground field. */
+  private useStructureFallback(): void {
+    if (this.footprintTex) return;
+    this.uFootprintMask.value = this.uMask.value;
+    this.uFootprintField.value.set(0, 0, this.uField.value.x, 255);
   }
 
   /** Snap tile facades onto the collider boxes (Best 3D); off leaves the tiles where they are. */
@@ -474,20 +483,21 @@ export class TileClutterFilter {
    * the structure mask. A new stencil is one texture upload, never a recompile.
    */
   setFootprintMask(mask: { data: Uint8Array; n: number; cx: number; cz: number; size: number } | null): void {
-    this.uFootprintMask.value.dispose();
+    if (mask && mask.data.length !== mask.n * mask.n) throw new Error(`footprint mask length ${mask.data.length} != n^2 ${mask.n * mask.n}`);
+    this.footprintTex?.dispose();
+    this.footprintTex = null;
     if (!mask) {
-      this.uFootprintMask.value = footprintTexture(new Uint8Array(1), 1);
-      this.uFootprintField.value.set(0, 0, 0);
+      this.useStructureFallback();
       return;
     }
-    if (mask.data.length !== mask.n * mask.n) throw new Error(`footprint mask length ${mask.data.length} != n^2 ${mask.n * mask.n}`);
-    this.uFootprintMask.value = footprintTexture(mask.data, mask.n);
-    this.uFootprintField.value.set(mask.cx, mask.cz, mask.size);
+    this.footprintTex = footprintTexture(mask.data, mask.n);
+    this.uFootprintMask.value = this.footprintTex;
+    this.uFootprintField.value.set(mask.cx, mask.cz, mask.size, 1);
   }
 
   /** True when a footprint stencil is loaded (cutout is not on its structure-mask fallback). */
   get hasFootprintMask(): boolean {
-    return this.uFootprintField.value.z > 0;
+    return this.footprintTex !== null;
   }
 
   get mode(): ClutterMode {
@@ -509,6 +519,7 @@ export class TileClutterFilter {
       this.uGround.value.dispose();
       this.uGround.value = groundTexture(hf);
       this.uField.value.set(hf.size, hf.segs);
+      this.useStructureFallback();
     } else {
       this.uGround.value.needsUpdate = true;
     }
@@ -524,6 +535,7 @@ export class TileClutterFilter {
     if (cells.length !== n * n) throw new Error(`structure mask length ${cells.length} != n^2 ${n * n}`);
     this.uMask.value.dispose();
     this.uMask.value = maskTexture(cells, n);
+    this.useStructureFallback();
   }
 
   /** Patch every material under `root`; safe to call again, already-patched materials are skipped. */
@@ -574,6 +586,6 @@ export class TileClutterFilter {
     this.uMask.value.dispose();
     this.uSnapIds.value.dispose();
     this.uSnapBoxes.value.dispose();
-    this.uFootprintMask.value.dispose();
+    this.footprintTex?.dispose();
   }
 }

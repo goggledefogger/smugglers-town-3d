@@ -20,7 +20,8 @@ import { FacadeBaker, ATLAS_SIZE } from './render/FacadeBaker.ts';
 import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView.ts';
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
-import { footprintMask1m, classifierGap, type FootprintMask, type CoverageGap } from './services/overture/footprintMask.ts';
+import { packFootprints, footprintMaskPacked, classifierGap, type FootprintMask, type CoverageGap } from './services/overture/footprintMask.ts';
+import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
 import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
@@ -46,7 +47,7 @@ import { logger } from './app/log.ts';
 import { FrameProfiler } from './app/frameProfiler.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
-import type { TileStreamer } from './services/tiles/Tileset.ts';
+import { FOOTPRINT_RADIUS_M, type TileStreamer } from './services/tiles/Tileset.ts';
 import { AmortizedGroundBuilder, TILE_GROUND_GAP, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
 import {
   type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
@@ -620,47 +621,96 @@ function rebuildPrisms(): boolean {
  * stencil fell from 7.6% at 1.5 m to 3.9% at 2 m with no extra kerb clutter. ?cutoutDilate= overrides.
  */
 const CUTOUT_DILATE_M = Number(new URLSearchParams(window.location.search).get('cutoutDilate') ?? '') || 2;
-/** Cutout 3D stencil side (texels at 1 m): covers the 1800 m footprint radius plus polygons straddling it. */
-const CUTOUT_MASK_N = 4096;
+/**
+ * Cutout 3D stencil texel (m). 1 m normally; 2 m on a device that looks weak
+ * (4 or fewer cores, 4 GB or less, or a max texture under 4096), which
+ * quarters the raster, the 13 MB upload and the texture memory. ?cutoutTexel= overrides.
+ */
+const CUTOUT_TEXEL_M = ((): number => {
+  const q = Number(new URLSearchParams(window.location.search).get('cutoutTexel') ?? '');
+  if (q > 0) return q;
+  const nav = navigator as Navigator & { deviceMemory?: number };
+  const weak = (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
+    || renderer.renderer.capabilities.maxTextureSize < 4096;
+  return weak ? 2 : 1;
+})();
+/** The stencil covers the footprint fetch radius both ways, and no more. */
+const CUTOUT_MASK_OPTS = { size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M };
 let cutoutMaskFor: readonly Footprint[] | null = null;
 let cutoutMask: FootprintMask | null = null;
 let cutoutCoverageLogged = false;
 let footprintsLandedAt = Infinity;
-/** Cutout 3D's last stencil build and upload, for the survey script. */
-let cutoutStats: { footprints: number; buildMs: number; uploadMs: number; dilateM: number; fallback: boolean } | null = null;
+/** The footprint set a worker job is building for, so a stale result is dropped. */
+let cutoutJobFor: readonly Footprint[] | null = null;
+let cutoutJobId = 0;
+let cutoutWorker: Worker | null = null;
+/** Cutout 3D's last stencil build, for the survey script. */
+let cutoutStats: {
+  footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
+  packMs?: number; buildMs?: number; uploadQueuedMs?: number;
+} | null = null;
 
 /**
  * Cutout 3D's stencil: built once per footprint set, on first entry to the
- * mode, centred on the tileset origin where the footprints were fetched. No
- * footprints (Overture empty or not answered yet) clears it, so the shader
- * falls back to the classifier's structure mask.
+ * mode, in a worker (the frame pays only the pack into typed arrays), then
+ * uploaded once. Never per frame and never per car move: it is centred on
+ * the tileset origin, which only changes with a new tileset. Until it lands,
+ * and when Overture has nothing here, cutout reads the structure mask.
  */
 function rebuildCutoutMask(): void {
   if (!clutterFilter || !tiles) return;
   const polys = tiles.footprints;
   if (!polys || polys.length === 0) {
-    if (cutoutMaskFor !== null || clutterFilter.hasFootprintMask) clutterFilter.setFootprintMask(null);
+    if (clutterFilter.hasFootprintMask) clutterFilter.setFootprintMask(null);
     cutoutMaskFor = null;
     cutoutMask = null;
-    cutoutStats = { footprints: 0, buildMs: 0, uploadMs: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
+    cutoutStats = { footprints: 0, texelM: CUTOUT_TEXEL_M, n: 0, dilateM: CUTOUT_DILATE_M, fallback: true };
     return;
   }
-  if (cutoutMaskFor === polys && clutterFilter.hasFootprintMask) return;
+  if ((cutoutMaskFor === polys && clutterFilter.hasFootprintMask) || cutoutJobFor === polys) return;
+  const filter = clutterFilter;
+  const apply = (mask: FootprintMask, stats: { packMs: number; buildMs: number }): void => {
+    if (clutterFilter !== filter || tiles?.footprints !== polys) return;
+    const t0 = performance.now();
+    filter.setFootprintMask(mask);
+    cutoutMask = mask;
+    cutoutMaskFor = polys;
+    cutoutStats = {
+      footprints: polys.length, texelM: mask.cell, n: mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
+      ...stats, uploadQueuedMs: performance.now() - t0
+    };
+    log.info('cutout stencil built', cutoutStats);
+    logCutoutCoverage();
+  };
   const t0 = performance.now();
-  cutoutMask = footprintMask1m(polys, { n: CUTOUT_MASK_N, cell: 1, dilateM: CUTOUT_DILATE_M });
-  const t1 = performance.now();
-  clutterFilter.setFootprintMask(cutoutMask);
-  cutoutMaskFor = polys;
-  cutoutStats = { footprints: polys.length, buildMs: t1 - t0, uploadMs: performance.now() - t1, dilateM: CUTOUT_DILATE_M, fallback: false };
-  log.info('cutout stencil built', cutoutStats);
+  const packed = packFootprints(polys);
+  const packMs = performance.now() - t0;
+  if (typeof Worker === 'undefined') {
+    const t1 = performance.now();
+    apply(footprintMaskPacked(packed, CUTOUT_MASK_OPTS), { packMs, buildMs: performance.now() - t1 });
+    return;
+  }
+  cutoutWorker ??= new Worker(new URL('./services/overture/footprintMaskWorker.ts', import.meta.url), { type: 'module' });
+  const id = ++cutoutJobId;
+  cutoutJobFor = polys;
+  cutoutWorker.onmessage = (e: MessageEvent<FootprintMaskResult>) => {
+    if (e.data.id !== cutoutJobId) return;
+    cutoutJobFor = null;
+    apply(e.data.mask, { packMs, buildMs: e.data.buildMs });
+  };
+  cutoutWorker.onerror = e => { cutoutJobFor = null; log.warn('cutout stencil worker failed', e.message); };
+  const job: FootprintMaskJob = { id, packed, opts: CUTOUT_MASK_OPTS };
+  cutoutWorker.postMessage(job, [packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer]);
 }
 
-/** How many classifier buildings have no Overture footprint within 3 m; null without both. */
+/**
+ * How many classifier buildings have no Overture footprint within 3 m.
+ * Reads the stencil Cutout 3D already built, never builds one: null until then.
+ */
 function cutoutCoverage(): (CoverageGap & { footprints: number }) | null {
   const polys = tiles?.footprints;
-  if (!tiles || !polys || polys.length === 0) return null;
-  const mask = cutoutMask && cutoutMaskFor === polys ? cutoutMask : footprintMask1m(polys, { n: CUTOUT_MASK_N, cell: 1, dilateM: CUTOUT_DILATE_M });
-  return { footprints: polys.length, ...classifierGap(tiles.structureGrid, tiles.activeGrid, mask, 3) };
+  if (!tiles || !polys || polys.length === 0 || !cutoutMask || cutoutMaskFor !== polys) return null;
+  return { footprints: polys.length, ...classifierGap(tiles.structureGrid, tiles.activeGrid, cutoutMask, 3) };
 }
 (window as any).__cutoutCoverage = () => cutoutCoverage();
 (window as any).__cutoutStats = () => cutoutStats;
@@ -752,6 +802,7 @@ function clearTiles(): void {
   prismsFor = null;
   cutoutMaskFor = null;
   cutoutMask = null;
+  cutoutJobFor = null;
   cutoutCoverageLogged = false;
   footprintsLandedAt = Infinity;
   game.setSurfaceProvider(undefined);
