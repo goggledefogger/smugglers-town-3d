@@ -925,18 +925,19 @@ function cutoutCoverage(): (CoverageGap & { footprints: number; gapCells: number
 let heightCapture: HeightCapture | null = null;
 /** The terrain the worker's field was last seeded from; a new tileset sends it again and starts a fresh field. */
 let heightsTerrainSent: TerrainProvider | null = null;
-const heightChunkStats = new Map<number, { known: number; kept: number; changed: number }>();
+const heightChunkStats = new Map<number, { known: number; kept: number; rough: number; changed: number }>();
 const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
 let heightAtReq = 0;
 
-function heightStats(): { chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number } {
-  let known = 0, kept = 0;
+function heightStats(): { chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number; rough: number } {
+  let known = 0, kept = 0, rough = 0;
   for (const c of heightChunkStats.values()) {
     known += c.known;
     kept += c.kept;
+    rough += c.rough;
   }
   const t = heightCapture?.timings;
-  return { chunks: heightChunkStats.size, captured: t?.captured ?? 0, renderMs: t?.renderMs ?? 0, readbackMs: t?.readbackMs ?? 0, known, kept };
+  return { chunks: heightChunkStats.size, captured: t?.captured ?? 0, renderMs: t?.renderMs ?? 0, readbackMs: t?.readbackMs ?? 0, known, kept, rough };
 }
 
 function onHeightReply(r: HeightReply): void {
@@ -945,7 +946,7 @@ function onHeightReply(r: HeightReply): void {
     return;
   }
   if (r.kind === 'heightsApplied') {
-    heightChunkStats.set(r.chunk, { known: r.known, kept: r.kept, changed: r.changed });
+    heightChunkStats.set(r.chunk, { known: r.known, kept: r.kept, rough: r.rough, changed: r.changed });
     return;
   }
   heightAtPending.get(r.req)?.(r);

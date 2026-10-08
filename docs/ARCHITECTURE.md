@@ -721,9 +721,10 @@ Height field (cutout, stage 1; design `docs/plans/2026-10-08-cutout-per-texel-he
 `render/TopDownCapture.ts` (the core True Surface shares) into 900 m chunks of a fixed 4x4 lattice over
 the 3600 m stencil square from x,z = -1800, 1 m texels, one chunk per frame at most, only after a
 chunk's tiles were quiet for 1 s (`TileStreamer.dirtyRect`, `forEachTile`). The chunk goes, transferred,
-to the cutout worker, where `services/overture/heightField.ts` keeps one byte per texel: bits 0-6 rise
-above the 10 m terrain in 0.5 m steps (cap 63 m, 127 unknown), bit 7 kept (on at 3 m x relief, off below
-half of it). Unknown texels are NaN on the wire and keep their byte. Measured and recorded only, behind
+to the cutout worker, where `services/overture/heightField.ts` keeps one byte per texel: bits 0-5 rise
+above the 10 m terrain (0-15.5 m in 0.5 m steps, 16-61 m in 1.5 m steps, 63 unknown), bit 6 rough (not
+planar along both x and z: |y(i-1)+y(i+1)-2y(i)| >= 1 m, an unkept neighbour counting as not planar; canopy,
+not roofs), bit 7 kept (on at 3 m x relief, off below half of it). Unknown texels are NaN on the wire and keep their byte. Measured and recorded only, behind
 `?cutoutDebug=1` (`__cutoutStats().heights`, `await __cutoutHeightAt(x, z)`): no stencil, wall or
 collider reads it. Stage 2, the consumers (`polygonRoofCaps`, `fillPolygon`, gap cells), is pending.
 

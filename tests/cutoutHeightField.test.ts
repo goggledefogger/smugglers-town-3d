@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
-  createHeightField, applyHeightChunk, riseAt, heightAt, sampleTerrain,
-  HEIGHT_N, HEIGHT_CHUNK_M, KEPT_BIT, RISE_UNKNOWN, type HeightTerrain
+  createHeightField, applyHeightChunk, riseAt, roughAt, heightAt, sampleTerrain, encodeRise, decodeRise, decodeRiseTop,
+  HEIGHT_N, HEIGHT_CHUNK_M, KEPT_BIT, ROUGH_BIT, RISE_UNKNOWN, type HeightTerrain
 } from '../src/services/overture/heightField.ts';
 
 const M = HEIGHT_CHUNK_M;
@@ -18,14 +18,14 @@ describe('height field', () => {
     expect(heightAt(f, 0, 0).state).toBe('never');
   });
 
-  it('quantises the rise to 0.5 m and caps it at 63 m', () => {
+  it('quantises the rise to 0.5 m and caps it at 61 m', () => {
     const f = createHeightField();
     const w = chunkOf(0);
     w[0] = 2.2; w[1] = 2.3; w[2] = 100; w[3] = -4;
     applyHeightChunk(f, 0, w, flat(0), KEEP);
     expect(riseAt(f, 0, 0)).toBe(2);
     expect(riseAt(f, 1, 0)).toBe(2.5);
-    expect(riseAt(f, 2, 0)).toBe(63);
+    expect(riseAt(f, 2, 0)).toBe(61);
     expect(riseAt(f, 3, 0)).toBe(0);
     expect(f.data[2]! & KEPT_BIT).toBe(KEPT_BIT);
   });
@@ -91,10 +91,10 @@ describe('height field', () => {
     applyHeightChunk(f, 3, worldY, terrain, KEEP);
     expect(riseAt(f, 2700, 0)).toBe(12);
     expect(riseAt(f, 3599, 0)).toBe(12);
-    // the same world Y over flat terrain at 0 would read 90+ m, capped at 63
+    // the same world Y over flat terrain at 0 would read 90+ m, capped at 61
     const g = createHeightField();
     applyHeightChunk(g, 3, worldY, flat(0), KEEP);
-    expect(riseAt(g, 2700, 0)).toBe(63);
+    expect(riseAt(g, 2700, 0)).toBe(61);
   });
 
   it('thresholds scale with the relief boost the caller passes', () => {
@@ -143,5 +143,132 @@ describe('height field', () => {
     applyHeightChunk(f, 0, chunkOf(5), { size: 3600, segs, data }, KEEP);
     expect(riseAt(f, 0, 0)).toBe(5);
     expect(f.data[0]! & KEPT_BIT).toBe(KEPT_BIT);
+  });
+
+  it('lays the rise out as 0.5 m steps to 15.5 m, 1.5 m steps to 61 m, and 63 for unknown', () => {
+    expect(encodeRise(0)).toBe(0);
+    expect(encodeRise(-3)).toBe(0);
+    expect(encodeRise(15.5)).toBe(31);
+    expect(encodeRise(15.74)).toBe(31);
+    expect(encodeRise(16)).toBe(32);
+    expect(encodeRise(61)).toBe(62);
+    expect(encodeRise(500)).toBe(62);
+    for (let q = 0; q <= 62; q++) expect(encodeRise(decodeRise(q))).toBe(q);
+    expect(decodeRise(31)).toBe(15.5);
+    expect(decodeRise(32)).toBe(16);
+    expect(decodeRise(62)).toBe(61);
+    expect(decodeRiseTop(31)).toBe(15.5);
+    expect(decodeRiseTop(41)).toBe(decodeRise(41) + 0.75);
+    expect(RISE_UNKNOWN).toBe(63);
+    const f = createHeightField();
+    const w = chunkOf(0);
+    w[0] = 30; w[1] = 15.6; w[2] = 16.7;
+    applyHeightChunk(f, 0, w, flat(0), KEEP);
+    expect(riseAt(f, 0, 0)).toBe(29.5);
+    expect(riseAt(f, 1, 0)).toBe(15.5);
+    expect(riseAt(f, 2, 0)).toBe(16);
+    // the rise bits never leak into the flag bits
+    expect(f.data[0]! & (KEPT_BIT | ROUGH_BIT)).toBe(KEPT_BIT | ROUGH_BIT);
+  });
+
+  it('keeps the hysteresis in the coarse range too', () => {
+    const f = createHeightField();
+    applyHeightChunk(f, 0, chunkOf(40), flat(0), KEEP);
+    expect(f.data[500]! & KEPT_BIT).toBe(KEPT_BIT);
+    applyHeightChunk(f, 0, chunkOf(2), flat(0), KEEP);
+    expect(f.data[500]! & KEPT_BIT).toBe(KEPT_BIT);
+    applyHeightChunk(f, 0, chunkOf(1), flat(0), KEEP);
+    expect(f.data[500]! & KEPT_BIT).toBe(0);
+  });
+
+  describe('rough bit', () => {
+    /** four 20x20 patches on 0 m ground, stride 30 texels starting at (10, 10) */
+    const patches = (): { f: ReturnType<typeof createHeightField>; at: (p: number, i: number, j: number) => [number, number] } => {
+      const w = chunkOf(0);
+      const at = (p: number, i: number, j: number): [number, number] => [10 + p * 30 + i, 10 + j];
+      for (let j = 0; j < 20; j++) for (let i = 0; i < 20; i++) {
+        const set = (p: number, y: number): void => { const [x, z] = at(p, i, j); w[z * M + x] = y; };
+        set(0, 20);
+        set(1, 10 + i);
+        set(2, i < 10 ? 20 : 22);
+        set(3, (i + j) % 2 ? 12 : 4);
+      }
+      const f = createHeightField();
+      applyHeightChunk(f, 0, w, flat(0), KEEP);
+      return { f, at };
+    };
+    const roughIn = (f: ReturnType<typeof createHeightField>, p: number, at: (p: number, i: number, j: number) => [number, number]): [number, number][] => {
+      const out: [number, number][] = [];
+      for (let j = 0; j < 20; j++) for (let i = 0; i < 20; i++) {
+        const [x, z] = at(p, i, j);
+        if (roughAt(f, x, z)) out.push([i, j]);
+      }
+      return out;
+    };
+
+    it('marks a flat roof at its corners only', () => {
+      const { f, at } = patches();
+      expect(roughIn(f, 0, at)).toEqual([[0, 0], [19, 0], [0, 19], [19, 19]]);
+    });
+
+    it('treats a 45 degree slope as planar: corners only', () => {
+      const { f, at } = patches();
+      expect(roughIn(f, 1, at)).toEqual([[0, 0], [19, 0], [0, 19], [19, 19]]);
+    });
+
+    it('marks a one-way step only where the step meets the patch edge', () => {
+      const { f, at } = patches();
+      expect(roughIn(f, 2, at)).toEqual([
+        [0, 0], [9, 0], [10, 0], [19, 0], [0, 19], [9, 19], [10, 19], [19, 19]
+      ]);
+    });
+
+    it('marks a 4/12 m checkerboard rough everywhere', () => {
+      const { f, at } = patches();
+      expect(roughIn(f, 3, at)).toHaveLength(400);
+    });
+
+    it('counts the rough texels in the reply and counts a rough flip as a change', () => {
+      const w = chunkOf(0);
+      for (let j = 10; j < 30; j++) for (let i = 10; i < 30; i++) w[j * M + i] = 20;
+      const f = createHeightField();
+      const st = applyHeightChunk(f, 0, w, flat(0), KEEP);
+      expect(st.rough).toBe(4);
+      expect(st.kept).toBe(400);
+      expect(st.changed).toBe(400);
+      // the same measurement again: nothing flipped
+      expect(applyHeightChunk(f, 0, w, flat(0), KEEP).changed).toBe(0);
+      // the roof turns to canopy at the same height: only the rough bits change
+      for (let j = 10; j < 30; j++) for (let i = 10; i < 30; i++) w[j * M + i] = (i + j) % 2 ? 24 : 18;
+      const st2 = applyHeightChunk(f, 0, w, flat(0), KEEP);
+      expect(st2.rough).toBe(400);
+      expect(st2.changed).toBe(400 - 4);
+    });
+
+    it('reads a neighbour across a chunk seam from the field', () => {
+      const f = createHeightField();
+      const left = chunkOf(NaN), right = chunkOf(NaN);
+      for (let j = 100; j < 120; j++) for (let i = 880; i < 900; i++) left[j * M + i] = 12;
+      for (let j = 100; j < 120; j++) for (let i = 0; i < 20; i++) right[j * M + i] = 12;
+      applyHeightChunk(f, 0, left, flat(0), KEEP);
+      // measured alone, the seam column's right neighbour is unknown: rough at its ends
+      expect(roughAt(f, 899, 110)).toBe(false);
+      expect(roughAt(f, 899, 100)).toBe(true);
+      applyHeightChunk(f, 1, right, flat(0), KEEP);
+      // the new chunk's first column sees the old chunk's last, so it is planar on both axes except at the top
+      expect(roughAt(f, 900, 110)).toBe(false);
+      expect(roughAt(f, 900, 100)).toBe(false);
+      expect(roughAt(f, 919, 119)).toBe(true);
+      // the old chunk's seam texel is only refreshed when that chunk is measured again
+      expect(roughAt(f, 899, 110)).toBe(false);
+    });
+
+    it('does not set rough where nothing is kept', () => {
+      const f = createHeightField();
+      const w = chunkOf(1);
+      w[500] = 2.9;
+      applyHeightChunk(f, 0, w, flat(0), KEEP);
+      expect(f.data[500]! & ROUGH_BIT).toBe(0);
+    });
   });
 });
