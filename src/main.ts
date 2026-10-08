@@ -26,6 +26,7 @@ import {
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
 import { SEG_STRIDE } from './services/overture/stencilTrace.ts';
+import { CutoutDebugOverlay } from './render/CutoutDebugOverlay.ts';
 import type { FootprintMaskJob, FootprintMaskResult } from './services/overture/footprintMaskWorker.ts';
 import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
@@ -213,6 +214,14 @@ let lastColliders: readonly BuildingCollider[] = [];
 let lastTileBoxes: readonly BuildingCollider[] = [];
 /** the cars currently hit the footprint walls (the prism modes) rather than the boxes */
 let physicsOnWalls = false;
+// Cutout 3D collision state: declared before the first setViewMode, which runs at module load
+/** Cutout 3D's car colliders: the stencil on screen traced into walls (one source for picture and physics). */
+const cutoutWalls = new StencilColliders();
+/** The car is on the stencil walls right now (Cutout 3D with a stencil landed). */
+let carOnStencil = false;
+/** ?cutoutDebug=1 / window.__cutoutDebug(on): draw the walls the car can hit, coloured by source. */
+let cutoutDebug = new URLSearchParams(window.location.search).get('cutoutDebug') === '1';
+let cutoutDebugOverlay: CutoutDebugOverlay | null = null;
 let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
 if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;
 buildingMeshView.visible = false;
@@ -485,6 +494,7 @@ function setViewMode(mode: ViewMode): void {
   else if (carOnStencil !== (isCutout && cutoutWalls.walls !== null)) refreshCarColliders();
   // the wheels ride the captured surface only in a view that shows it
   applySurface();
+  if (cutoutDebug) updateCutoutDebug();
   updateViewModeUi();
 }
 
@@ -673,10 +683,6 @@ const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
 const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
-/** Cutout 3D's car colliders: the stencil on screen traced into walls (one source for picture and physics). */
-const cutoutWalls = new StencilColliders();
-/** The car is on the stencil walls right now (Cutout 3D with a stencil landed). */
-let carOnStencil = false;
 /** A footprint the mesh rises less than this over (m) is not stencilled: an empty lot or a shed. */
 const CUTOUT_MIN_RISE_M = 3;
 let cutoutCoverageStat: (CoverageGap & { footprints: number; gapCells: number }) | null = null;
@@ -807,6 +813,11 @@ function runCutoutBuild(): void {
       segments: b.segments.length / SEG_STRIDE, traceMs: b.traceMs, wallsMs, wallBuilds: cutoutWalls.builds
     };
     log.info('cutout stencil built', cutoutStats);
+    if (cutoutDebug) {
+      console.info(`[cutoutDebug] stencil landed: ${polys.length} footprints, ${b.dropped} dropped for no rise, `
+        + `${b.gapCells} gap cells, ${b.segments.length / SEG_STRIDE} segments; skips: ${cutoutDigestSkips} digest, `
+        + `${cutoutInputSkips} input, ${cutoutUnchanged} unchanged`);
+    }
     if (wallsRebuilt) refreshCarColliders();
     logCutoutCoverage();
   };
@@ -894,7 +905,33 @@ function carColliders(colliders: readonly BuildingCollider[], nTileBoxes: number
 /** Hand the physics the cars' colliders again (a stencil landed, the view changed); the boxes stay as they are. */
 function refreshCarColliders(): void {
   game.setBuildingColliders(carColliders(lastColliders, lastTileBoxes.length), [...lastColliders]);
+  if (cutoutDebug) updateCutoutDebug();
 }
+
+/**
+ * The debug fence over what the car hits in Cutout 3D: the stencil's walls
+ * (Overture cyan, classifier-gap magenta) once one has landed, the
+ * classifier boxes (yellow) before. Nothing is built while debug is off.
+ */
+function updateCutoutDebug(): void {
+  if (!cutoutDebug || !traits(viewMode).cutsToFootprints) {
+    cutoutDebugOverlay?.clear();
+    return;
+  }
+  if (!cutoutDebugOverlay) {
+    cutoutDebugOverlay = new CutoutDebugOverlay();
+    renderer.scene.add(cutoutDebugOverlay.group);
+  }
+  const hf = world.terrainProvider.heightfield;
+  const groundAt = (x: number, z: number) => hf.sample(x, z);
+  if (cutoutWalls.segments) cutoutDebugOverlay.set(cutoutWalls.segments, null, groundAt);
+  else cutoutDebugOverlay.set(null, lastTileBoxes, groundAt);
+}
+(window as any).__cutoutDebug = (on?: boolean) => {
+  if (on !== undefined) cutoutDebug = on;
+  updateCutoutDebug();
+  return cutoutDebug;
+};
 
 /** Vector City streets: the OSM ways draped on the ground the car drives on. */
 function rebuildRibbons(): void {
@@ -920,6 +957,8 @@ function applyTileColliders(tileBoxes: readonly BuildingCollider[]): void {
   game.setBuildingColliders(carColliders(colliders, tileBoxes.length), colliders);
   buildingMeshView.update(colliders, tiles?.activeDeckGrid, tiles?.activeGrid, sample);
   lastColliders = colliders;
+  // before a stencil lands the fence shows the boxes, which just changed
+  if (cutoutDebug && !cutoutWalls.segments) updateCutoutDebug();
   // the classifier grid moved: Cutout 3D's gap cells follow, coalesced
   cutoutDirty = true;
   if (traits(viewMode).cutsToFootprints) rebuildCutoutMask();
@@ -970,6 +1009,7 @@ function clearTiles(): void {
   prismsFor = null;
   cutoutMaskFor = null;
   cutoutWalls.clear();
+  cutoutDebugOverlay?.clear();
   cutoutCoverageStat = null;
   cutoutBuilderFor = null;
   cutoutDirty = true;

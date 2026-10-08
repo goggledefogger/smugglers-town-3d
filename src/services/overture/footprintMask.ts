@@ -502,6 +502,8 @@ export interface CutoutStats {
   gapCells: number;
   /** the Overture raster was rebuilt (not the cached one reused) */
   baseRebuilt: boolean;
+  /** footprints dropped because the mesh does not rise over them (cap byte 0) */
+  dropped: number;
 }
 
 /**
@@ -600,19 +602,21 @@ export class CutoutStencilBuilder {
     const base = this.base;
     const cells = cl ? classifierCells(cl.structure, cl.grid, base, cl.reachM ?? 3) : null;
     const coverage = cl && cells ? classifierGapFromCells(cl.structure, cl.grid, cells) : null;
+    let dropped = 0;
+    if (caps) for (let p = 0; p < caps.length; p++) if (caps[p] === 0) dropped++;
     let gapCells = 0;
     if (cells) for (let c = 0; c < cells.length; c++) if (cells[c] === CELL_GAP) gapCells++;
-    if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, coverage, gapCells, baseRebuilt };
+    if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, coverage, gapCells, baseRebuilt, dropped };
     const mask: FootprintMask = { ...base, data: base.data.slice() };
     if (cells && cl) paintGapCells(mask, cells, cl.grid);
     this.lastCells = cells;
     this.lastSent = true;
     const t0 = performance.now();
-    const segments = traceStencil(mask);
+    const segments = traceStencil(mask, 0.5, base);
     const traceMs = performance.now() - t0;
     return {
       changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), segments, traceMs,
-      coverage, gapCells, baseRebuilt
+      coverage, gapCells, baseRebuilt, dropped
     };
   }
 }

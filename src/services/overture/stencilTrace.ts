@@ -10,17 +10,26 @@
  */
 import type { FootprintMask } from './footprintMask.ts';
 
-/** Floats per traced segment: ax, az, bx, bz, cap (G byte, 255 = no cap / full height). */
-export const SEG_STRIDE = 5;
+/** Floats per traced segment: ax, az, bx, bz, cap (G byte, 255 = no cap / full height), source (SEG_SRC_*). */
+export const SEG_STRIDE = 6;
+/** Segment source unknown (no Overture raster given). */
+export const SEG_SRC_UNKNOWN = 0;
+/** The solid behind the segment is Overture (a footprint or its dilation band). */
+export const SEG_SRC_OVERTURE = 1;
+/** The solid behind the segment is a classifier gap cell (no Overture there). */
+export const SEG_SRC_GAP = 2;
 
 /**
  * Segments around every filled region of the mask, oriented with the solid
  * on the left walking a to b, so the outward normal is (dz, -dx) / len.
  * Holes (courtyards) trace too, their walls facing into the hole. `cap` is
  * the highest G byte of the solid texels along the segment (255 for an R8
- * mask). Returns a flat Float32Array, SEG_STRIDE per segment.
+ * mask). `overture`, the Overture-only raster the stencil started from,
+ * tells each segment's source: the solid just behind its midpoint is in it
+ * (SEG_SRC_OVERTURE) or not (SEG_SRC_GAP). Returns a flat Float32Array,
+ * SEG_STRIDE per segment.
  */
-export function traceStencil(m: FootprintMask, toleranceM = 0.5): Float32Array {
+export function traceStencil(m: FootprintMask, toleranceM = 0.5, overture: FootprintMask | null = null): Float32Array {
   const { n, cell, channels: ch, data } = m;
   const x0 = m.cx - m.size / 2, z0 = m.cz - m.size / 2;
   // crossing ids: the horizontal edge from corner (i,j) to (i+1,j) is 2k, the vertical edge
@@ -106,7 +115,18 @@ export function traceStencil(m: FootprintMask, toleranceM = 0.5): Float32Array {
       if (!keep[kk]) continue;
       let c = cs[kk]!;
       for (let t = prev; t !== kk; t = (t + 1) % m2) if (cs[t]! > c) c = cs[t]!;
-      out.push(xs[prev]!, zs[prev]!, xs[kk]!, zs[kk]!, c);
+      let src = SEG_SRC_UNKNOWN;
+      if (overture) {
+        // a texel behind the midpoint, on the solid (left) side
+        const dx = xs[kk]! - xs[prev]!, dz = zs[kk]! - zs[prev]!, l = Math.hypot(dx, dz) || 1;
+        const sx = (xs[prev]! + xs[kk]!) / 2 - (dz / l) * 0.75 * cell, sz = (zs[prev]! + zs[kk]!) / 2 + (dx / l) * 0.75 * cell;
+        const oi = Math.floor((sx - (overture.cx - overture.size / 2)) / overture.cell);
+        const oj = Math.floor((sz - (overture.cz - overture.size / 2)) / overture.cell);
+        const inO = oi >= 0 && oj >= 0 && oi < overture.n && oj < overture.n
+          && overture.data[(oj * overture.n + oi) * overture.channels] !== 0;
+        src = inO ? SEG_SRC_OVERTURE : SEG_SRC_GAP;
+      }
+      out.push(xs[prev]!, zs[prev]!, xs[kk]!, zs[kk]!, c, src);
       prev = kk;
     }
   }

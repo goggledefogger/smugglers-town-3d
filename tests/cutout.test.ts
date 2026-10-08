@@ -8,7 +8,8 @@ import {
   footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest
 } from '../src/services/overture/footprintMask.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
-import { traceStencil, SEG_STRIDE } from '../src/services/overture/stencilTrace.ts';
+import { traceStencil, SEG_STRIDE, SEG_SRC_OVERTURE, SEG_SRC_GAP, SEG_SRC_UNKNOWN } from '../src/services/overture/stencilTrace.ts';
+import { debugLines, DEBUG_COLOURS } from '../src/render/CutoutDebugOverlay.ts';
 import { stencilWallColliders, StencilColliders, WALL_FULL_HEIGHT } from '../src/services/overture/stencilWalls.ts';
 import { sphereVsWall } from '../src/core/physics/collision.ts';
 import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
@@ -460,17 +461,54 @@ describe('one source: the car hits the stencil it sees', () => {
     const caps = polygonRoofCaps(packFootprints(polys), roof, top, grid);
     expect(caps[0]).toBe(0);
     expect(caps[1]).toBe(18);
+    // the builder reports it as dropped
     const b = new CutoutStencilBuilder();
     const built = b.build({
       setId: 1, packed: packFootprints(polys), roof, opts: { size: 128, cell: 1, dilateM: 2 },
       classifier: { structure: new Uint8Array(64), grid, top }
     });
     if (!built.changed) throw new Error('expected a mask');
+    expect(built.dropped).toBe(1);
     expect(maskAt(built.mask, 5, 5)).toBe(false);
     expect(maskAt(built.mask, -25, -25)).toBe(true);
     // and no wall where nothing is drawn
     expect(insideTrace(built.segments, 5, 5)).toBe(false);
     expect(insideTrace(built.segments, -25, -25)).toBe(true);
+  });
+
+  it('tags each segment with its source: Overture-backed or a classifier gap cell', () => {
+    const grid = { n: 8, cell: 10, half: 40 };
+    const structure = new Uint8Array(64);
+    structure[1 * 8 + 1] = 1; // a gap cell at x,z -30..-20
+    const b = new CutoutStencilBuilder();
+    const built = b.build({
+      setId: 1, packed: packFootprints([{ ring: square(2, 2, 8, 8), holes: [] }]),
+      opts: { size: 128, cell: 1, dilateM: 2 }, classifier: { structure, grid }
+    });
+    if (!built.changed) throw new Error('expected a mask');
+    expect(built.dropped).toBe(0);
+    const srcs = segsOf(built.segments).map(t => ({ x: (t[0]! + t[2]!) / 2, src: t[5] }));
+    expect(srcs.filter(t => t.x > -10).every(t => t.src === SEG_SRC_OVERTURE)).toBe(true);
+    expect(srcs.filter(t => t.x < -10).every(t => t.src === SEG_SRC_GAP)).toBe(true);
+    expect(srcs.some(t => t.src === SEG_SRC_GAP) && srcs.some(t => t.src === SEG_SRC_OVERTURE)).toBe(true);
+    // with no Overture raster to compare, unknown
+    expect(traceStencil(built.mask)[5]).toBe(SEG_SRC_UNKNOWN);
+  });
+
+  it('debug fence: 8 vertices per wall, coloured by source; boxes draw four sides; nothing for props', () => {
+    const segs = Float32Array.from([0, 0, 10, 0, 255, SEG_SRC_OVERTURE, 10, 0, 10, 10, 255, SEG_SRC_GAP]);
+    const l = debugLines(segs, null, () => 5);
+    expect(l.positions.length).toBe(2 * 8 * 3);
+    expect(Array.from(l.colors.subarray(0, 3))).toEqual(Array.from(Float32Array.from(DEBUG_COLOURS.overture)));
+    expect(Array.from(l.colors.subarray(8 * 3, 8 * 3 + 3))).toEqual(Array.from(Float32Array.from(DEBUG_COLOURS.gap)));
+    // the rails sit 0.3 and 1.8 m above the ground
+    expect(l.positions[1]).toBeCloseTo(5.3);
+    expect(l.positions[3 * 2 + 1]).toBeCloseTo(6.8);
+    const box = { min: { x: 0, y: 0, z: 0 }, max: { x: 4, y: 9, z: 4 }, kind: 'building' as const };
+    const prop = { ...box, kind: 'prop' as const };
+    const lb = debugLines(null, [box, prop] as any, () => 0);
+    expect(lb.positions.length).toBe(4 * 8 * 3);
+    expect(Array.from(lb.colors.subarray(0, 3))).toEqual(Array.from(Float32Array.from(DEBUG_COLOURS.box)));
   });
 
   it('refreshes the colliders only when a different stencil lands', () => {

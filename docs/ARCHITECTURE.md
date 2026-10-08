@@ -730,6 +730,14 @@ structure-mask fallback, the car hits the classifier boxes, which is what
 that fallback draws. The bots, the nav grid and the blocked-ground checks
 keep the classifier boxes (the coarse list) in every mode.
 
+Debugging it: `?cutoutDebug=1`, or `window.__cutoutDebug(true)` at runtime,
+draws every wall the car can hit as a fence 0.3 to 1.8 m above the ground,
+cyan where the solid behind it is Overture (footprint or band), magenta
+where it is a classifier gap cell (each traced segment carries that source
+byte), yellow for the classifier boxes before a stencil lands. Each landing
+logs footprints, those dropped for no rise, gap cells, segments and the
+skip counters. Off, nothing is built.
+
 Trace cost, synthetic city at 1 m (no live run): a Portland-like grid of
 14,000 footprints traces to 66,000 segments, an SF-like 26,900 to 168,000,
 in about 350 ms of worker time on top of a 250 to 300 ms build; 2 m texels

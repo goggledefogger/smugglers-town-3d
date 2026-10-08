@@ -43,6 +43,8 @@ export function stencilWallColliders(segs: Float32Array, groundAt: (x: number, z
 export class StencilColliders {
   /** the walls of the stencil on screen, null until one lands (or with the structure-mask fallback) */
   walls: BuildingCollider[] | null = null;
+  /** the traced segments they came from (the debug overlay draws these) */
+  segments: Float32Array | null = null;
   private digest: string | null = null;
   /** wall lists built, for the stats */
   builds = 0;
@@ -51,6 +53,7 @@ export class StencilColliders {
   land(digest: string, segs: Float32Array, groundAt: (x: number, z: number) => number): boolean {
     if (this.walls && digest === this.digest) return false;
     this.walls = stencilWallColliders(segs, groundAt);
+    this.segments = segs;
     this.digest = digest;
     this.builds++;
     return true;
@@ -58,6 +61,7 @@ export class StencilColliders {
 
   clear(): void {
     this.walls = null;
+    this.segments = null;
     this.digest = null;
   }
 }
