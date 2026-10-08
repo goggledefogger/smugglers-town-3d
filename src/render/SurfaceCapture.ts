@@ -15,13 +15,13 @@
  */
 import {
   DoubleSide, FloatType, NearestFilter, OrthographicCamera, RedFormat, RGBAFormat, Scene,
-  ShaderMaterial, WebGLRenderTarget, Color,
+  ShaderMaterial, WebGLRenderTarget, Color, Mesh, PlaneGeometry,
   type Object3D, type WebGLRenderer
 } from 'three';
 import {
   SURF_ENCODE_OFFSET, shouldRecapture, type SurfaceHeightfield
 } from '../core/terrain/SurfaceHeightfield.ts';
-import type { Heightfield } from '../core/heightfield.ts';
+import type { HeightSampler } from '../core/heightfield.ts';
 import { logger } from '../app/log.ts';
 
 const log = logger('surface');
@@ -67,7 +67,8 @@ export class SurfaceCapture {
     uniforms: { uOffset: { value: SURF_ENCODE_OFFSET } },
     // the projection is mirrored to get x and z ascending in the buffer, which
     // flips winding; and the top surface is wanted whichever way a triangle faces
-    side: DoubleSide
+    side: DoubleSide,
+    toneMapped: false
   });
   private readonly prevClear = new Color();
   private inFlight = false;
@@ -75,6 +76,10 @@ export class SurfaceCapture {
   private dirty = false;
   private asyncBroken = false;
   private disposed = false;
+  /** False until the capture program has compiled off the frame (compileAsync). */
+  private compiled = false;
+  /** Bumped by reset(): a readback started before it lands nowhere. */
+  private generation = 0;
   readonly timings: SurfaceTimings = { renderMs: 0, readbackMs: 0, processMs: 0, captures: 0 };
 
   constructor(
@@ -83,7 +88,7 @@ export class SurfaceCapture {
     /** The tile group to capture, or null while there is none. */
     private readonly source: () => Object3D | null,
     /** The base ground, for the camera's depth range. */
-    private readonly base: () => Heightfield
+    private readonly base: () => HeightSampler
   ) {
     this.rt = this.makeTarget(RedFormat);
     this.scene.overrideMaterial = this.material;
@@ -91,6 +96,28 @@ export class SurfaceCapture {
     // world x and z ascending along the buffer's columns and rows: camera-local
     // +x is world -x with up = +z, so the projection's left/right swap back
     this.camera.up.set(0, 0, 1);
+    // compile the capture program in the background: compiled on first use it
+    // cost a ~0.5 s frame. compile() ignores overrideMaterial, so warm it on a
+    // stand-in mesh in a scene with the same (absent) lights and fog
+    const warm = new Scene();
+    const stand = new Mesh(new PlaneGeometry(1, 1), this.material);
+    warm.add(stand);
+    // with the capture target bound, so the program key (tone mapping, output
+    // colour space) matches the real capture and is not compiled a second time
+    const prev = renderer.getRenderTarget();
+    renderer.setRenderTarget(this.rt);
+    let warming: Promise<unknown>;
+    try {
+      warming = renderer.compileAsync(warm, this.camera);
+    } finally {
+      renderer.setRenderTarget(prev);
+    }
+    warming
+      .catch(e => log.warn('surface program warm-up failed; compiling on first capture', e))
+      .finally(() => {
+        stand.geometry.dispose();
+        this.compiled = true;
+      });
   }
 
   private makeTarget(format: typeof RedFormat | typeof RGBAFormat): WebGLRenderTarget {
@@ -101,6 +128,19 @@ export class SurfaceCapture {
     });
   }
 
+  /**
+   * Forget the current capture (new world, or the mode was switched off):
+   * the field reads as base until a fresh capture lands, and a readback still
+   * in flight is dropped. The GPU objects are kept, so switching the mode back
+   * on costs no shader compile.
+   */
+  reset(): void {
+    this.generation++;
+    this.field.clear();
+    this.lastCaptureMs = -Infinity;
+    this.dirty = false;
+  }
+
   /** The tiles or the ground under them changed: recapture at the next allowed moment. */
   markDirty(): void {
     this.dirty = true;
@@ -108,7 +148,7 @@ export class SurfaceCapture {
 
   /** Call every frame with the player's position: advances processing, starts a capture when due. */
   update(nowMs: number, px: number, pz: number, budgetMs = 1.5): void {
-    if (this.disposed) return;
+    if (this.disposed || !this.compiled) return;
     const f = this.field;
     if (f.processing) {
       if (f.step(budgetMs)) this.timings.processMs = f.lastProcessMs;
@@ -133,7 +173,7 @@ export class SurfaceCapture {
     const r = this.renderer;
     const t0 = performance.now();
     const half = this.field.extentM / 2;
-    const { lo, hi } = baseRange(this.base());
+    const { lo, hi } = baseRange(this.base(), cx, cz, half);
     const top = hi + CAMERA_HEADROOM_M;
     const cam = this.camera;
     cam.left = half; cam.right = -half; cam.top = half; cam.bottom = -half;
@@ -175,20 +215,33 @@ export class SurfaceCapture {
   private readback(cx: number, cz: number, t1: number): void {
     const res = this.field.res;
     const dst = this.rgba ?? this.field.readBuffer;
+    const gen = this.generation;
     const done = (): void => {
-      if (this.disposed) return;
+      this.inFlight = false;
+      if (this.disposed || gen !== this.generation) return;
       const t2 = performance.now();
       if (this.rgba) {
         const out = this.field.readBuffer, src = this.rgba;
         for (let k = 0; k < out.length; k++) out[k] = src[k * 4]!;
       }
       this.timings.readbackMs = t2 - t1;
-      this.inFlight = false;
       this.field.beginProcess(cx, cz);
     };
     if (!this.asyncBroken) {
       this.inFlight = true;
-      this.renderer.readRenderTargetPixelsAsync(this.rt, 0, 0, res, res, dst)
+      // r169 checks IMPLEMENTATION_COLOR_READ_FORMAT before binding the target,
+      // so it asks about whatever framebuffer is bound (the canvas: RGBA) and
+      // refuses R32F. Binding ours first makes it ask about the right one; the
+      // check runs synchronously, before the method's first await.
+      const prev = this.renderer.getRenderTarget();
+      this.renderer.setRenderTarget(this.rt);
+      let pending: Promise<unknown>;
+      try {
+        pending = this.renderer.readRenderTargetPixelsAsync(this.rt, 0, 0, res, res, dst);
+      } finally {
+        this.renderer.setRenderTarget(prev);
+      }
+      pending
         .then(done)
         .catch(e => {
           this.inFlight = false;
@@ -227,16 +280,25 @@ export class SurfaceCapture {
   }
 }
 
-/** Min and max of the base ground's nodes: the camera's depth range must span them. */
-function baseRange(hf: Heightfield): { lo: number; hi: number } {
-  const raw = hf.raw;
+/**
+ * Min and max of the base ground over the window, on a 24 m lattice (the
+ * base is a smoothed 10 m field, and the camera range has tens of metres of
+ * margin either way): ~1k samples rather than the whole 315k-node field.
+ */
+const _range = { lo: 0, hi: 0 };
+function baseRange(hf: HeightSampler, cx: number, cz: number, half: number): { lo: number; hi: number } {
   let lo = Infinity, hi = -Infinity;
-  for (let k = 0; k < raw.length; k++) {
-    const v = raw[k]!;
-    if (v < lo) lo = v;
-    if (v > hi) hi = v;
+  const n = 32, step = (2 * half) / n;
+  for (let j = 0; j <= n; j++) {
+    for (let i = 0; i <= n; i++) {
+      const v = hf.sample(cx - half + i * step, cz - half + j * step);
+      if (v < lo) lo = v;
+      if (v > hi) hi = v;
+    }
   }
-  return { lo, hi };
+  _range.lo = lo;
+  _range.hi = hi;
+  return _range;
 }
 
 /**

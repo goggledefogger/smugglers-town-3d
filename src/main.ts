@@ -279,6 +279,9 @@ clutterBtn?.addEventListener('click', cycleClutterMode);
 // Off by default; ?surface=1 starts with it on. Only the sim's owner may turn
 // it on: online that is the host, and a client only shows the host decides.
 let surfaceOn = new URLSearchParams(window.location.search).get('surface') === '1';
+/** The wheels are on the composite right now (on, tiles loaded, and this browser owns the sim). */
+let surfaceActive = false;
+// made once and kept: switching the mode back on, or relocating, then costs no shader compile
 let surfaceField: SurfaceHeightfield | null = null;
 let surfaceCapture: SurfaceCapture | null = null;
 let surfacePreview: SurfacePreview | null = null;
@@ -297,14 +300,14 @@ function updateSurfaceUi(): void {
   if (!surfaceBtn || !surfaceText) return;
   surfaceBtn.hidden = !tiles;
   const client = isOnlineClient();
-  surfaceBtn.classList.toggle('active', !!surfaceField);
-  surfaceText.textContent = client ? 'SURFACE: HOST DECIDES' : surfaceField ? 'SURFACE: TRUE 1M' : 'SURFACE: OFF';
+  surfaceBtn.classList.toggle('active', surfaceActive);
+  surfaceText.textContent = client ? 'SURFACE: HOST DECIDES' : surfaceActive ? 'SURFACE: TRUE 1M' : 'SURFACE: OFF';
 }
 
-function disposeSurface(): void {
-  surfaceCapture?.dispose();
-  surfaceCapture = null;
-  surfaceField = null;
+/** Wheels back on the base ground; the capture is forgotten but its GPU objects kept. */
+function deactivateSurface(): void {
+  surfaceActive = false;
+  surfaceCapture?.reset();
   game.setVehicleGround(undefined);
   if (surfacePreview) surfacePreview.visible = false;
 }
@@ -312,7 +315,7 @@ function disposeSurface(): void {
 /** Bring the composite in line with surfaceOn, the loaded tiles and the current game. Idempotent. */
 function applySurface(): void {
   if (!surfaceOn || !tiles || isOnlineClient()) {
-    disposeSurface();
+    deactivateSurface();
     updateSurfaceUi();
     return;
   }
@@ -323,11 +326,12 @@ function applySurface(): void {
     surfaceCapture = new SurfaceCapture(
       renderer.renderer, surfaceField, () => tiles?.group ?? null, () => game.terrainProvider.heightfield
     );
-  } else if (surfaceField.base !== base) {
+  } else if (surfaceField.base !== base || !surfaceActive) {
+    // a new world or a fresh switch-on: nothing captured so far applies
     surfaceField.base = base;
-    surfaceField.clear();
-    surfaceCapture.markDirty();
+    surfaceCapture.reset();
   }
+  surfaceActive = true;
   game.setVehicleGround(surfaceField);
   updateSurfaceUi();
 }
@@ -363,7 +367,7 @@ function toggleSurfaceMode(): void {
 }
 
 surfaceBtn?.addEventListener('click', toggleSurfaceMode);
-(window as any).__surface = () => ({ on: surfaceOn, field: surfaceField, capture: surfaceCapture });
+(window as any).__surface = () => ({ on: surfaceOn, active: surfaceActive, field: surfaceField, capture: surfaceCapture });
 
 /** Every tile, now and as they refine: clutter filter patched in, programs and textures warmed. */
 function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
@@ -706,7 +710,7 @@ function clearTiles(): void {
   roadRibbons.clear();
   prismsFor = null;
   game.setSurfaceProvider(undefined);
-  disposeSurface();
+  deactivateSurface();
   groundBuilder = null;
   if (groundStreamer) {
     renderer.scene.remove(groundStreamer.group);
@@ -1397,7 +1401,7 @@ function step(now: number): void {
       diagOsmEl.textContent = `OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}`;
     }
     if (diagSurfaceEl) {
-      const on = surfaceField !== null && surfaceCapture !== null;
+      const on = surfaceActive && surfaceField !== null && surfaceCapture !== null;
       diagSurfaceEl.style.display = on ? 'inline' : 'none';
       if (on) {
         const t = surfaceCapture!.timings;
@@ -1407,12 +1411,12 @@ function step(now: number): void {
   }
 
   // F8 corner view of the captured surface, redrawn at 10 Hz (the field itself only changes per capture)
-  if (showDiagnostic && surfaceField && world.player?.body && now - surfacePreviewAt > 100) {
+  if (showDiagnostic && surfaceActive && surfaceField && world.player?.body && now - surfacePreviewAt > 100) {
     surfacePreviewAt = now;
     surfacePreview ??= new SurfacePreview();
     surfacePreview.visible = true;
     surfacePreview.draw(surfaceField, world.player.body.pos.x, world.player.body.pos.z);
-  } else if (surfacePreview && (!showDiagnostic || !surfaceField)) {
+  } else if (surfacePreview && (!showDiagnostic || !surfaceActive)) {
     surfacePreview.visible = false;
   }
 
@@ -1454,7 +1458,7 @@ function step(now: number): void {
     simTime += dt;
     profiler.lap('sim');
     const player = world.player?.body ?? null;
-    if (surfaceCapture && tiles && player) {
+    if (surfaceActive && surfaceCapture && tiles && player) {
       // read before the collider refresh below clears it: new tiles mean a new surface
       if (tiles.collidersDirty) surfaceCapture.markDirty();
       surfaceCapture.update(now, player.pos.x, player.pos.z);
