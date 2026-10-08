@@ -220,6 +220,19 @@ export interface FootprintMaskOptions {
  * ring is cleared so a clamped lookup beyond the extent reads "no footprint".
  */
 export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOptions = {}, caps: Uint8Array | null = null): FootprintMask {
+  return footprintMaskLayers(pk, opts, caps).mask;
+}
+
+/**
+ * The dilated stencil (`mask`, what the shader cuts to) and the undilated
+ * footprint raster it grew from (`core`, what the car's walls trace from),
+ * the same geometry, channels and cleared outer ring. `core` is the raster
+ * the fill already made, kept rather than discarded: no extra copy, and when
+ * the radius is under one texel it is the very same object as `mask`.
+ */
+export function footprintMaskLayers(
+  pk: PackedFootprints, opts: FootprintMaskOptions = {}, caps: Uint8Array | null = null
+): { mask: FootprintMask; core: FootprintMask } {
   const cell = opts.cell ?? 1, dilateM = opts.dilateM ?? 2;
   const n = Math.ceil((opts.size ?? 3600) / cell);
   const size = n * cell;
@@ -244,15 +257,21 @@ export function footprintMaskPacked(pk: PackedFootprints, opts: FootprintMaskOpt
     const offs = discOffsets(rad);
     for (const [i0, j0, i1, j1] of boxes) dilateBox(filled, data, n, ch, offs, i0, j0, i1, j1);
   }
-  for (let k = 0; k < n; k++) {
-    data[k * ch] = 0;
-    data[((n - 1) * n + k) * ch] = 0;
-    data[k * n * ch] = 0;
-    data[(k * n + n - 1) * ch] = 0;
-  }
-  // outside every footprint the cap is "none", so the linear filter only ever loosens a cap at an edge
-  if (ch === 2) for (let o = 0; o < data.length; o += 2) if (data[o] === 0 || data[o + 1] === 0) data[o + 1] = ROOF_NO_CAP;
-  return { n, cell, cx, cz, size, channels: ch, data };
+  const finish = (d: Uint8Array) => {
+    for (let k = 0; k < n; k++) {
+      d[k * ch] = 0;
+      d[((n - 1) * n + k) * ch] = 0;
+      d[k * n * ch] = 0;
+      d[(k * n + n - 1) * ch] = 0;
+    }
+    // outside every footprint the cap is "none", so the linear filter only ever loosens a cap at an edge
+    if (ch === 2) for (let o = 0; o < d.length; o += 2) if (d[o] === 0 || d[o + 1] === 0) d[o + 1] = ROOF_NO_CAP;
+  };
+  finish(data);
+  const mask: FootprintMask = { n, cell, cx, cz, size, channels: ch, data };
+  if (data === filled) return { mask, core: mask };
+  finish(filled);
+  return { mask, core: { ...mask, data: filled } };
 }
 
 export function footprintMask1m(polys: readonly PolyLike[], opts: FootprintMaskOptions = {}): FootprintMask {
@@ -445,9 +464,11 @@ export function classifierGapFromCells(structure: Uint8Array, grid: Grid, cells:
 /**
  * Paint every gap cell into the mask whole, in place: the texels whose
  * centres fall in the cell. Not dilated: the cell is already the
- * classifier's coarse hull. The outer texel ring stays clear.
+ * classifier's coarse hull. The outer texel ring stays clear. `value` 0
+ * takes the same cells back out (the builder borrows the cached
+ * undilated raster for a trace and returns it as it found it).
  */
-export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): number {
+export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid, value = MASK_ON): number {
   const [mx0, mz0] = maskOrigin(m);
   let painted = 0;
   for (let c = 0; c < cells.length; c++) {
@@ -457,7 +478,7 @@ export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): 
     const i0 = Math.max(1, Math.ceil((x - mx0) / m.cell - 0.5)), i1 = Math.min(m.n - 2, Math.ceil((x + grid.cell - mx0) / m.cell - 0.5) - 1);
     const j0 = Math.max(1, Math.ceil((z - mz0) / m.cell - 0.5)), j1 = Math.min(m.n - 2, Math.ceil((z + grid.cell - mz0) / m.cell - 0.5) - 1);
     // G is already ROOF_NO_CAP here: a gap cell has no Overture texel, so no cap
-    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) m.data[(j * m.n + i) * m.channels] = MASK_ON;
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) m.data[(j * m.n + i) * m.channels] = value;
   }
   return painted;
 }
@@ -643,14 +664,19 @@ export function cutoutInputDigest(setId: number, opts: FootprintMaskOptions, cla
 export type CutoutBuild =
   | ({
     changed: true; mask: FootprintMask; cells: Uint8Array | null; /** digestBytes of mask.data */ digest: string;
-    /** the mask's R traced into wall segments (stencilTrace.ts, SEG_STRIDE floats each): what the car hits */
+    /**
+     * the undilated footprints plus the same gap cells, traced into wall segments (stencilTrace.ts,
+     * SEG_STRIDE floats each): what the car hits. Not the dilated `mask`: its 2 m band is there so
+     * leaning facades survive the cut, and as a wall it stood up to 2 m off every facade
+     */
     segments: Float32Array; traceMs: number;
   } & CutoutStats)
   | ({ changed: false } & CutoutStats);
 
 /**
  * The hybrid stencil, Overture at 1 m UNION the classifier's gap cells.
- * Holds the footprints and their dilated raster per set, so a classifier
+ * Holds the footprints and their dilated raster per set (and the undilated
+ * one it grew from, which the car's walls trace), so a classifier
  * update (tiles streaming in) costs the gap scan and a copy, not a
  * re-raster; and when the painted cells come out the same as last time it
  * says so, and the caller skips the upload. Pure: the worker wraps one,
@@ -661,6 +687,8 @@ export class CutoutStencilBuilder {
   private packed: PackedFootprints | null = null;
   private roof: RoofInput | null = null;
   private base: FootprintMask | null = null;
+  /** the undilated raster `base` grew from (=== base when nothing dilated): the walls trace from it */
+  private core: FootprintMask | null = null;
   private baseKey = '';
   private baseCaps: Uint8Array | null = null;
   private lastCells: Uint8Array | null = null;
@@ -672,6 +700,7 @@ export class CutoutStencilBuilder {
       this.packed = job.packed;
       this.roof = job.roof ?? null;
       this.base = null;
+      this.core = null;
       this.lastSent = false;
     }
     if (!this.packed || this.setId !== job.setId) throw new Error(`cutout: footprint set ${job.setId} was never sent`);
@@ -682,13 +711,15 @@ export class CutoutStencilBuilder {
     const caps = this.roof ? polygonRoofCaps(this.packed, this.roof, cl?.top ?? null, cl?.grid ?? null) : null;
     let baseRebuilt = false;
     if (!this.base || this.baseKey !== key || !sameCells(caps, this.baseCaps)) {
-      this.base = footprintMaskPacked(this.packed, job.opts, caps);
+      const layers = footprintMaskLayers(this.packed, job.opts, caps);
+      this.base = layers.mask;
+      this.core = layers.core;
       this.baseKey = key;
       this.baseCaps = caps;
       this.lastSent = false;
       baseRebuilt = true;
     }
-    const base = this.base;
+    const base = this.base, core = this.core!;
     const cells = cl ? classifierCells(cl.structure, cl.grid, base, cl.reachM ?? 3) : null;
     const unroofedCells = cells && cl?.lowRise ? requireRoofed(cells, cl.grid, cl.lowRise, cl.roofMinM ?? ROOF_MIN_M) : 0;
     const coverage = cl && cells ? classifierGapFromCells(cl.structure, cl.grid, cells) : null;
@@ -702,7 +733,21 @@ export class CutoutStencilBuilder {
     this.lastCells = cells;
     this.lastSent = true;
     const t0 = performance.now();
-    const segments = traceStencil(mask, 0.5, base);
+    let segments: Float32Array;
+    if (core === base) {
+      segments = traceStencil(mask, 0.5, base);
+    } else if (cells && cl) {
+      // the walls: the undilated raster plus the same gap cells. A gap cell has no dilated texel
+      // within reach, so its texels are empty in `core` and taking them back out restores it exactly
+      paintGapCells(core, cells, cl.grid);
+      try {
+        segments = traceStencil(core, 0.5, base);
+      } finally {
+        paintGapCells(core, cells, cl.grid, 0);
+      }
+    } else {
+      segments = traceStencil(core, 0.5, base);
+    }
     const traceMs = performance.now() - t0;
     return {
       changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), segments, traceMs,

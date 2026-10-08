@@ -495,6 +495,99 @@ describe('one source: the car hits the stencil it sees', () => {
     expect(traceStencil(built.mask)[5]).toBe(SEG_SRC_UNKNOWN);
   });
 
+  describe('walls trace the undilated footprints, the cut stays dilated', () => {
+    const grid = { n: 8, cell: 10, half: 40 };
+    const verts = (f: Float32Array) => segsOf(f).flatMap(t => [[t[0]!, t[1]!], [t[2]!, t[3]!]] as [number, number][]);
+    /** every vertex lies on the axis-aligned box [x0,x1] x [z0,z1] within tol */
+    const onBox = (f: Float32Array, x0: number, z0: number, x1: number, z1: number, tol = 0.5) =>
+      verts(f).every(([x, z]) => x >= x0 - tol && x <= x1 + tol && z >= z0 - tol && z <= z1 + tol
+        && (Math.abs(x - x0) <= tol || Math.abs(x - x1) <= tol || Math.abs(z - z0) <= tol || Math.abs(z - z1) <= tol));
+
+    it('a 20 m square: the mask reads inside 1 m past the facade, the walls stand at the facade', () => {
+      const built = new CutoutStencilBuilder().build({
+        setId: 1, packed: packFootprints([{ ring: square(-10, -10, 10, 10), holes: [] }]),
+        opts: { size: 64, cell: 1, dilateM: 2 }, classifier: null
+      });
+      if (!built.changed) throw new Error('expected a mask');
+      expect(maskAt(built.mask, 11, 0)).toBe(true);
+      expect(maskAt(built.mask, 0, -11.5)).toBe(true);
+      expect(built.segments.length).toBeGreaterThan(0);
+      expect(onBox(built.segments, -10, -10, 10, 10)).toBe(true);
+      expect(verts(built.segments).every(([x, z]) => Math.max(Math.abs(x), Math.abs(z)) < 11)).toBe(true);
+      expect(insideTrace(built.segments, 9.5, 0)).toBe(true);
+      expect(insideTrace(built.segments, 11, 0)).toBe(false);
+      expect(segsOf(built.segments).every(t => t[5] === SEG_SRC_OVERTURE)).toBe(true);
+      // the digest is still the dilated mask's
+      expect(built.digest).toBe(digestBytes(built.mask.data));
+    });
+
+    it('a gap cell still walls (gap source) and the footprint walls sit on its edge (Overture source)', () => {
+      const structure = new Uint8Array(64);
+      structure[1 * 8 + 1] = 1; // gap: x,z -30..-20
+      structure[4 * 8 + 4] = 1; // covered by the footprint
+      const built = new CutoutStencilBuilder().build({
+        setId: 1, packed: packFootprints([{ ring: square(2, 2, 8, 8), holes: [] }]),
+        opts: { size: 128, cell: 1, dilateM: 2 }, classifier: { structure, grid }
+      });
+      if (!built.changed) throw new Error('expected a mask');
+      expect(built.gapCells).toBe(1);
+      expect(maskAt(built.mask, 9, 5)).toBe(true);
+      const all = segsOf(built.segments);
+      const gap = Float32Array.from(all.filter(t => t[5] === SEG_SRC_GAP).flat());
+      const ov = Float32Array.from(all.filter(t => t[5] === SEG_SRC_OVERTURE).flat());
+      expect(gap.length).toBeGreaterThan(0);
+      expect(ov.length).toBeGreaterThan(0);
+      expect(gap.length + ov.length).toBe(built.segments.length);
+      expect(onBox(gap, -30, -30, -20, -20)).toBe(true);
+      expect(onBox(ov, 2, 2, 8, 8)).toBe(true);
+      expect(insideTrace(built.segments, -25, -25)).toBe(true);
+      expect(insideTrace(built.segments, 9, 5)).toBe(false);
+    });
+
+    it('a footprint dropped for no rise (cap 0) has no walls', () => {
+      const top = new Float32Array(64).fill(-Infinity);
+      top[4 * 8 + 4] = 11; // 1 m over its base: the mesh does not rise there
+      const built = new CutoutStencilBuilder().build({
+        setId: 1, packed: packFootprints([{ ring: square(1, 1, 9, 9), holes: [] }]),
+        roof: { base: Float32Array.from([10]), overtureTop: Float32Array.from([NaN]), marginM: 3 },
+        opts: { size: 128, cell: 1, dilateM: 2, roofCap: true },
+        classifier: { structure: new Uint8Array(64), grid, top }
+      });
+      if (!built.changed) throw new Error('expected a mask');
+      expect(built.dropped).toBe(1);
+      expect(built.segments.length).toBe(0);
+    });
+
+    it('cached base: new classifier cells reuse the raster, trace undilated, and leave it as they found it', () => {
+      const b = new CutoutStencilBuilder();
+      const opts = { size: 128, cell: 1, dilateM: 2 };
+      const s1 = new Uint8Array(64);
+      s1[1 * 8 + 1] = 1; s1[4 * 8 + 4] = 1;
+      const first = b.build({ setId: 1, packed: packFootprints([{ ring: square(2, 2, 8, 8), holes: [] }]), opts, classifier: { structure: s1, grid } });
+      expect(first.baseRebuilt).toBe(true);
+      const s2 = s1.slice();
+      s2[6 * 8 + 1] = 1; // a second gap: x -30..-20, z 20..30
+      const second = b.build({ setId: 1, opts, classifier: { structure: s2, grid } });
+      if (!second.changed) throw new Error('expected a mask');
+      expect(second.baseRebuilt).toBe(false);
+      expect(second.gapCells).toBe(2);
+      const ov = Float32Array.from(segsOf(second.segments).filter(t => t[5] === SEG_SRC_OVERTURE).flat());
+      expect(onBox(ov, 2, 2, 8, 8)).toBe(true);
+      expect(insideTrace(second.segments, -25, 25)).toBe(true);
+      expect(insideTrace(second.segments, -25, -25)).toBe(true);
+      // the gap cells go away: no wall is left behind in the cached raster
+      const s3 = new Uint8Array(64);
+      s3[4 * 8 + 4] = 1;
+      const third = b.build({ setId: 1, opts, classifier: { structure: s3, grid } });
+      if (!third.changed) throw new Error('expected a mask');
+      expect(third.baseRebuilt).toBe(false);
+      expect(third.gapCells).toBe(0);
+      expect(onBox(third.segments, 2, 2, 8, 8)).toBe(true);
+      expect(insideTrace(third.segments, -25, -25)).toBe(false);
+      expect(maskAt(third.mask, -25, -25)).toBe(false);
+    });
+  });
+
   it('debug fence: 8 vertices per wall, coloured by source; boxes draw four sides; nothing for props', () => {
     const segs = Float32Array.from([0, 0, 10, 0, 255, SEG_SRC_OVERTURE, 10, 0, 10, 10, 255, SEG_SRC_GAP]);
     const l = debugLines(segs, null, () => 5);

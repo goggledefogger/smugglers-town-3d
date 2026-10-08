@@ -640,7 +640,7 @@ looks clear but drives blocked.
 Real 3D's buildings with Footprint 3D's solidity: the photogrammetry mesh is
 the building, everything else is satellite ground. One source: the stencil
 decides both what is drawn and what the car hits, so the two cannot
-disagree. The stencil is hybrid. The Overture footprints (buildings and
+disagree by more than the dilation band (see What collides). The stencil is hybrid. The Overture footprints (buildings and
 parts, unioned) the mesh actually rises over are scanline-filled
 covering exactly the 1800 m fetch radius both ways (3600 m), centred on the
 tileset origin, and dilated by a 2 m Euclidean radius so leaning facades and
@@ -683,7 +683,8 @@ Cost: the build runs in its own worker (`footprintMaskWorker.ts`, wrapping
 packed and transferred once per set; each rebuild sends only copies of the
 classifier grid and tops (0.1 and 0.5 MB at 10 m). The worker keeps the
 dilated Overture raster, re-rastering only when a footprint's cap byte
-changes, so a classifier-only change costs the gap scan and a copy; when
+changes (and the undilated fill alongside it, for the walls), so a
+classifier-only change costs the gap scan and a copy; when
 the painted cells and caps come out unchanged it sends no mask and nothing
 is uploaded. Rebuilds follow both inputs (footprints landing, each collider
 pass) through `CoalescedRebuild`: at most one per 2 s and one in flight.
@@ -707,7 +708,12 @@ Only where the mesh rises: a footprint whose photogrammetry roof (the max of
 the classifier tops inside it) stands under 3 m above its base, or that has
 no building cell under it, is dropped from the stencil (an empty lot, a
 shed, a demolished building). It cuts to ground and has no wall. Before any
-roof samples exist every footprint stays. Classifier gap cells stay as they
+roof samples exist every footprint stays. The base the rise is measured from
+is the terrain `attachTiles` was handed (`cutoutTerrain` in `roofInput`),
+not `world.terrainProvider`: the first build runs before match start, while
+that is still the lobby's procedural desert, so every base was a dune and
+6,022 of Portland's 6,101 footprints were dropped for no rise (fixed in
+178a21a). Classifier gap cells stay as they
 are, since they exist because the mesh rose there.
 
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
@@ -729,8 +735,9 @@ pre-stencil fallback boxes pass the same test (a box stays when any cell
 under it is roofed). Other modes and the bots keep every box. Overture
 footprints keep their own 3 m rise rule.
 
-What collides in Cutout 3D: the stencil itself. In the same worker pass the
-finished mask's R channel is traced into wall segments
+What collides in Cutout 3D: the stencil before its dilation. In the same
+worker pass the undilated footprint raster plus the same gap cells is traced
+into wall segments
 (`stencilTrace.ts`): marching squares on the texel centres with the iso line
 halfway between them, which is exactly where the linear-filtered R crosses
 0.5, the shader's cut. Each closed contour is simplified with
@@ -740,9 +747,18 @@ back with the mask, and when the stencil actually lands (not on a digest
 match) `stencilWalls.ts` turns them into `wall` colliders for the existing
 `sphereVsWall` path and Game's 40 m spatial hash. A wall's height is its
 footprint's roof cap (the highest G along it) above the ground under it, so
-a drawn overhang is solid at car height; no cap is full height. The
-dilation band, the gap cells and every capped roof are therefore exactly as
-solid as they are visible. The car hits those walls plus the props; no
+a drawn overhang is solid at car height; no cap is full height. The gap
+cells and every capped roof are exactly as solid as they are visible; the
+2 m dilation band is drawn but not solid. Traced from the dilated mask it
+stood up to 2 m off every facade, and more where a building's mesh starts
+inside its Overture polygon (a fence 3.6 m outside a 72 by 73 m Portland
+block), so the car met invisible walls. The price is up to a metre of
+clip where a facade leans out past its ring. The undilated raster is the
+fill the dilation grew from, kept with the cached base (13 MB R8, 26 MB
+RG8 at 1 m; no copy, and none kept when the radius is under a texel); a
+build paints the gap cells into it, traces, and takes them back out, so no
+erosion pass and no extra copy per build, and the trace costs the same
+(about 200 ms either way on 4,000 random footprints at 1 m). The car hits those walls plus the props; no
 prisms are built in this mode (`prismPhysics` is off), and the classifier
 boxes no longer reach the car. Until a stencil lands, and on the
 structure-mask fallback, the car hits the classifier boxes, which is what
@@ -751,7 +767,7 @@ keep the classifier boxes (the coarse list) in every mode.
 
 Debugging it: `?cutoutDebug=1`, or `window.__cutoutDebug(true)` at runtime,
 draws every wall the car can hit as a fence 0.3 to 1.8 m above the ground,
-cyan where the solid behind it is Overture (footprint or band), magenta
+cyan where the solid behind it is an Overture footprint, magenta
 where it is a classifier gap cell (each traced segment carries that source
 byte), yellow for the classifier boxes before a stencil lands. Each landing
 logs footprints, those dropped for no rise, gap cells, segments and the
@@ -775,9 +791,10 @@ the classifier cells). `?cutoutDilate=` overrides it for comparison.
 Known limits: where Overture returns nothing for the area, the cut falls
 back to the 10 m structure mask (blocky, uncapped, still solid against the
 classifier boxes it is drawn from). A gap building Overture lacks with no 10 m cell free of wall feet (about 20 m across or less on the 10 m grid) has no roofed cell and is dropped by the roofed-over rule; the car drives through it. Gap buildings are 10 m (or 5 m) blocks,
-edges and all, and solid exactly as drawn. Remaining mismatches between
-picture and physics are sub-texel: the traced wall sits within the 0.5 m
-simplification tolerance of the cut edge, and the cut is per fragment while
+edges and all, and solid exactly as drawn. Picture and physics differ by
+the dilation band: the traced wall sits on the footprint (within the 0.5 m
+simplification tolerance), up to 2 m inside the cut edge, so a leaning
+facade or overhang outside its ring can be clipped, and the cut is per fragment while
 the wall's height is its cap above the highest ground along it. A wall
 has no roof, so a car that gets over a low capped wall drops inside and is
 ejected by the nearest wall. A stencil landing costs a main-thread wall
