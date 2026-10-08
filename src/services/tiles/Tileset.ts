@@ -430,6 +430,7 @@ export class TileStreamer {
     this.worldToEcef = tileTransformChain(new Matrix4(), origin, ecef0, terrain.reliefBoost).invert();
     this.deckGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
     this.topGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
+    this.lowRiseGrid = new Float32Array(this.grid.n * this.grid.n).fill(NO_DATA);
     this.structureGrid = new Uint8Array(this.grid.n * this.grid.n);
   }
 
@@ -652,6 +653,8 @@ export class TileStreamer {
   private deckGrid: Float32Array;
   /** Photogrammetry top of every building cell (NO_DATA elsewhere): the per-cell roof heights Best 3D+ draws. */
   private topGrid: Float32Array;
+  /** Lowest geometry above the ground estimate per building cell (Infinity on decks/ramps, NO_DATA elsewhere). */
+  private lowRiseGrid: Float32Array;
 
   get activeDeckGrid(): Float32Array {
     return this.deckGrid;
@@ -659,6 +662,10 @@ export class TileStreamer {
 
   get activeTopGrid(): Float32Array {
     return this.topGrid;
+  }
+
+  get activeLowRiseGrid(): Float32Array {
+    return this.lowRiseGrid;
   }
 
   get activeGrid(): Grid {
@@ -700,6 +707,7 @@ export class TileStreamer {
       this.terrainTop = sampleTerrain(this.grid, this.terrain.heightfield);
       this.deckGrid = new Float32Array(n * n).fill(NO_DATA);
       this.topGrid = new Float32Array(n * n).fill(NO_DATA);
+      this.lowRiseGrid = new Float32Array(n * n).fill(NO_DATA);
       this.structureGrid = new Uint8Array(n * n);
       for (const t of this.tiles) {
         t.raster = this.rasterOf(t.node, t.group);
@@ -1015,7 +1023,8 @@ export class TileStreamer {
       this.structureGrid,
       this.roadGrid,
       this.topGrid,
-      this.buildingGrid
+      this.buildingGrid,
+      this.lowRiseGrid
     );
   }
 
@@ -1036,6 +1045,7 @@ export class TileStreamer {
         this.deckGrid.set(e.data.deckGrid);
         this.structureGrid.set(e.data.structureGrid);
         this.topGrid.set(e.data.topGrid);
+        this.lowRiseGrid.set(e.data.lowRiseGrid);
         resolve(e.data.boxes.map(b => ({
           min: new Vector3(b.min.x, b.min.y, b.min.z),
           max: new Vector3(b.max.x, b.max.y, b.max.z)

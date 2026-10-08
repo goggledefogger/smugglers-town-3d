@@ -765,7 +765,14 @@ export function collidersFromRasters(
   /** n*n, receives the photogrammetry top of every building cell (NO_DATA elsewhere): per-cell roof heights for rendering. */
   outTopGrid?: Float32Array,
   /** Google building footprints on the same grid: a footprint cell with tile geometry is a building, whatever the ground estimate says. */
-  buildingMask?: RoadGrid | null
+  buildingMask?: RoadGrid | null,
+  /**
+   * n*n, receives how far the LOWEST geometry of every building cell stands above the ground
+   * estimate: a roof over the whole cell reads high, a pole, tree, kerb or step over open ground
+   * reads near 0, a building's wall-foot edge cell too. Deck and ramp cells get +Infinity (they
+   * are structure by their own test), every other cell NO_DATA. Cutout 3D's roofed-over rule.
+   */
+  outLowRiseGrid?: Float32Array
 ): BuildingCollider[] {
   const { n, cell, half } = grid;
   const top = compositeTops(rasters, n);
@@ -1238,6 +1245,11 @@ export function collidersFromRasters(
   if (outTopGrid) {
     for (let c = 0; c < n * n; c++) {
       outTopGrid[c] = isBuilding(c) ? top[c]! : NO_DATA;
+    }
+  }
+  if (outLowRiseGrid) {
+    for (let c = 0; c < n * n; c++) {
+      outLowRiseGrid[c] = isBuilding(c) ? low[c]! - ground[c]! : isDeck[c] || isRamp[c] ? Infinity : NO_DATA;
     }
   }
 

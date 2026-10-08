@@ -5,7 +5,7 @@ import { TileClutterFilter, CLUTTER_MODES } from '../src/render/TileClutterFilte
 import {
   footprintMask1m, maskAt, dilateMask, classifierGap, MASK_ON, packFootprints, classifierCells, paintGapCells,
   CutoutStencilBuilder, CELL_GAP, CELL_COVERED, CELL_NONE, encodeRoofCap, decodeRoofCap, ROOF_NO_CAP, roofCapAt,
-  footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest
+  footprintMaskPacked, polygonRoofCaps, digestBytes, cutoutInputDigest, requireRoofed, fallbackCarBoxes, CELL_UNROOFED, ROOF_MIN_M
 } from '../src/services/overture/footprintMask.ts';
 import { CoalescedRebuild } from '../src/services/overture/coalescedRebuild.ts';
 import { traceStencil, SEG_STRIDE, SEG_SRC_OVERTURE, SEG_SRC_GAP, SEG_SRC_UNKNOWN } from '../src/services/overture/stencilTrace.ts';
@@ -528,6 +528,66 @@ describe('one source: the car hits the stencil it sees', () => {
     expect(c.builds).toBe(2);
     c.clear();
     expect(c.walls).toBeNull();
+  });
+});
+
+describe('roofed-over rule for classifier gap cells', () => {
+  const grid = { n: 8, cell: 10, half: 40 };
+  const cellAt = (i: number, j: number) => j * 8 + i;
+  const NO = -Infinity;
+  // a pole cell at (1,1): lowest geometry at the paving (0.1 m), top 8 m;
+  // a kiosk cell at (6,6): lowest geometry its roof (3 m), top 4 m
+  const structure = () => { const s = new Uint8Array(64); s[cellAt(1, 1)] = 1; s[cellAt(6, 6)] = 1; return s; };
+  const lowRise = () => { const l = new Float32Array(64).fill(NO); l[cellAt(1, 1)] = 0.1; l[cellAt(6, 6)] = 3; return l; };
+  const top = () => { const t = new Float32Array(64).fill(NO); t[cellAt(1, 1)] = 8; t[cellAt(6, 6)] = 4; return t; };
+  const build = (low: Float32Array) => new CutoutStencilBuilder().build({
+    setId: 1, packed: packFootprints([]), opts: { size: 128, cell: 1, dilateM: 2 },
+    classifier: { structure: structure(), grid, top: top(), lowRise: low }
+  });
+
+  it('does not fill a pole cell and fills a kiosk cell', () => {
+    const b = build(lowRise());
+    if (!b.changed) throw new Error('expected a mask');
+    expect(maskAt(b.mask, -25, -25)).toBe(false);
+    expect(maskAt(b.mask, 25, 25)).toBe(true);
+    expect(b.gapCells).toBe(1);
+    expect(b.unroofedCells).toBe(1);
+    expect(b.cells?.[cellAt(1, 1)]).toBe(CELL_UNROOFED);
+    // and no wall where the pole cell was
+    for (let o = 0; o < b.segments.length; o += SEG_STRIDE) expect(b.segments[o]!).toBeGreaterThan(0);
+  });
+
+  it('fills a whole group when any cell is roofed: a building edge reads at ground like a pole', () => {
+    const cells = new Uint8Array(64);
+    const low = new Float32Array(64).fill(NO);
+    // a 3-cell building: two wall-foot edge cells at ground, a roofed middle
+    for (const [i, l] of [[2, 0], [3, 4], [4, 0.2]] as const) { cells[cellAt(i, 2)] = 1; low[cellAt(i, 2)] = l; }
+    // a lone pole
+    cells[cellAt(6, 5)] = 1; low[cellAt(6, 5)] = 0;
+    expect(requireRoofed(cells, grid, low, ROOF_MIN_M)).toBe(1);
+    expect([2, 3, 4].map(i => cells[cellAt(i, 2)])).toEqual([1, 1, 1]);
+    expect(cells[cellAt(6, 5)]).toBe(CELL_UNROOFED);
+    // decks and ramps carry +Infinity: always roofed
+    const deck = new Uint8Array(64); deck[0] = 1;
+    expect(requireRoofed(deck, grid, Float32Array.from({ length: 64 }, (_, k) => (k === 0 ? Infinity : NO)), ROOF_MIN_M)).toBe(0);
+  });
+
+  it('drops the pole-cell fallback box in Cutout 3D and keeps it in painted-3d', () => {
+    const box = (i: number, j: number) => ({ min: { x: -40 + i * 10, z: -40 + j * 10 }, max: { x: -30 + i * 10, z: -30 + j * 10 } });
+    const pole = box(1, 1), kiosk = box(6, 6);
+    expect(fallbackCarBoxes(traits('cutout-3d').cutsToFootprints, [pole, kiosk], lowRise(), grid, ROOF_MIN_M)).toEqual([kiosk]);
+    expect(fallbackCarBoxes(traits('painted-3d').cutsToFootprints, [pole, kiosk], lowRise(), grid, ROOF_MIN_M)).toEqual([pole, kiosk]);
+    // no grid yet: nothing is dropped
+    expect(fallbackCarBoxes(true, [pole], null, null, ROOF_MIN_M)).toEqual([pole]);
+  });
+
+  it('changes the input digest when the lowest-surface grid or the threshold changes', () => {
+    const opts = { size: 128, cell: 1, dilateM: 2 };
+    const d = cutoutInputDigest(1, opts, { structure: structure(), grid, top: top(), lowRise: lowRise() });
+    expect(cutoutInputDigest(1, opts, { structure: structure(), grid, top: top(), lowRise: lowRise() })).toBe(d);
+    const l2 = lowRise(); l2[cellAt(1, 1)] = 2.6;
+    expect(cutoutInputDigest(1, opts, { structure: structure(), grid, top: top(), lowRise: l2 })).not.toBe(d);
+    expect(cutoutInputDigest(1, opts, { structure: structure(), grid, top: top(), lowRise: lowRise(), roofMinM: 4 })).not.toBe(d);
   });
 });
 

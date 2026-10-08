@@ -576,6 +576,26 @@ describe('one shared ground', () => {
     expect(maxTop).toBeCloseTo(4.5, 1);
   });
 
+  it('reports each building cell\'s lowest geometry above the ground (Cutout 3D roofed-over rule)', () => {
+    const top = flat(0), low = flat(0);
+    // a roofed block: the middle cell's lowest geometry is its 6 m roof, the edge cells hold wall feet
+    for (let j = 15; j <= 17; j++) for (let i = 15; i <= 17; i++) {
+      top[j * N + i] = 8;
+      low[j * N + i] = i === 16 && j === 16 ? 6 : 0;
+    }
+    // a pole over open paving: tall top, lowest geometry at the ground
+    top[25 * N + 25] = 8;
+    low[25 * N + 25] = 0;
+    const lowRise = new Float32Array(N * N);
+    const structure = new Uint8Array(N * N);
+    collidersFromRasters([raster(top, low)], grid, flat(0), 1, undefined, undefined, structure, null, undefined, null, lowRise);
+    expect(structure[16 * N + 16]).toBe(1);
+    expect(lowRise[16 * N + 16]).toBeCloseTo(6, 3);
+    expect(lowRise[15 * N + 15]).toBeCloseTo(0, 3);
+    if (structure[25 * N + 25]) expect(lowRise[25 * N + 25]).toBeLessThan(1);
+    expect(lowRise[5 * N + 5]).toBe(NO_DATA);
+  });
+
   it('keeps broad buildings with pitched/gabled roofs as solid buildings (never bridge decks)', () => {
     const top = flat(0), low = flat(0);
     // A 4-cell wide building (40m wide) with gabled roof: peak 14m, eaves 10m, low 9m

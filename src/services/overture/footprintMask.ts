@@ -316,6 +316,71 @@ export const CELL_NONE = 0;
 export const CELL_GAP = 1;
 /** A building cell with an Overture footprint within reach: the polygon (and its prism) stands for it. */
 export const CELL_COVERED = 2;
+/** A gap cell in a group with no roofed-over cell (a pole, a tree, steps): not painted, no wall. */
+export const CELL_UNROOFED = 3;
+
+/** Default for the roofed-over rule (m): a gap group fills only if some cell's lowest geometry is this far above the ground. */
+export const ROOF_MIN_M = 2.5;
+
+/**
+ * Cutout 3D's roofed-over rule for classifier gap cells. The classifier
+ * calls a 10 m cell a building when its TALLEST geometry rises 3.5 m, so a
+ * light pole, a tree, a column or a stepped terrace over open paving makes
+ * one; Pioneer Courthouse Square was full of them, each painted whole and
+ * walled. Here the LOWEST geometry decides: a roof over the cell keeps it
+ * high, a pole leaves the paving at ground. Per 4-connected gap group, not
+ * per cell: a building's edge cells hold its wall foot and read at ground
+ * like a pole does, so a group fills whole when any of its cells is
+ * roofed, and goes (CELL_UNROOFED) when none is. Decks and ramps carry
+ * +Infinity and always fill. Returns the cells it dropped.
+ */
+export function requireRoofed(cells: Uint8Array, grid: Grid, lowRise: Float32Array, roofMinM: number): number {
+  const { n } = grid;
+  const stack: number[] = [], group: number[] = [];
+  const seen = new Uint8Array(n * n);
+  let dropped = 0;
+  for (let s0 = 0; s0 < n * n; s0++) {
+    if (cells[s0] !== CELL_GAP || seen[s0]) continue;
+    seen[s0] = 1;
+    stack.push(s0);
+    group.length = 0;
+    let roofed = false;
+    while (stack.length) {
+      const c = stack.pop()!;
+      group.push(c);
+      if (lowRise[c]! >= roofMinM) roofed = true;
+      const i = c % n, j = Math.floor(c / n);
+      const nb = [i > 0 ? c - 1 : -1, i < n - 1 ? c + 1 : -1, j > 0 ? c - n : -1, j < n - 1 ? c + n : -1];
+      for (const d of nb) {
+        if (d < 0 || seen[d] || cells[d] !== CELL_GAP) continue;
+        seen[d] = 1;
+        stack.push(d);
+      }
+    }
+    if (roofed) continue;
+    for (const c of group) cells[c] = CELL_UNROOFED;
+    dropped += group.length;
+  }
+  return dropped;
+}
+
+/**
+ * The same rule for classifier boxes (Cutout 3D's fallback before a stencil
+ * lands): a box stays when any cell under it is roofed over, so a pole-cell
+ * box does not collide while a real building's box, edges and all, does.
+ */
+export function roofedBoxes<B extends { min: { x: number; z: number }; max: { x: number; z: number } }>(
+  boxes: readonly B[], lowRise: Float32Array, grid: Grid, roofMinM: number
+): B[] {
+  const { n, cell, half } = grid;
+  const clampI = (v: number) => Math.min(n - 1, Math.max(0, v));
+  return boxes.filter(b => {
+    const i0 = clampI(Math.floor((b.min.x + half) / cell)), i1 = clampI(Math.floor((b.max.x - 1e-3 + half) / cell));
+    const j0 = clampI(Math.floor((b.min.z + half) / cell)), j1 = clampI(Math.floor((b.max.z - 1e-3 + half) / cell));
+    for (let j = j0; j <= j1; j++) for (let i = i0; i <= i1; i++) if (lowRise[j * n + i]! >= roofMinM) return true;
+    return false;
+  });
+}
 
 /**
  * Per classifier cell: a structure cell inside the mask extent is a gap
@@ -397,6 +462,20 @@ export function paintGapCells(m: FootprintMask, cells: Uint8Array, grid: Grid): 
   return painted;
 }
 
+/**
+ * The classifier boxes the cars hit while no stencil is on screen: in a
+ * view that cuts to footprints (Cutout 3D), only the roofed-over ones, the
+ * same rule its stencil applies to gap cells; every other view keeps them
+ * all. Bots never come through here.
+ */
+export function fallbackCarBoxes<B extends { min: { x: number; z: number }; max: { x: number; z: number } }>(
+  cutsToFootprints: boolean, boxes: readonly B[], lowRise: Float32Array | null, grid: Grid | null, roofMinM: number
+): B[] {
+  return cutsToFootprints && lowRise && grid && lowRise.length === grid.n * grid.n
+    ? roofedBoxes(boxes, lowRise, grid, roofMinM)
+    : [...boxes];
+}
+
 export interface ClassifierInput {
   /** the classifier's structure grid (1 = building, deck or ramp), a copy the build may keep */
   readonly structure: Uint8Array;
@@ -405,6 +484,10 @@ export interface ClassifierInput {
   readonly reachM?: number;
   /** photogrammetry top (world y) of every building cell, -Infinity elsewhere: the roof samples */
   readonly top?: Float32Array | null;
+  /** lowest geometry above the ground estimate per building cell (Tileset.activeLowRiseGrid): the roofed-over rule */
+  readonly lowRise?: Float32Array | null;
+  /** a gap group fills only if some cell's lowRise reaches this (world units; default ROOF_MIN_M) */
+  readonly roofMinM?: number;
 }
 
 /** Per footprint, what its roof cap is measured from and against. */
@@ -504,6 +587,8 @@ export interface CutoutStats {
   baseRebuilt: boolean;
   /** footprints dropped because the mesh does not rise over them (cap byte 0) */
   dropped: number;
+  /** classifier gap cells dropped by the roofed-over rule */
+  unroofedCells: number;
 }
 
 /**
@@ -542,11 +627,15 @@ export function digestBytes(...parts: ArrayBufferView[]): string {
  * posted job means the build would come out the same, so it is not posted.
  */
 export function cutoutInputDigest(setId: number, opts: FootprintMaskOptions, classifier: ClassifierInput | null): string {
-  const head = new TextEncoder().encode(`${setId}|${JSON.stringify(opts)}|${classifier ? `${classifier.grid.n},${classifier.grid.cell},${classifier.grid.half},${classifier.reachM ?? 3}` : '-'}`);
+  const cl = classifier;
+  const head = new TextEncoder().encode(`${setId}|${JSON.stringify(opts)}|${cl
+    ? `${cl.grid.n},${cl.grid.cell},${cl.grid.half},${cl.reachM ?? 3},${cl.roofMinM ?? ROOF_MIN_M},${cl.top ? 't' : '-'}${cl.lowRise ? 'l' : '-'}`
+    : '-'}`);
   const parts: ArrayBufferView[] = [head];
-  if (classifier) {
-    parts.push(classifier.structure);
-    if (classifier.top) parts.push(classifier.top);
+  if (cl) {
+    parts.push(cl.structure);
+    if (cl.top) parts.push(cl.top);
+    if (cl.lowRise) parts.push(cl.lowRise);
   }
   return digestBytes(...parts);
 }
@@ -601,12 +690,13 @@ export class CutoutStencilBuilder {
     }
     const base = this.base;
     const cells = cl ? classifierCells(cl.structure, cl.grid, base, cl.reachM ?? 3) : null;
+    const unroofedCells = cells && cl?.lowRise ? requireRoofed(cells, cl.grid, cl.lowRise, cl.roofMinM ?? ROOF_MIN_M) : 0;
     const coverage = cl && cells ? classifierGapFromCells(cl.structure, cl.grid, cells) : null;
     let dropped = 0;
     if (caps) for (let p = 0; p < caps.length; p++) if (caps[p] === 0) dropped++;
     let gapCells = 0;
     if (cells) for (let c = 0; c < cells.length; c++) if (cells[c] === CELL_GAP) gapCells++;
-    if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, coverage, gapCells, baseRebuilt, dropped };
+    if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, coverage, gapCells, baseRebuilt, dropped, unroofedCells };
     const mask: FootprintMask = { ...base, data: base.data.slice() };
     if (cells && cl) paintGapCells(mask, cells, cl.grid);
     this.lastCells = cells;
@@ -616,7 +706,7 @@ export class CutoutStencilBuilder {
     const traceMs = performance.now() - t0;
     return {
       changed: true, mask, cells: cells ? cells.slice() : null, digest: digestBytes(mask.data), segments, traceMs,
-      coverage, gapCells, baseRebuilt, dropped
+      coverage, gapCells, baseRebuilt, dropped, unroofedCells
     };
   }
 }

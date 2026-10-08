@@ -710,6 +710,25 @@ shed, a demolished building). It cuts to ground and has no wall. Before any
 roof samples exist every footprint stays. Classifier gap cells stay as they
 are, since they exist because the mesh rose there.
 
+Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
+building when its TALLEST geometry rises 3.5 m above the ground estimate, so
+a light pole, a tree, a column or a stepped terrace over open paving makes
+one. In Pioneer Courthouse Square, an open plaza where Overture has only the
+Starbucks pavilion, those cells were painted whole and walled: invisible
+walls over flat brick. So a gap cell fills only if it is roofed over: the
+LOWEST geometry in the cell stands at least 2.5 m (`ROOF_MIN_M`,
+`?cutoutRoofMin=` to tune) above the ground estimate. A roof keeps the low
+surface high; a pole or a tree leaves the paving at ground. The rule is per
+4-connected gap group, not per cell, because a building's edge cells hold
+its wall feet and read at ground exactly like a pole: a group fills whole
+when any of its cells is roofed. Decks and ramps always fill. The
+classifier publishes the grid alongside the roof tops (`lowRiseGrid`, one
+more n² float pass and transfer per collider pass, 0.5 MB at 10 m, 2 MB at
+5 m), it rides in the stencil job and its input digest, and Cutout 3D's
+pre-stencil fallback boxes pass the same test (a box stays when any cell
+under it is roofed). Other modes and the bots keep every box. Overture
+footprints keep their own 3 m rise rule.
+
 What collides in Cutout 3D: the stencil itself. In the same worker pass the
 finished mask's R channel is traced into wall segments
 (`stencilTrace.ts`): marching squares on the texel centres with the iso line
@@ -755,7 +774,7 @@ the classifier cells). `?cutoutDilate=` overrides it for comparison.
 
 Known limits: where Overture returns nothing for the area, the cut falls
 back to the 10 m structure mask (blocky, uncapped, still solid against the
-classifier boxes it is drawn from). Gap buildings are 10 m (or 5 m) blocks,
+classifier boxes it is drawn from). A gap building Overture lacks with no 10 m cell free of wall feet (about 20 m across or less on the 10 m grid) has no roofed cell and is dropped by the roofed-over rule; the car drives through it. Gap buildings are 10 m (or 5 m) blocks,
 edges and all, and solid exactly as drawn. Remaining mismatches between
 picture and physics are sub-texel: the traced wall sits within the 0.5 m
 simplification tolerance of the cut edge, and the cut is per fragment while

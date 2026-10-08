@@ -21,7 +21,7 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, CutoutStencilBuilder, cutoutInputDigest, type CoverageGap, type PackedFootprints, type RoofInput
+  packFootprints, CutoutStencilBuilder, cutoutInputDigest, fallbackCarBoxes, ROOF_MIN_M, type CoverageGap, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
@@ -219,6 +219,17 @@ let physicsOnWalls = false;
 const cutoutWalls = new StencilColliders();
 /** The car is on the stencil walls right now (Cutout 3D with a stencil landed). */
 let carOnStencil = false;
+/** The car's colliders were last built for Cutout 3D (its fallback boxes pass the roofed-over rule). */
+let carInCutout = false;
+/**
+ * Cutout 3D's roofed-over rule (m): a classifier gap group fills the stencil, and a classifier box
+ * collides before the stencil lands, only if some cell's lowest geometry stands this far above the
+ * ground, so poles, trees and steps over open paving do not. ?cutoutRoofMin= overrides for tuning.
+ */
+const CUTOUT_ROOF_MIN_M = ((): number => {
+  const q = Number(new URLSearchParams(window.location.search).get('cutoutRoofMin') ?? '');
+  return Number.isFinite(q) && q > 0 ? q : ROOF_MIN_M;
+})();
 /** ?cutoutDebug=1 / window.__cutoutDebug(on): draw the walls the car can hit, coloured by source. */
 let cutoutDebug = new URLSearchParams(window.location.search).get('cutoutDebug') === '1';
 let cutoutDebugOverlay: CutoutDebugOverlay | null = null;
@@ -491,7 +502,7 @@ function setViewMode(mode: ViewMode): void {
   // stencil's traced walls in Cutout 3D, the boxes elsewhere
   if (hasPrisms !== physicsOnWalls) applyTileColliders(lastTileBoxes);
   // in and out of Cutout 3D: the stencil walls take over from (or hand back to) the boxes
-  else if (carOnStencil !== (isCutout && cutoutWalls.walls !== null)) refreshCarColliders();
+  else if (carOnStencil !== (isCutout && cutoutWalls.walls !== null) || carInCutout !== isCutout) refreshCarColliders();
   // the wheels ride the captured surface only in a view that shows it
   applySurface();
   if (cutoutDebug) updateCutoutDebug();
@@ -748,7 +759,10 @@ function runCutoutBuild(): void {
   const classifier = {
     structure: ts.structureGrid.slice(), grid, reachM: CUTOUT_GAP_REACH_M,
     // the roof tops decide which footprints the mesh rises over, capped or not
-    top: ts.activeTopGrid.slice()
+    top: ts.activeTopGrid.slice(),
+    // the lowest surfaces decide which gap cells are roofed over
+    lowRise: ts.activeLowRiseGrid.slice(),
+    roofMinM: CUTOUT_ROOF_MIN_M * world.terrainProvider.reliefBoost
   };
   const t0 = performance.now();
   let packed: PackedFootprints | undefined;
@@ -815,7 +829,7 @@ function runCutoutBuild(): void {
     log.info('cutout stencil built', cutoutStats);
     if (cutoutDebug) {
       console.info(`[cutoutDebug] stencil landed: ${polys.length} footprints, ${b.dropped} dropped for no rise, `
-        + `${b.gapCells} gap cells, ${b.segments.length / SEG_STRIDE} segments; skips: ${cutoutDigestSkips} digest, `
+        + `${b.gapCells} gap cells (${b.unroofedCells} unroofed dropped), ${b.segments.length / SEG_STRIDE} segments; skips: ${cutoutDigestSkips} digest, `
         + `${cutoutInputSkips} input, ${cutoutUnchanged} unchanged`);
     }
     if (wallsRebuilt) refreshCarColliders();
@@ -838,6 +852,7 @@ function runCutoutBuild(): void {
   cutoutWorker.onerror = e => finish({ id: job.id, error: e.message });
   const transfer: Transferable[] = [classifier.structure.buffer];
   if (classifier.top) transfer.push(classifier.top.buffer);
+  transfer.push(classifier.lowRise.buffer);
   if (packed) transfer.push(packed.coords.buffer, packed.ringStarts.buffer, packed.polyRings.buffer);
   if (roof) transfer.push(roof.base.buffer, roof.overtureTop.buffer);
   cutoutWorker.postMessage(job, transfer);
@@ -895,11 +910,21 @@ function logCutoutCoverage(): void {
  * the boxes (the second argument to setBuildingColliders).
  */
 function carColliders(colliders: readonly BuildingCollider[], nTileBoxes: number): BuildingCollider[] {
-  const walls = traits(viewMode).cutsToFootprints ? cutoutWalls.walls : null;
+  const cutout = traits(viewMode).cutsToFootprints;
+  const walls = cutout ? cutoutWalls.walls : null;
   carOnStencil = walls !== null;
+  carInCutout = cutout;
   if (walls) return [...walls, ...colliders.slice(nTileBoxes)];
+  // before the stencil lands, Cutout 3D's boxes pass the same roofed-over rule as its gap cells
+  if (cutout) return [...cutoutFallbackBoxes(colliders.slice(0, nTileBoxes)), ...colliders.slice(nTileBoxes)];
   if (!physicsOnWalls) return colliders as BuildingCollider[];
   return [...wallColliders(prismView.walls), ...colliders.slice(nTileBoxes)];
+}
+
+/** The classifier boxes Cutout 3D's cars hit before its stencil lands: the roofed-over ones. */
+function cutoutFallbackBoxes(tileBoxes: readonly BuildingCollider[]): BuildingCollider[] {
+  return fallbackCarBoxes(true, tileBoxes, tiles?.activeLowRiseGrid ?? null, tiles?.activeGrid ?? null,
+    CUTOUT_ROOF_MIN_M * world.terrainProvider.reliefBoost);
 }
 
 /** Hand the physics the cars' colliders again (a stencil landed, the view changed); the boxes stay as they are. */
@@ -925,7 +950,7 @@ function updateCutoutDebug(): void {
   const hf = world.terrainProvider.heightfield;
   const groundAt = (x: number, z: number) => hf.sample(x, z);
   if (cutoutWalls.segments) cutoutDebugOverlay.set(cutoutWalls.segments, null, groundAt);
-  else cutoutDebugOverlay.set(null, lastTileBoxes, groundAt);
+  else cutoutDebugOverlay.set(null, cutoutFallbackBoxes(lastTileBoxes), groundAt);
 }
 (window as any).__cutoutDebug = (on?: boolean) => {
   if (on !== undefined) cutoutDebug = on;
