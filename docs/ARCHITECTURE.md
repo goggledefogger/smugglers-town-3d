@@ -733,7 +733,9 @@ rise is at most the parent's cap, at most 8 layers (`CUTOUT_GROW_M`, off at a 2 
 cap (the higher where fronts meet) and counting `grown` / `grownTruncated`; gap cells paint only kept non-rough
 texels where the field is measured. Collider rule unchanged: `core` (grown texels included) is walled, `mask` is
 `dilate(core)`. A chunk that flips a kept or rough bit bumps the input digest's keep version and requests a rebuild
-on the usual 2 s cadence. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
+on the usual 2 s cadence. A new tileset sends `terrain` (a fresh, all-unknown field); a ground refinement sends
+`terrainUpdate`, which swaps the baseline and re-measures but keeps every known texel and the keep version, so the
+stencil does not flicker back to the old rule. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
 
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
 building when its TALLEST geometry rises 3.5 m above the ground estimate, so
