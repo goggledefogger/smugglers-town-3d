@@ -947,11 +947,19 @@ let heightsTerrainSent: TerrainProvider | null = null;
 let heightsTerrainRefined = false;
 /** Chunks owed a re-measure after a refinement; drained, they bump the keep version once (roof caps read the new ground). */
 const remeasure = new RemeasureTracker();
+/** Times the set drained (live check: `requests` in the stencil stats only moves when a mask lands, this moves at once). */
+let remeasureDrains = 0;
+/** The last owed chunk is re-measured, or gave up: roof caps read the new ground, so rebuild once. */
+function bumpRemeasured(): void {
+  remeasureDrains++;
+  cutoutKeepVersion++;
+  cutoutRebuild.request();
+}
 const heightChunkStats = new Map<number, { known: number; kept: number; rough: number; changed: number }>();
 const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
 let heightAtReq = 0;
 
-function heightStats(): { chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number; rough: number } {
+function heightStats(): { remeasurePending: number; remeasureDrains: number; rebuildStarts: number; chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number; rough: number } {
   let known = 0, kept = 0, rough = 0;
   for (const c of heightChunkStats.values()) {
     known += c.known;
@@ -959,12 +967,14 @@ function heightStats(): { chunks: number; captured: number; renderMs: number; re
     rough += c.rough;
   }
   const t = heightCapture?.timings;
-  return { chunks: heightChunkStats.size, captured: t?.captured ?? 0, renderMs: t?.renderMs ?? 0, readbackMs: t?.readbackMs ?? 0, known, kept, rough };
+  return { remeasurePending: remeasure.pendingCount, remeasureDrains, rebuildStarts: cutoutRebuild.starts, chunks: heightChunkStats.size, captured: t?.captured ?? 0, renderMs: t?.renderMs ?? 0, readbackMs: t?.readbackMs ?? 0, known, kept, rough };
 }
 
 function onHeightReply(r: HeightReply): void {
   if (r.kind === 'heightsError') {
     log.warn('cutout height field message failed', r.message);
+    // a failed chunk is still answered: without this its outstanding count never clears and the set never drains
+    if (r.chunk !== undefined && remeasure.applied(r.chunk)) bumpRemeasured();
     return;
   }
   if (r.kind === 'heightsApplied') {
@@ -972,7 +982,8 @@ function onHeightReply(r: HeightReply): void {
     // the last re-measure after a refinement also rebuilds, whether or not it flipped a bit: caps baked while a
     // chunk still read the old ground are only corrected by a rebuild
     const drained = remeasure.applied(r.chunk);
-    if (r.changed > 0 || drained) {
+    if (drained) bumpRemeasured();
+    else if (r.changed > 0) {
       cutoutKeepVersion++;
       cutoutRebuild.request();
     }
@@ -1007,6 +1018,8 @@ function updateHeights(nowMs: number): void {
     const terrain = { size: hf.size, segs: hf.segs, data: hf.raw.slice() };
     worker.postMessage({ kind: 'terrainUpdate', terrain } satisfies HeightMessage, [terrain.data.buffer]);
     heightsTerrainRefined = false;
+    // the worker now holds the new ground: a chunk posted from here on is measured against it, one posted before was not
+    remeasure.begin();
     heightCapture?.reset();
   }
   heightCapture ??= new HeightCapture(
@@ -1016,7 +1029,9 @@ function updateHeights(nowMs: number): void {
       remeasure.posted(chunk);
       const boost = (cutoutTerrain ?? world.terrainProvider).reliefBoost;
       cutoutWorker.postMessage({ kind: 'heights', chunk, data, keepRiseM: CUTOUT_MIN_RISE_M * boost } satisfies HeightMessage, [data.buffer]);
-    }
+    },
+    // a chunk that lost its fine tiles will not be captured: stop waiting for it
+    chunk => { if (remeasure.skipped(chunk)) bumpRemeasured(); }
   );
   heightCapture.update(nowMs, true);
 }
@@ -1980,7 +1995,6 @@ function step(now: number): void {
         surfaceCapture?.markDirty();
         // the worker's terrain is a copy of the ground just overwritten: send it again and re-measure
         heightsTerrainRefined = true;
-        remeasure.begin();
         // the walls were baked against the old ground and no stencil bit flips for a refinement: stand them on the new
         {
           const hf = world.terrainProvider.heightfield;

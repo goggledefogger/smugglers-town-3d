@@ -39,7 +39,7 @@ export type HeightMessage =
 export type HeightReply =
   | ({ readonly kind: 'heightsApplied'; readonly chunk: number } & HeightChunkStats)
   /** a heights or terrain message threw (a bad chunk size, say): the field is as it was; this is not a stencil job */
-  | { readonly kind: 'heightsError'; readonly message: string }
+  | { readonly kind: 'heightsError'; readonly message: string; readonly chunk?: number }
   | { readonly kind: 'heightAtResult'; readonly req: number; readonly rise: number; readonly state: HeightState; readonly chunk: number };
 
 export type FootprintMaskResult =
@@ -75,7 +75,7 @@ ctx.onmessage = e => {
         ctx.postMessage({ kind: 'heightAtResult', req: m.req, rise: NaN, state: 'never', chunk: chunkAt(m.x, m.z) });
       }
     } catch (err) {
-      ctx.postMessage({ kind: 'heightsError', message: String(err) });
+      ctx.postMessage({ kind: 'heightsError', message: String(err), ...(m.kind === 'heights' ? { chunk: m.chunk } : {}) });
     }
     return;
   }
