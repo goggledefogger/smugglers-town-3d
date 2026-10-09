@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import {
   createHeightField, applyHeightChunk, riseAt, roughAt, heightAt, sampleTerrain, encodeRise, decodeRise, decodeRiseTop,
   HEIGHT_N, HEIGHT_CHUNK_M, KEPT_BIT, ROUGH_BIT, RISE_UNKNOWN, type HeightTerrain
@@ -270,5 +270,35 @@ describe('height field', () => {
       applyHeightChunk(f, 0, w, flat(0), KEEP);
       expect(f.data[500]! & ROUGH_BIT).toBe(0);
     });
+  });
+});
+
+describe('worker terrain-only update', () => {
+  it('swaps the terrain and keeps every known texel and the keep state', async () => {
+    const posted: any[] = [];
+    const fake = { onmessage: null as any, postMessage: (m: unknown) => { posted.push(m); } };
+    vi.stubGlobal('self', fake);
+    await import('../src/services/overture/footprintMaskWorker.ts');
+    const send = (m: unknown) => fake.onmessage({ data: m });
+    send({ kind: 'terrain', terrain: flat(0) });
+    send({ kind: 'heights', chunk: 0, data: chunkOf(6), keepRiseM: KEEP });
+    const first = posted.find(p => p.kind === 'heightsApplied');
+    expect(first.known).toBe(M * M);
+    expect(first.kept).toBe(M * M);
+    // refined ground, 1 m higher: the field is not cleared
+    send({ kind: 'terrainUpdate', terrain: flat(1) });
+    send({ kind: 'heightAt', req: 1, x: -1799.5, z: -1799.5 });
+    const at = posted.find(p => p.kind === 'heightAtResult' && p.req === 1);
+    expect(at).toMatchObject({ state: 'kept', rise: 6 });
+    // re-measuring the same surface over the new ground flips nothing, so a rebuild would not need a new version
+    send({ kind: 'heights', chunk: 0, data: chunkOf(7), keepRiseM: KEEP });
+    const again = posted.filter(p => p.kind === 'heightsApplied')[1];
+    expect(again.changed).toBe(0);
+    expect(again.known).toBe(M * M);
+    // a full 'terrain' message still starts over
+    send({ kind: 'terrain', terrain: flat(0) });
+    send({ kind: 'heightAt', req: 2, x: -1799.5, z: -1799.5 });
+    expect(posted.find(p => p.kind === 'heightAtResult' && p.req === 2).state).toBe('never');
+    vi.unstubAllGlobals();
   });
 });

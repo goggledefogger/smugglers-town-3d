@@ -26,6 +26,11 @@ export interface FootprintMaskJob extends CutoutJob {
 export type HeightMessage =
   /** once per tileset: the 10 m terrain the rise is measured from; starts a fresh, all-unknown field */
   | { readonly kind: 'terrain'; readonly terrain: HeightTerrain }
+  /**
+   * the ground was refined: swap the terrain the rise is measured from and keep every known texel (and so the
+   * keep version), so the stencil does not fall back to the old rule and refill chunk by chunk
+   */
+  | { readonly kind: 'terrainUpdate'; readonly terrain: HeightTerrain }
   /** one measured 900 m chunk (transferred); NaN texels are unknown */
   | { readonly kind: 'heights'; readonly chunk: number; readonly data: Float32Array; readonly keepRiseM: number }
   /** debug: what the field says at world (x, z) */
@@ -57,6 +62,9 @@ ctx.onmessage = e => {
       if (m.kind === 'terrain') {
         heightTerrain = m.terrain;
         heightField = createHeightField();
+      } else if (m.kind === 'terrainUpdate') {
+        heightTerrain = m.terrain;
+        heightField ??= createHeightField();
       } else if (m.kind === 'heights') {
         if (!heightField || !heightTerrain) return;
         const stats = applyHeightChunk(heightField, m.chunk, m.data, heightTerrain, m.keepRiseM);

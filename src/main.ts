@@ -942,6 +942,8 @@ function cutoutCoverage(): (CoverageGap & { footprints: number; gapCells: number
 let heightCapture: HeightCapture | null = null;
 /** The terrain the worker's field was last seeded from; a new tileset sends it again and starts a fresh field. */
 let heightsTerrainSent: TerrainProvider | null = null;
+/** The ground was refined in place: the worker needs the new terrain, but keeps its field. */
+let heightsTerrainRefined = false;
 const heightChunkStats = new Map<number, { known: number; kept: number; rough: number; changed: number }>();
 const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
 let heightAtReq = 0;
@@ -985,11 +987,20 @@ function updateHeights(nowMs: number): void {
     const terrain = { size: hf.size, segs: hf.segs, data: hf.raw.slice() };
     worker.postMessage({ kind: 'terrain', terrain } satisfies HeightMessage, [terrain.data.buffer]);
     heightsTerrainSent = tp;
+    heightsTerrainRefined = false;
     heightChunkStats.clear();
     heightCapture?.reset();
     // the worker's field starts over, all unknown: the stencil must stop using the old one
     cutoutKeepVersion++;
     cutoutRebuild.request();
+  } else if (heightsTerrainRefined) {
+    // same tileset, refined ground: swap the baseline and re-measure, but keep what is known (no version bump, so
+    // the stencil keeps its rule; a chunk that really flips a bit bumps it as usual)
+    const hf = tp.heightfield;
+    const terrain = { size: hf.size, segs: hf.segs, data: hf.raw.slice() };
+    worker.postMessage({ kind: 'terrainUpdate', terrain } satisfies HeightMessage, [terrain.data.buffer]);
+    heightsTerrainRefined = false;
+    heightCapture?.reset();
   }
   heightCapture ??= new HeightCapture(
     renderer.renderer, () => tiles, () => (cutoutTerrain ?? world.terrainProvider).heightfield,
@@ -1959,7 +1970,7 @@ function step(now: number): void {
         if (groundStreamer) groundStreamer.refresh();
         surfaceCapture?.markDirty();
         // the worker's terrain is a copy of the ground just overwritten: send it again and re-measure
-        heightsTerrainSent = null;
+        heightsTerrainRefined = true;
         groundBuilder = null;
       }
     }
