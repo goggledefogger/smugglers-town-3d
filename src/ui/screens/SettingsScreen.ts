@@ -7,7 +7,7 @@ import type { GameEvents } from '../../app/events.ts';
 import { GAMEPAD_BUTTON_NAMES, GAMEPAD_AXIS_NAMES } from '../../input/gamepadNormalization.ts';
 import {
   type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
-  loadResolution3D, saveResolution3D
+  loadResolution3D, saveResolution3D, getWeakDeviceHint
 } from '../../services/tiles/resolutionProfiles.ts';
 
 /**
@@ -269,7 +269,7 @@ export class SettingsScreen extends LitElement {
   constructor() {
     super();
     this.listening = null;
-    this.resolutionMode = loadResolution3D(null);
+    this.resolutionMode = loadResolution3D(null, getWeakDeviceHint());
   }
 
   private handleResolutionChange(mode: Resolution3DMode): void {

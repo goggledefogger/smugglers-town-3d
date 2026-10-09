@@ -65,7 +65,7 @@ import { FOOTPRINT_RADIUS_M, type TileStreamer } from './services/tiles/Tileset.
 import { AmortizedGroundBuilder, TILE_GROUND_GAP, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
 import {
   type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
-  loadResolution3D, saveResolution3D
+  loadResolution3D, saveResolution3D, setWeakDeviceHint
 } from './services/tiles/resolutionProfiles.ts';
 import { SurfaceHeightfield, surfaceGate, type SurfaceGate } from './core/terrain/SurfaceHeightfield.ts';
 import { SurfaceCapture, SurfacePreview } from './render/SurfaceCapture.ts';
@@ -660,8 +660,9 @@ function rebuildPrisms(): boolean {
 }
 
 /** Cutout 3D's device-dependent settings (render/cutoutConfig.ts): the stencil texel and the roof cap. */
-const { texelM: CUTOUT_TEXEL_M, roofCap: CUTOUT_ROOF_CAP } =
+const { texelM: CUTOUT_TEXEL_M, roofCap: CUTOUT_ROOF_CAP, weakDevice: WEAK_DEVICE } =
   cutoutDeviceSettings(renderer.renderer.capabilities.maxTextureSize);
+setWeakDeviceHint(WEAK_DEVICE);
 /** The stencil covers the footprint fetch radius both ways, and no more. */
 const CUTOUT_MASK_OPTS = {
   size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M, roofCap: CUTOUT_ROOF_CAP,
@@ -1653,7 +1654,9 @@ window.addEventListener('keydown', (e) => {
 });
 
 // ---- 3D Resolution & Photogrammetry Fidelity Profiles ----
-let currentResolution3D: Resolution3DMode = loadResolution3D(urlParams?.get('res3d') ?? null);
+// the renderer exists since the top of the file and cutoutDeviceSettings has run by here, so the
+// weak signal (same one as the Cutout stencil texel) is known before the first tile load
+let currentResolution3D: Resolution3DMode = loadResolution3D(urlParams?.get('res3d') ?? null, WEAK_DEVICE);
 
 function applyResolutionProfile(mode: Resolution3DMode): void {
   currentResolution3D = mode;

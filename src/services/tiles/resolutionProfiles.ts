@@ -24,6 +24,7 @@ export interface Resolution3DProfile {
  * 3D Resolution & Photogrammetry Fidelity Profiles
  *
  * Balanced:
+ *   Also the startup default on a weak device (see loadResolution3D).
  *   Baseline settings tuned for modest hardware and laptops. Clamps geometric
  *   error to 1.5m and caps tiles at 350 to ensure 60fps on integrated graphics.
  *   Ground satellite imagery streams at Zoom 18 (~0.24m/pixel).
@@ -99,18 +100,30 @@ const STORAGE_KEY = 'stt.res3d';
  */
 export const DEFAULT_RESOLUTION_3D: Resolution3DMode = 'high';
 
+/** The startup default on a weak device (cutoutDeviceSettings().weakDevice): Balanced, not High. */
+export const WEAK_DEVICE_RESOLUTION_3D: Resolution3DMode = 'balanced';
+
+let weakDeviceHint = false;
+/** main.ts records the renderer-based weak verdict once, for callers that have no renderer (the settings screen). */
+export const setWeakDeviceHint = (weak: boolean): void => { weakDeviceHint = weak; };
+export const getWeakDeviceHint = (): boolean => weakDeviceHint;
+
 const isMode = (v: unknown): v is Resolution3DMode =>
   typeof v === 'string' && (RESOLUTION_3D_MODES as readonly string[]).includes(v);
 
 /**
  * The startup mode: an explicit `?res3d=` wins, then the saved choice, then the
  * default. Both the app and the settings screen read it, so they cannot drift.
+ * The default is High, except that a weak device (few cores, little memory or a
+ * small max texture) starts at Balanced; an explicit url param or a saved
+ * choice still wins there.
  */
-export function loadResolution3D(urlParam: string | null): Resolution3DMode {
+export function loadResolution3D(urlParam: string | null, weakDevice = false): Resolution3DMode {
+  const fallback = weakDevice ? WEAK_DEVICE_RESOLUTION_3D : DEFAULT_RESOLUTION_3D;
   if (isMode(urlParam)) return urlParam;
-  if (typeof localStorage === 'undefined') return DEFAULT_RESOLUTION_3D;
+  if (typeof localStorage === 'undefined') return fallback;
   const saved = localStorage.getItem(STORAGE_KEY);
-  return isMode(saved) ? saved : DEFAULT_RESOLUTION_3D;
+  return isMode(saved) ? saved : fallback;
 }
 
 export function saveResolution3D(mode: Resolution3DMode): void {

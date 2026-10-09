@@ -233,6 +233,20 @@ describe('resolution persistence', () => {
     expect(DEFAULT_RESOLUTION_3D).toBe('high');
   });
 
+  it('starts a weak device at balanced when nothing is saved', () => {
+    expect(loadResolution3D(null, true)).toBe('balanced');
+  });
+
+  it('keeps an explicit url param or a saved choice on a weak device', () => {
+    expect(loadResolution3D('high', true)).toBe('high');
+    saved['stt.res3d'] = 'ultra';
+    expect(loadResolution3D(null, true)).toBe('ultra');
+  });
+
+  it('keeps high on a strong device', () => {
+    expect(loadResolution3D(null, false)).toBe('high');
+  });
+
   it('lets an explicit url param beat the saved choice', () => {
     saved['stt.res3d'] = 'ultra';
     expect(loadResolution3D('balanced')).toBe('balanced');

@@ -889,6 +889,14 @@ patterns:
 | **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.5 reach padding by default. |
 | **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 
+### Resolution profile
+
+The 3D resolution profile (`services/tiles/resolutionProfiles.ts`) starts at High:
+an explicit `?res3d=` wins, then the saved choice, then the default. A weak device
+(the same `cutoutDeviceSettings().weakDevice` signal the Cutout stencil uses: 4 or
+fewer cores, 4 GB or less, or a max texture under 4096) starts at Balanced instead.
+A `?res3d=` or a saved choice is never overridden.
+
 ## UI notes
 
 Components style themselves from the token scale in `index.html`'s `:root`
