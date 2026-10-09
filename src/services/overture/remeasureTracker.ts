@@ -46,6 +46,14 @@ export class RemeasureTracker {
     return this.pending.size === 0;
   }
 
+  /**
+   * A chunk owed a re-measure was turned away by the capture (it holds no fine tile any more, so it is not coming):
+   * it stops being owed. True when that drains the set.
+   */
+  skipped(chunk: number): boolean {
+    return this.pending.delete(chunk) && this.pending.size === 0;
+  }
+
   /** A fresh field (new tileset or world): nothing seen, nothing owed. */
   reset(): void {
     this.seen.clear();

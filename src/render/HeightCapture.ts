@@ -64,7 +64,9 @@ export class HeightCapture {
     /** The base ground, for the camera's depth range. */
     private readonly base: () => HeightSampler,
     /** A finished chunk: world Y per texel, NaN unknown. The array is the callee's to keep or transfer. */
-    private readonly onChunk: (chunk: number, worldY: Float32Array) => void
+    private readonly onChunk: (chunk: number, worldY: Float32Array) => void,
+    /** A due chunk was turned away (no fine tile under it): it will not be captured until a tile loads there. */
+    private readonly onSkip?: (chunk: number) => void
   ) {
     this.core = new TopDownCapture(renderer, HEIGHT_CHUNK_M, HEIGHT_ENCODE_OFFSET, 'height');
   }
@@ -98,7 +100,10 @@ export class HeightCapture {
     if (r) this.schedule.markRect(r, nowMs);
     const pick = this.schedule.take(nowMs, this.core.inFlight);
     if (pick < 0) return;
-    if (!this.holdsFineTile(src, pick)) return;
+    if (!this.holdsFineTile(src, pick)) {
+      this.onSkip?.(pick);
+      return;
+    }
     this.capture(src, pick);
   }
 
