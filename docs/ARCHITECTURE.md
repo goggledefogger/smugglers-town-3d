@@ -39,6 +39,36 @@ Dependency rules (enforced by review, not tooling):
 - `audio/` sits beside `render/`: `AudioManager` reads the same `WorldView`
   each frame and depends on nothing else in the stack; nothing depends on it.
 
+## View modes: Cutout 3D is the default
+
+The game draws a real place one way by default and keeps eight other ways
+reachable for comparison (the V key cycles them; `?view=<mode>` starts in one).
+The table of what each draws is `render/viewModes.ts`; `DEFAULT_VIEW_MODE` there
+is the starting view. Since 2026-10-08 that is **Cutout 3D** (`cutout-3d`), the
+chosen architecture, after the owner judged it the best of the modes. In five lines:
+
+1. Overture footprints (plus classifier cells where Overture has a gap) are filled into a 1 m stencil, dilated 2 m.
+2. Each footprint is grown into the connected photogrammetry using per-texel heights captured top-down from the loaded tiles, with a skirt of up to 3 m at a wall's foot.
+3. Every Google tile fragment outside the stencil is discarded per fragment; streamed satellite ground shows beneath.
+4. A roof cap per footprint trims tree canopy more than 3 m above the roof.
+5. The car hits walls traced from the same stencil, so picture and physics have one source.
+
+Details: the "Cutout 3D" section under Services, and
+`docs/plans/2026-10-08-cutout-per-texel-heights.md`.
+
+Options considered (all still in the build, none removed):
+
+| Mode (`?view=`) | What it tried | Why Cutout 3D won over it |
+| :--- | :--- | :--- |
+| `photoreal` (Real 3D) | Google's tiles raw; the default until 2026-10-08. | Parked cars, kerbs and street furniture are baked into the mesh, and the car hits classifier boxes it cannot see (the render/collision mismatch noted under the clutter filter). |
+| `masked-tiles` | Real 3D with the Swept clutter filter over satellite ground. | The cut is per vertex on a 10 m mask, so it follows triangle edges, and it is render-side only: what it hides still collides. |
+| `best-3d` | Tile vertices snapped onto the collider boxes, so the tiles are the walls. | Shards, walls buried in overlapping boxes, bare faces; kept for comparison. |
+| `painted-3d` | The collider boxes wearing photos baked from the tiles. | Exact collision, but photo blur (source magnification) and box silhouettes (2026-09-17 mode survey). |
+| `painted-metro` | Painted 3D plus a procedural facade where the bake saw nothing. | Still box silhouettes; procedural walls read as a game. Kept as a comparison view. |
+| `footprint-3d` | Overture prisms wearing baked photos; the car hits the prism walls. | Exact outlines, but the baked photos blur. Kept as a comparison view. |
+| `vector-city` | No Google tiles: facade prisms, satellite roofs, OSM road ribbons. | Drops the photogrammetry entirely; kept as the honest QA view of the carved road corridors. |
+| `game3d` (Arcade 3D) | Arcade-coloured collider boxes on a 10 m terrain mesh. | Full collision parity, but stylized low-poly instead of real imagery; kept as the collider QA view. |
+
 ## Frame data flow
 
 ```
@@ -589,9 +619,9 @@ through prisms the classifier had missed.
 The baker now bakes at most two walls a frame: its CPU budget could not see
 the GPU, and each bake draws every loaded tile once more, so a downtown frame
 that queued six walls read 50 ms with the CPU side under 4. Best 3D+ (per-cell
-columns) was removed in the same pass; the V key cycles Real 3D, Masked,
-Cutout 3D, Best 3D, Painted 3D, Painted Metropolis, Footprint 3D, Vector
-City, Arcade (the table is `render/viewModes.ts`).
+columns) was removed in the same pass; the V key cycles Cutout 3D (the
+default), Real 3D, Masked, Best 3D, Painted 3D, Painted Metropolis, Footprint
+3D, Vector City, Arcade (the table is `render/viewModes.ts`).
 
 ### "Game 3D" Visual Mode (`render/BuildingMeshView.ts`)
 To eliminate the visual-vs-collision mismatch inherent in photogrammetry,
@@ -635,7 +665,7 @@ regardless of mode, so anything the filter hides is still solid. That is a
 deliberate visual-versus-collision mismatch and worth remembering when a street
 looks clear but drives blocked.
 
-### "Cutout 3D" Visual Mode (`services/overture/footprintMask.ts`, `render/TileClutterFilter.ts` cutout)
+### "Cutout 3D" Visual Mode, the default (`services/overture/footprintMask.ts`, `render/TileClutterFilter.ts` cutout)
 
 Real 3D's buildings with Footprint 3D's solidity: the photogrammetry mesh is
 the building, everything else is satellite ground. One source: the stencil
@@ -850,7 +880,7 @@ patterns:
 | :--- | :--- | :--- | :--- | :--- |
 | **A. 2.5D Raster + DeckGrid** *(Current)* | Rasterize tile mesh to 10m DSM (`top`/`low`/`mask`); extract DTM via morphological opening; sample decks bilinearly in $O(1)$. | Fast, deterministic in Node, zero runtime raycasts, frame-budgeted via `AmortizedGroundBuilder`. | Underdetermined: distinguishing bridges vs roofs vs slopes requires heuristic rules that risk city-by-city drift. | **Active default**. Standardized on $1:1$ scale with $O(1)$ queries. |
 | **B. Mesh-BVH Collision** *(Cesium/Unreal pattern)* | Wrap GLTF meshes in spatial bounding hierarchies (`three-mesh-bvh`); raycast wheels down; sphere-cast walls. | True 3D topology; no classification needed for bridges or tunnels. | Photogrammetry is noisy: melted parked cars, jagged curbs, and non-manifold edges cause high-speed vehicle snags; BVH generation hitches during streaming. | Evaluated & spiked; mesh raycasting replaced by deckGrid in PR #2. |
-| **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle. |
+| **C. Procedural Autogen / "Game 3D"** *(Flight Sim / Blackshark.ai)* | Use geospatial tiles purely as spatial input; render clean procedural boxes, roads, and props. | **Eliminates mismatches by construction**: 100% collision-visual parity, zero invisible walls, authentic arcade look. | Replaces photorealistic imagery with stylized low-poly graphics. | **Implemented** in `BuildingMeshView.ts`; accessible via view-mode toggle (`?view=game3d`). The default view is Cutout 3D, see View modes. |
 | **E. Vector Road Hybrid** *(Autonomous Sim / OSM)* | Ingest OpenStreetMap road centerlines (`highway=*`, `bridge=yes`, `layer=*`); drape vector ribbons over 3D tiles. | 100% semantic ground truth; exact lane widths, overpasses, and approach ramps with zero heuristics. | Additional network query (Overpass API / OSM vectors) per relocation. | **Implemented on `main`** in `services/osm/roads.ts` with reactive worker rebuilds (`onRoadsLoaded`) and 0.5 reach padding by default. |
 | **F. Sub-Lane High-Res Grid (5m)** *(Fine-grained Voxelization)* | Increase raster resolution from 10m to 5m cells for tile collision pass. | Separates 6–8m vehicle lanes from curbside tree canopies and building overhangs 100% offline. | 4× cell count; requires workerized rasterization and memory indexing. | **Spiked & validated** in driving experiments; eliminates curbside canopy bleed. |
 

@@ -70,7 +70,8 @@ rather than driving to base and waiting. Left:
 - Street clutter filter **(Done)**: `TileClutterFilter` patches every tile
   material so street-level photogrammetry noise is flattened onto the ground
   or discarded entirely, leaving buildings over streamed satellite ground.
-  Raw Photoreal (unfiltered) is the default view; Masked Tiles applies Swept,
+  Raw Photoreal (unfiltered) was the default view until 2026-10-08, when Cutout 3D
+  replaced it (ARCHITECTURE, "View modes"); Masked Tiles applies Swept,
   which keeps kerbside facades (and street trees) over streamed satellite
   ground, while Best 3D uses Hidden, discarding non-building geometry
   completely.

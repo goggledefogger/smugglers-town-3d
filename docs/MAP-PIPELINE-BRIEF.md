@@ -238,7 +238,7 @@ An in-engine diagnostic suite was built into `tileColliders.ts` and `main.ts` (c
 
 ## 10. Verification Coordinates & Diagnostic Shortcuts
 
-- **Russian Hill (SF):** `?lat=37.79344&lon=-122.42127&debug` (Press `V` for Game 3D collider view).
+- **Russian Hill (SF):** `?lat=37.79344&lon=-122.42127&debug` (add `&view=game3d` for the Game 3D collider view; the default view is Cutout 3D since 2026-10-08).
 - **Lombard Street (SF):** `?scenario=lombard_street_sf&debug` (Steep 27% hairpin switchbacks).
 - **French Quarter (NOLA):** `?scenario=french_quarter_nola&debug` (Sea-level dense low-rise grid).
 - **St. Johns Obstacle Test Site (Portland):** `?lat=45.58969&lon=-122.76238&debug` (Press `T` to teleport to `X:290, Z:12`; press `F9` or `E` to cycle experiment modes).
