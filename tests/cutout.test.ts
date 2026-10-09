@@ -1142,6 +1142,33 @@ describe('height field in the stencil (docs/plans/2026-10-08-cutout-per-texel-he
       expect(verts(built.segments).some(([x]) => Math.abs(x) < 15)).toBe(false);
     });
 
+    describe('KeepFilter early scan', () => {
+      const fillOf = (f: HeightField) => countOn(layersOf([lot()], f, { ...OPTS, growM: 0, dilateM: 0 }).core);
+      it('an all-clear box (kept, or never measured) fills whole', () => {
+        const kept = groundField();
+        setBox(kept, -14, 14, -14, 14, 20);
+        expect(fillOf(kept)).toBe(400);
+        expect(fillOf(createHeightField())).toBe(400);
+      });
+      it('one blocked byte in the box runs the morphology as before', () => {
+        const f = groundField();
+        setBox(f, -14, 14, -14, 14, 20);
+        f.data[(0 - HEIGHT_ORIGIN) * HEIGHT_N + (0 - HEIGHT_ORIGIN)] = encodeRise(0);
+        const one = fillOf(f);
+        // a single blocked texel is 1 m stair-step noise: the close pass fills it
+        expect(one).toBe(400);
+        const big = groundField();
+        setBox(big, -14, 14, -14, 14, 20);
+        setBox(big, -2, 2, -2, 2, 0, 0);
+        expect(fillOf(big)).toBe(384);
+        // a blocked byte only in the 2 texel margin outside the polygon is found too, and changes nothing inside
+        const g = groundField();
+        setBox(g, -14, 14, -14, 14, 20);
+        g.data[(0 - HEIGHT_ORIGIN) * HEIGHT_N + (11 - HEIGHT_ORIGIN)] = encodeRise(0);
+        expect(fillOf(g)).toBe(400);
+      });
+    });
+
     it('gap-cell paint-and-restore leaves grown texels outside the 2 m band alone', () => {
       // growth is 8 m but the dilation band is 2 m: a grown texel 8 m past the polygon is outside the band. The
       // restore clears what the paint wrote; this proves a gap cell never holds a core texel, grown or not,

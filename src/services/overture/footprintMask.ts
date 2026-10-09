@@ -221,6 +221,9 @@ class KeepFilter {
     this.ei0 = i0 - M; this.ej0 = j0 - M;
     const w = i1 - i0 + 1 + 2 * M, h = j1 - j0 + 1 + 2 * M;
     this.ew = w;
+    // most boxes hold nothing blocked: look first (stopping at the first blocked byte), and only then image the
+    // box and run the morphology
+    if (!this.anyBlocked(w, h)) return false;
     if (this.img.length < w * h) { this.img = new Uint8Array(w * h); this.tmp = new Uint8Array(w * h); this.tmp2 = new Uint8Array(w * h); }
     const img = this.img, f = this.f;
     let blocked = false;
@@ -252,6 +255,29 @@ class KeepFilter {
     morph3(img, a, b, w, h, false);
     morph3(b, a, img, w, h, true);
     return true;
+  }
+
+  /** True when some texel of the w x h box at (ei0, ej0) is measured and not kept. */
+  private anyBlocked(w: number, h: number): boolean {
+    const f = this.f;
+    for (let y = 0; y < h; y++) {
+      const g0 = this.at(this.ei0, this.ej0 + y);
+      const run = g0 >= 0 && this.at(this.ei0 + w - 1, this.ej0 + y) === g0 + w - 1;
+      if (run) {
+        for (let x = 0; x < w; x++) {
+          const b = f[g0 + x]!;
+          if ((b & RISE_MASK) !== RISE_UNKNOWN && (b & KEPT_BIT) === 0) return true;
+        }
+        continue;
+      }
+      for (let x = 0; x < w; x++) {
+        const g = this.at(this.ei0 + x, this.ej0 + y);
+        if (g < 0) continue;
+        const b = f[g]!;
+        if ((b & RISE_MASK) !== RISE_UNKNOWN && (b & KEPT_BIT) === 0) return true;
+      }
+    }
+    return false;
   }
 
   fills(i: number, j: number): boolean {
