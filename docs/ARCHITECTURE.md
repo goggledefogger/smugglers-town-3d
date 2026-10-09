@@ -735,7 +735,10 @@ texels where the field is measured. Collider rule unchanged: `core` (grown texel
 `dilate(core)`. A chunk that flips a kept or rough bit bumps the input digest's keep version and requests a rebuild
 on the usual 2 s cadence. A new tileset sends `terrain` (a fresh, all-unknown field); a ground refinement sends
 `terrainUpdate`, which swaps the baseline and re-measures but keeps every known texel and the keep version, so the
-stencil does not flicker back to the old rule. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
+stencil does not flicker back to the old rule. The refinement also re-stands the wall colliders on the new ground
+(`StencilColliders.reground`, no digest change), and a `RemeasureTracker` holds every chunk seen before the swap until
+its re-measure lands or the capture turns it away (no fine tile left), then bumps the keep version once so roof caps
+read the new ground even when no bit flipped. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
 
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
 building when its TALLEST geometry rises 3.5 m above the ground estimate, so
