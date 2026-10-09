@@ -883,6 +883,20 @@ describe('TileClutterFilter cutout', () => {
     for (let k = 0; k < 8; k++) expect(f.cycleMode()).not.toBe('cutout');
   });
 
+  it('toggles cutout and off only, in a view that cuts to footprints (the F key in Cutout 3D)', () => {
+    const f = new TileClutterFilter(hf(), new Uint8Array(16), 4);
+    f.mode = 'cutout';
+    expect(f.cycleMode(true)).toBe('off');
+    expect(f.cycleMode(true)).toBe('cutout');
+    expect(f.cycleMode(true)).toBe('off');
+    // from a Real 3D mode it lands on cutout, the view's own
+    f.mode = 'swept';
+    expect(f.cycleMode(true)).toBe('cutout');
+    // the other views keep the four-mode cycle
+    f.mode = 'off';
+    expect([f.cycleMode(), f.cycleMode(), f.cycleMode(), f.cycleMode()]).toEqual(['flatten', 'hidden', 'swept', 'off']);
+  });
+
   it('samples the footprint stencil per fragment at the world position and discards outside it', () => {
     const f = new TileClutterFilter(hf(), new Uint8Array(16), 4);
     const shader = litShader();

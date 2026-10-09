@@ -57,7 +57,7 @@ import { injectDetailGrain } from './DetailGrain.ts';
 export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept' | 'cutout';
 /** Index order is baked into the shader's mode comparisons: append, never reorder. */
 export const CLUTTER_MODES: readonly ClutterMode[] = ['off', 'flatten', 'hidden', 'swept', 'cutout'];
-/** The clutter button's cycle: cutout belongs to the Cutout 3D view, not the button. */
+/** The clutter button's cycle outside Cutout 3D: cutout belongs to that view, where F toggles it with off. */
 const CYCLED_MODES = 4;
 
 /** Real metres above the ground estimate under which tile geometry is street clutter (a car is ~1.5 m). */
@@ -547,8 +547,17 @@ export class TileClutterFilter {
     this.uMode.value = CLUTTER_MODES.indexOf(m);
   }
 
-  cycleMode(): ClutterMode {
-    this.uMode.value = (this.uMode.value + 1) % CYCLED_MODES;
+  /**
+   * The clutter button (F). In a view that cuts to footprints (Cutout 3D) it toggles the
+   * stencil on and off, so F always comes back to 'cutout'; elsewhere it steps through the
+   * four Real 3D modes (off, flatten, hidden, swept) and never lands on 'cutout'.
+   */
+  cycleMode(cutsToFootprints = false): ClutterMode {
+    if (cutsToFootprints) {
+      this.mode = this.mode === 'cutout' ? 'off' : 'cutout';
+    } else {
+      this.uMode.value = (this.uMode.value + 1) % CYCLED_MODES;
+    }
     return this.mode;
   }
 

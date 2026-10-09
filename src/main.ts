@@ -268,7 +268,8 @@ function updateClutterUi(): void {
 
 function cycleClutterMode(): void {
   if (!clutterFilter) return;
-  clutterMode = clutterFilter.cycleMode();
+  // Cutout 3D: F toggles the stencil with off; the other views step through the four Real 3D modes
+  clutterMode = clutterFilter.cycleMode(traits(viewMode).cutsToFootprints);
   if (groundStreamer) groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   updateClutterUi();
 }
