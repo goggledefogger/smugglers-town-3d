@@ -135,6 +135,9 @@ export function chunkAt(x: number, z: number): number {
  * Two passes: rise and the kept hysteresis, then the rough bit from the floats (neighbours across a chunk seam,
  * or with no float this time, come from the field: their stored rise plus the terrain).
  */
+let scratchBefore: Uint8Array | null = null;
+let scratchTerrRow: Float32Array | null = null;
+
 export function applyHeightChunk(
   field: HeightField, chunk: number, worldY: Float32Array, terrain: HeightTerrain, keepRiseM: number
 ): HeightChunkStats {
@@ -144,8 +147,9 @@ export function applyHeightChunk(
   const x0 = HEIGHT_ORIGIN + ci * m, z0 = HEIGHT_ORIGIN + cj * m;
   const dropBelowM = keepRiseM / 2;
   const f = field.data;
-  const before = new Uint8Array(m * m);
-  const terrRow = new Float32Array(m);
+  // one scratch pair for every call (a chunk is a fixed size); every entry is written before it is read
+  const before = scratchBefore ??= new Uint8Array(m * m);
+  const terrRow = scratchTerrRow ??= new Float32Array(m);
   for (let j = 0; j < m; j++) {
     const row = (cj * m + j) * HEIGHT_N + ci * m;
     sampleTerrainRow(terrain, x0 + 0.5, z0 + j + 0.5, terrRow);
@@ -197,12 +201,13 @@ export function applyHeightChunk(
         const gi = ci * m + i;
         let isRough: boolean;
         if (i > 0 && j > 0 && i < m - 1 && j < m - 1) {
-          // inside the chunk, every neighbour kept with a float: straight from the arrays
+          // inside the chunk every neighbour has a float: straight from the arrays. An unkept neighbour makes
+          // that axis non-planar (as nonPlanar says); only a missing float needs the field's stored rise
           const k = j * m + i, y0 = worldY[k]!;
           const yl = worldY[k - 1]!, yr = worldY[k + 1]!, yu = worldY[k - m]!, yd = worldY[k + m]!;
-          if ((f[at - 1]! & f[at + 1]! & f[at - HEIGHT_N]! & f[at + HEIGHT_N]! & KEPT_BIT)
-            && Number.isFinite(y0 + yl + yr + yu + yd)) {
-            isRough = !(Math.abs(yl + yr - 2 * y0) < ROUGH_SECOND_DIFF_M) && !(Math.abs(yu + yd - 2 * y0) < ROUGH_SECOND_DIFF_M);
+          if (Number.isFinite(y0 + yl + yr + yu + yd)) {
+            const nx = !(f[at - 1]! & f[at + 1]! & KEPT_BIT) || !(Math.abs(yl + yr - 2 * y0) < ROUGH_SECOND_DIFF_M);
+            isRough = nx && (!(f[at - HEIGHT_N]! & f[at + HEIGHT_N]! & KEPT_BIT) || !(Math.abs(yu + yd - 2 * y0) < ROUGH_SECOND_DIFF_M));
           } else {
             isRough = slowRough(gi, gj);
           }

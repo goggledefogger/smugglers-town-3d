@@ -302,3 +302,42 @@ describe('worker terrain-only update', () => {
     vi.unstubAllGlobals();
   });
 });
+
+describe('applyHeightChunk output is stable', () => {
+  /** FNV-1a over the field bytes */
+  const hash = (d: Uint8Array): number => {
+    let h = 2166136261;
+    for (let k = 0; k < d.length; k++) h = Math.imul(h ^ d[k]!, 16777619) >>> 0;
+    return h;
+  };
+  /** deterministic chunk: plateaus, a checkerboard, a ramp, NaN holes and a ground band, with texels on every chunk edge */
+  const mixed = (seed: number): Float32Array => {
+    const w = new Float32Array(M * M);
+    let r = seed;
+    const rnd = () => (r = (Math.imul(r, 1664525) + 1013904223) >>> 0) / 4294967296;
+    for (let j = 0; j < M; j++) {
+      for (let i = 0; i < M; i++) {
+        let y = 0;
+        if (i < 300) y = 12;                                  // plateau, touching the west edge
+        else if (i < 360) y = ((i + j) % 2 ? 12 : 4);         // checkerboard
+        else if (i < 500) y = (i - 360) * 0.3 + 5;            // ramp
+        else if (i > M - 40) y = 9 + (j % 7 === 0 ? 3 : 0);   // east edge with ridges
+        else if (j < 3 || j > M - 4) y = 15;                  // top and bottom edge rows
+        else y = rnd() < 0.02 ? 8 : 0.2;                      // ground with spikes
+        if (rnd() < 0.01) y = NaN;
+        w[j * M + i] = y;
+      }
+    }
+    return w;
+  };
+  it('matches the output recorded from the allocating, closure-per-edge version for a chunk with interior and edge rough texels, over a seam and a second pass', () => {
+    const f = createHeightField();
+    applyHeightChunk(f, 5, mixed(7), flat(0), KEEP);       // the west neighbour: seam texels come from the field
+    const st = applyHeightChunk(f, 6, mixed(11), flat(0), KEEP);
+    const st2 = applyHeightChunk(f, 6, mixed(13), flat(0.5), KEEP);
+    expect(st.rough).toBeGreaterThan(1000);
+    expect(hash(f.data)).toBe(4269992949);
+    expect(st).toEqual({ known: 801873, kept: 488818, rough: 61117, changed: 488818 });
+    expect(st2).toEqual({ known: 809924, kept: 493766, rough: 64775, changed: 21238 });
+  });
+});
