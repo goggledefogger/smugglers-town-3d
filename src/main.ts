@@ -21,13 +21,17 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, CutoutStencilBuilder, cutoutInputDigest, fallbackCarBoxes, ROOF_MIN_M, type CoverageGap, type FootprintMaskOptions, type PackedFootprints, type RoofInput
+  packFootprints, CutoutStencilBuilder, cutoutInputDigest, fallbackCarBoxes, type CoverageGap, type FootprintMaskOptions, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
 import { RemeasureTracker } from './services/overture/remeasureTracker.ts';
 import { SEG_STRIDE } from './services/overture/stencilTrace.ts';
 import { CutoutDebugOverlay } from './render/CutoutDebugOverlay.ts';
+import {
+  CUTOUT_ROOF_MIN_M, CUTOUT_DEBUG_AT_START, CUTOUT_DILATE_M, cutoutDeviceSettings, CUTOUT_ROOF_MARGIN_M,
+  CUTOUT_GROW_M, CUTOUT_SKIRT_M, CUTOUT_GAP_REACH_M, CUTOUT_REBUILD_MS, CUTOUT_MIN_RISE_M
+} from './render/cutoutConfig.ts';
 import type { FootprintMaskJob, FootprintMaskResult, HeightMessage, HeightReply } from './services/overture/footprintMaskWorker.ts';
 import { HeightCapture } from './render/HeightCapture.ts';
 import type { HeightState } from './services/overture/heightField.ts';
@@ -224,17 +228,8 @@ const cutoutWalls = new StencilColliders();
 let carOnStencil = false;
 /** The car's colliders were last built for Cutout 3D (its fallback boxes pass the roofed-over rule). */
 let carInCutout = false;
-/**
- * Cutout 3D's roofed-over rule (m): a classifier gap group fills the stencil, and a classifier box
- * collides before the stencil lands, only if some cell's lowest geometry stands this far above the
- * ground, so poles, trees and steps over open paving do not. ?cutoutRoofMin= overrides for tuning.
- */
-const CUTOUT_ROOF_MIN_M = ((): number => {
-  const q = Number(new URLSearchParams(window.location.search).get('cutoutRoofMin') ?? '');
-  return Number.isFinite(q) && q > 0 ? q : ROOF_MIN_M;
-})();
 /** ?cutoutDebug=1 / window.__cutoutDebug(on): draw the walls the car can hit, coloured by source. */
-let cutoutDebug = new URLSearchParams(window.location.search).get('cutoutDebug') === '1';
+let cutoutDebug = CUTOUT_DEBUG_AT_START;
 let cutoutDebugOverlay: CutoutDebugOverlay | null = null;
 let bakeSaved: { mode: ClutterMode; snap: boolean } | null = null;
 if (typeof window !== 'undefined') (window as any).__facadeBaker = facadeBaker;
@@ -661,54 +656,14 @@ function rebuildPrisms(): boolean {
   return true;
 }
 
-/**
- * Cutout 3D stencil dilation (m): grows each footprint so leaning facades and overhangs are not
- * shaved. 2, not 1.5: in SF (Market and Montgomery) tile geometry over 18 m up left outside the
- * stencil fell from 7.6% at 1.5 m to 3.9% at 2 m with no extra kerb clutter. ?cutoutDilate= overrides.
- */
-const CUTOUT_DILATE_M = Number(new URLSearchParams(window.location.search).get('cutoutDilate') ?? '') || 2;
-/**
- * Cutout 3D stencil texel (m). 1 m normally; 2 m on a device that looks weak
- * (4 or fewer cores, 4 GB or less, or a max texture under 4096), which
- * quarters the raster, the 13 MB upload and the texture memory. ?cutoutTexel= overrides.
- */
-const CUTOUT_WEAK_DEVICE = ((): boolean => {
-  const nav = navigator as Navigator & { deviceMemory?: number };
-  return (nav.hardwareConcurrency ?? 8) <= 4 || (nav.deviceMemory ?? 8) <= 4
-    || renderer.renderer.capabilities.maxTextureSize < 4096;
-})();
-const CUTOUT_TEXEL_M = ((): number => {
-  const q = Number(new URLSearchParams(window.location.search).get('cutoutTexel') ?? '');
-  return q > 0 ? q : CUTOUT_WEAK_DEVICE ? 2 : 1;
-})();
-/**
- * Cutout 3D roof cap: the stencil goes RG8, G the footprint's roof plus
- * CUTOUT_ROOF_MARGIN_M, and canopy above it is cut. Doubles the upload
- * (26 MB at 1 m), so a weak device keeps the R8 stencil (3.2 MB at 2 m)
- * uncapped. ?cutoutCap=1 / 0 overrides.
- */
-const CUTOUT_ROOF_CAP = ((): boolean => {
-  const q = new URLSearchParams(window.location.search).get('cutoutCap');
-  return q === '1' ? true : q === '0' ? false : !CUTOUT_WEAK_DEVICE;
-})();
-/** Metres above the sampled roof that survive the cap: parapets, rooftop units, the dilation band's roof edge. */
-const CUTOUT_ROOF_MARGIN_M = 3;
-/**
- * How far (m) a footprint grows into the connected mesh the height field calls a building: registration
- * (1-3 m) plus an unmapped bay or wing. Reasoned, not measured: `grownTruncated` in the stats says if it is
- * short. Off at a 2 m texel (a weak device keeps the polygon), where the field is not read 1:1.
- */
-const CUTOUT_GROW_M = 8;
-/**
- * How far (m) the skirt runs out past the grown footprints into mesh that rises 1.5-3 m (the hysteresis floor up
- * to the keep rise) and is not kept: the strip at a wall's foot, a plinth, steps, an entrance canopy. Without it
- * that strip is cut and the satellite ground shows through a band at the base of the wall. Off with growth at a
- * 2 m texel. `skirted` in the stats counts it.
- */
-const CUTOUT_SKIRT_M = 3;
+/** Cutout 3D's device-dependent settings (render/cutoutConfig.ts): the stencil texel and the roof cap. */
+const { texelM: CUTOUT_TEXEL_M, roofCap: CUTOUT_ROOF_CAP } =
+  cutoutDeviceSettings(renderer.renderer.capabilities.maxTextureSize);
 /** The stencil covers the footprint fetch radius both ways, and no more. */
 const CUTOUT_MASK_OPTS = {
   size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M, roofCap: CUTOUT_ROOF_CAP,
+  // keyed on the texel, not the weak-device flag: growth and skirt need the field read 1:1, and
+  // ?cutoutTexel=2 turns them off on any device (and ?cutoutTexel=1 keeps them on a weak one)
   growM: CUTOUT_TEXEL_M === 2 ? 0 : CUTOUT_GROW_M,
   skirtM: CUTOUT_TEXEL_M === 2 ? 0 : CUTOUT_SKIRT_M
 };
@@ -716,17 +671,11 @@ const CUTOUT_MASK_OPTS = {
 const cutoutMaskOpts = (): FootprintMaskOptions => ({
   ...CUTOUT_MASK_OPTS, keepRiseM: CUTOUT_MIN_RISE_M * (cutoutTerrain ?? world.terrainProvider).reliefBoost
 });
-/** A classifier building cell with an Overture texel this close (m) is covered; farther, it is a gap. */
-const CUTOUT_GAP_REACH_M = 3;
-/** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
-const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
 /** the last stencil uploaded, for __cutoutMaskAt */
 let cutoutLastMask: { n: number; cell: number; cx: number; cz: number; size: number; channels: 1 | 2; data: Uint8Array } | null = null;
 /** The terrain the attached tileset plays on: the stencil's roof caps and tops share its frame. */
 let cutoutTerrain: TerrainProvider | null = null;
-/** A footprint the mesh rises less than this over (m) is not stencilled: an empty lot or a shed. */
-const CUTOUT_MIN_RISE_M = 3;
 let cutoutCoverageStat: (CoverageGap & { footprints: number; gapCells: number }) | null = null;
 let cutoutCoverageLogged = false;
 let footprintsLandedAt = Infinity;

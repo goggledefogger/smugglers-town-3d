@@ -683,6 +683,11 @@ cells of the building Overture lacks, while the 10 m fringe hugging an
 Overture outline stays cut. `cutout coverage` is derived from the same cell
 states, so it still reports the Overture gap, plus `gapCells` painted.
 
+The tuning constants (dilation, texel, roof cap and margin, growth, skirt,
+gap reach, rebuild cadence, minimum rise, the roofed-over rule) and the five
+`?cutout*=` URL overrides live in `render/cutoutConfig.ts`; the stencil's
+mutable state stays in `main.ts`.
+
 The clutter filter's `cutout` mode is the only true per-fragment lookup in
 the filter: every tile fragment takes one texture sample at its own world
 x,z (the `vClutterWorldPos` varying) and is discarded when R reads 0. The
