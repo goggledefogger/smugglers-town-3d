@@ -1117,7 +1117,8 @@ export class CutoutStencilBuilder {
       segments = traceStencil(mask, 0.5, base);
     } else if (cells && cl) {
       // the walls: the undilated raster plus the same gap cells. A gap cell has no dilated texel
-      // within reach, so its texels are empty in `core` and taking them back out restores it exactly
+      // within reach, so its texels are empty in `core` and taking them back out restores it exactly.
+      // Grown texels (up to 8 m out) are in `core` and so in `base`, which picks the gap cells: none is ever in one
       paintGapCells(core, cells, cl.grid, MASK_ON, heights);
       try {
         segments = traceStencil(core, 0.5, base);

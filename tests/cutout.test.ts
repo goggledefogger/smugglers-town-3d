@@ -1142,6 +1142,33 @@ describe('height field in the stencil (docs/plans/2026-10-08-cutout-per-texel-he
       expect(verts(built.segments).some(([x]) => Math.abs(x) < 15)).toBe(false);
     });
 
+    it('gap-cell paint-and-restore leaves grown texels outside the 2 m band alone', () => {
+      // growth is 8 m but the dilation band is 2 m: a grown texel 8 m past the polygon is outside the band. The
+      // restore clears what the paint wrote; this proves a gap cell never holds a core texel, grown or not,
+      // because gap cells are chosen against the mask, which includes the grown texels' own dilation
+      const opts: FootprintMaskOptions = { ...OPTS, size: 128 };
+      const f = groundField();
+      setBox(f, -10, 18, -10, 10, 20);   // the lot plus 8 m of overhang
+      setBox(f, 34, 46, 2, 14, 20);      // an unmapped building clear of the lot: a gap cell
+      const { core, mask, grown } = layersOf([lot()], f, opts);
+      expect(grown).toBe(8 * 20);
+      const grid = { n: 8, cell: 16, half: 64 };
+      const structure = new Uint8Array(64);
+      structure[4 * 8 + 6] = 1;   // x 32..48, z 0..16
+      structure[4 * 8 + 3] = 1;   // x -16..0, z 0..16: inside the lot
+      structure[4 * 8 + 4] = 1;   // x 0..16, z 0..16: lot and its grown overhang
+      const cells = classifierCells(structure, grid, mask, 3);
+      expect(cells[4 * 8 + 6]).toBe(CELL_GAP);
+      expect(cells[4 * 8 + 4]).toBe(CELL_COVERED);
+      const h: HeightsView = { field: f, terrain: flatTerrain(0) };
+      const before = core.data.slice();
+      expect(paintGapCells(core, cells, grid, MASK_ON, h)).toBe(1);
+      expect(countOn(core)).toBe(countOn({ data: before, channels: core.channels }) + 12 * 12);
+      paintGapCells(core, cells, grid, 0, h);
+      expect(Array.from(core.data)).toEqual(Array.from(before));
+      expect(coreAt(core, 17.5, 0.5)).toBe(true);
+    });
+
     describe('8. trees: the rough bit stops growth', () => {
       const M = HEIGHT_CHUNK_M;
       /** the lot at 450, 450 (chunk 10): a 20 m roof, and an overhang to its east of the given pattern */
