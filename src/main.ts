@@ -719,6 +719,8 @@ const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
 const CUTOUT_REBUILD_MS = 2000;
 let cutoutMaskFor: readonly Footprint[] | null = null;
+/** the last stencil uploaded, for __cutoutMaskAt */
+let cutoutLastMask: { n: number; cell: number; cx: number; cz: number; size: number; channels: 1 | 2; data: Uint8Array } | null = null;
 /** The terrain the attached tileset plays on: the stencil's roof caps and tops share its frame. */
 let cutoutTerrain: TerrainProvider | null = null;
 /** A footprint the mesh rises less than this over (m) is not stencilled: an empty lot or a shed. */
@@ -864,6 +866,7 @@ function runCutoutBuild(): void {
       return;
     }
     cutoutMaskFor = polys;
+    cutoutLastMask = b.mask;
     cutoutUploads++;
     // the car's walls come from this same stencil, rebuilt only because it changed
     const t2 = performance.now();
@@ -946,6 +949,15 @@ function cutoutCoverage(): (CoverageGap & { footprints: number; gapCells: number
 }
 (window as any).__cutoutCoverage = () => cutoutCoverage();
 (window as any).__cutoutStats = () => ({ ...(cutoutStats ?? {}), heights: heightStats() });
+/** The last uploaded stencil at world (x, z): inside flag and the roof cap byte (debug). */
+(window as any).__cutoutMaskAt = (x: number, z: number): { inside: boolean; cap: number } | null => {
+  const m = cutoutLastMask;
+  if (!m) return null;
+  const i = Math.floor((x - m.cx + m.size / 2) / m.cell), j = Math.floor((z - m.cz + m.size / 2) / m.cell);
+  if (i < 0 || j < 0 || i >= m.n || j >= m.n) return null;
+  const at = (j * m.n + i) * m.channels;
+  return { inside: m.data[at]! !== 0, cap: m.channels === 2 ? m.data[at + 1]! : -1 };
+};
 
 /**
  * Cutout height field (docs/plans/2026-10-08-cutout-per-texel-heights.md): the capture renders the loaded tiles

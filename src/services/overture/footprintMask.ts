@@ -434,10 +434,11 @@ export function footprintMaskPacked(
  * kept texels are already filled, so a front stops at their edge and the texels between go to the nearer one.
  *
  * Then the skirt (design 4b, Skirt): from the final front, at most `skirtLayers` more layers into texels that are
- * unfilled, measured, not kept, not rough, with a rise of at least `skirtFloorM` (the hysteresis floor) and at
- * most the parent's cap: the low strip at a wall's foot, a plinth, steps. A skirt texel takes its parent's cap
- * like a grown one; a skirt front only ever enters more skirt texels, never a kept one, so it cannot carry the
- * kept growth past its bound.
+ * unfilled, measured, at most the parent's cap, and either not kept, not rough, with a rise of at least
+ * `skirtFloorM` (the hysteresis floor: the low strip at a wall's foot, a plinth, steps) or kept and rough (the
+ * foot itself, where the rise jumps). A front of skirt texels may also enter kept, not rough ones (the mesh between
+ * a rough foot and the strip); the final front never does, so growth's bound stretches by the skirt's layers at
+ * most. A skirt texel takes its parent's cap like a grown one and never seeds kept growth.
  * Returns the texel indices it added (grown and skirted, for the dilation to stamp) and the counts.
  */
 function growFootprints(
@@ -457,13 +458,32 @@ function growFootprints(
     const b = byteAt(i, j);
     return (b & RISE_MASK) !== RISE_UNKNOWN && (b & KEPT_BIT) !== 0 && !(b & ROUGH_BIT) ? b : -1;
   };
-  /** the byte of an unfilled, measured, not kept, not rough texel at or over the floor; -1 for any other */
+  /**
+   * The byte of a texel the skirt may enter from the final front, -1 for any other: unfilled, measured, and either
+   * not kept, not rough, at or over the floor (the low strip), or kept and rough (a wall's foot, where the rise
+   * jumps, that growth refused for roughness). Never kept and not rough: those are growth's.
+   */
   const openSkirt = (i: number, j: number): number => {
     if (i < 1 || j < 1 || i > n - 2 || j > n - 2) return -1;
     if (filled[(j * n + i) * ch] !== 0) return -1;
     const b = byteAt(i, j);
     const q = b & RISE_MASK;
-    return q !== RISE_UNKNOWN && (b & (KEPT_BIT | ROUGH_BIT)) === 0 && decodeRise(q) >= skirtFloorM ? b : -1;
+    if (q === RISE_UNKNOWN) return -1;
+    const kr = b & (KEPT_BIT | ROUGH_BIT);
+    if (kr === (KEPT_BIT | ROUGH_BIT)) return b;
+    return kr === 0 && decodeRise(q) >= skirtFloorM ? b : -1;
+  };
+  /**
+   * From a skirt texel, also a kept, not rough one: past a rough foot the mesh can read kept again before it drops
+   * to the strip, and growth (already run) cannot reach it. It only ever follows a skirt texel, so the skirt
+   * stretches growth's bound by at most its own layers.
+   */
+  const openPastSkirt = (i: number, j: number): number => {
+    const b = openSkirt(i, j);
+    if (b >= 0) return b;
+    if (i < 1 || j < 1 || i > n - 2 || j > n - 2 || filled[(j * n + i) * ch] !== 0) return -1;
+    const k = byteAt(i, j);
+    return (k & RISE_MASK) !== RISE_UNKNOWN && (k & (KEPT_BIT | ROUGH_BIT)) === KEPT_BIT ? k : -1;
   };
   type Open = (i: number, j: number) => number;
   /** filled texel c borders a texel `o` may enter */
@@ -535,7 +555,7 @@ function growFootprints(
     let skirt = seeds(openSkirt);
     for (let k = 0; k < grown; k++) if (borders(texels[k]!, openSkirt)) skirt.push(texels[k]!);
     for (let layer = 0; layer < skirtLayers && skirt.length; layer++) {
-      skirt = step(skirt, true, openSkirt);
+      skirt = step(skirt, true, layer === 0 ? openSkirt : openPastSkirt);
       for (const d of skirt) texels.push(d);
     }
   }
