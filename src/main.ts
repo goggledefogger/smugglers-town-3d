@@ -25,6 +25,7 @@ import {
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
+import { RemeasureTracker } from './services/overture/remeasureTracker.ts';
 import { SEG_STRIDE } from './services/overture/stencilTrace.ts';
 import { CutoutDebugOverlay } from './render/CutoutDebugOverlay.ts';
 import type { FootprintMaskJob, FootprintMaskResult, HeightMessage, HeightReply } from './services/overture/footprintMaskWorker.ts';
@@ -944,6 +945,8 @@ let heightCapture: HeightCapture | null = null;
 let heightsTerrainSent: TerrainProvider | null = null;
 /** The ground was refined in place: the worker needs the new terrain, but keeps its field. */
 let heightsTerrainRefined = false;
+/** Chunks owed a re-measure after a refinement; drained, they bump the keep version once (roof caps read the new ground). */
+const remeasure = new RemeasureTracker();
 const heightChunkStats = new Map<number, { known: number; kept: number; rough: number; changed: number }>();
 const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
 let heightAtReq = 0;
@@ -966,7 +969,10 @@ function onHeightReply(r: HeightReply): void {
   }
   if (r.kind === 'heightsApplied') {
     heightChunkStats.set(r.chunk, { known: r.known, kept: r.kept, rough: r.rough, changed: r.changed });
-    if (r.changed > 0) {
+    // the last re-measure after a refinement also rebuilds, whether or not it flipped a bit: caps baked while a
+    // chunk still read the old ground are only corrected by a rebuild
+    const drained = remeasure.applied(r.chunk);
+    if (r.changed > 0 || drained) {
       cutoutKeepVersion++;
       cutoutRebuild.request();
     }
@@ -988,6 +994,7 @@ function updateHeights(nowMs: number): void {
     worker.postMessage({ kind: 'terrain', terrain } satisfies HeightMessage, [terrain.data.buffer]);
     heightsTerrainSent = tp;
     heightsTerrainRefined = false;
+    remeasure.reset();
     heightChunkStats.clear();
     heightCapture?.reset();
     // the worker's field starts over, all unknown: the stencil must stop using the old one
@@ -1006,6 +1013,7 @@ function updateHeights(nowMs: number): void {
     renderer.renderer, () => tiles, () => (cutoutTerrain ?? world.terrainProvider).heightfield,
     (chunk, data) => {
       if (!cutoutWorker || heightsTerrainSent !== cutoutTerrain) return;
+      remeasure.posted(chunk);
       const boost = (cutoutTerrain ?? world.terrainProvider).reliefBoost;
       cutoutWorker.postMessage({ kind: 'heights', chunk, data, keepRiseM: CUTOUT_MIN_RISE_M * boost } satisfies HeightMessage, [data.buffer]);
     }
@@ -1174,6 +1182,7 @@ function clearTiles(): void {
   cutoutTerrain = null;
   heightCapture?.reset();
   heightsTerrainSent = null;
+  remeasure.reset();
   heightChunkStats.clear();
   cutoutDirty = true;
   cutoutUploads = 0;
@@ -1971,6 +1980,7 @@ function step(now: number): void {
         surfaceCapture?.markDirty();
         // the worker's terrain is a copy of the ground just overwritten: send it again and re-measure
         heightsTerrainRefined = true;
+        remeasure.begin();
         // the walls were baked against the old ground and no stencil bit flips for a refinement: stand them on the new
         {
           const hf = world.terrainProvider.heightfield;

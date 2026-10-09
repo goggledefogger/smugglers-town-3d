@@ -226,7 +226,6 @@ class KeepFilter {
     if (!this.anyBlocked(w, h)) return false;
     if (this.img.length < w * h) { this.img = new Uint8Array(w * h); this.tmp = new Uint8Array(w * h); this.tmp2 = new Uint8Array(w * h); }
     const img = this.img, f = this.f;
-    let blocked = false;
     for (let y = 0; y < h; y++) {
       const g0 = this.at(this.ei0, this.ej0 + y);
       // a mask row is a field row: contiguous when both ends are in the square and a texel apart
@@ -236,7 +235,7 @@ class KeepFilter {
         for (let x = 0; x < w; x++) {
           const b = f[g0 + x]!;
           if ((b & RISE_MASK) === RISE_UNKNOWN || (b & KEPT_BIT) !== 0) img[r + x] = 1;
-          else { img[r + x] = 0; blocked = true; }
+          else img[r + x] = 0;
         }
         continue;
       }
@@ -245,10 +244,9 @@ class KeepFilter {
         const b = g < 0 ? RISE_UNKNOWN : f[g]!;
         const fills = (b & RISE_MASK) === RISE_UNKNOWN || (b & KEPT_BIT) !== 0;
         img[r + x] = fills ? 1 : 0;
-        if (!fills) blocked = true;
       }
     }
-    if (!blocked) return false;
+    // anyBlocked found a blocked byte in this same box, so the image holds a 0 and the morphology is needed
     const a = this.tmp, b = this.tmp2;
     morph3(img, a, b, w, h, true);
     morph3(b, a, img, w, h, false);
