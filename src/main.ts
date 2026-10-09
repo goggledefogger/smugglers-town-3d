@@ -1971,6 +1971,11 @@ function step(now: number): void {
         surfaceCapture?.markDirty();
         // the worker's terrain is a copy of the ground just overwritten: send it again and re-measure
         heightsTerrainRefined = true;
+        // the walls were baked against the old ground and no stencil bit flips for a refinement: stand them on the new
+        {
+          const hf = world.terrainProvider.heightfield;
+          if (cutoutWalls.reground((x, z) => hf.sample(x, z))) refreshCarColliders();
+        }
         groundBuilder = null;
       }
     }

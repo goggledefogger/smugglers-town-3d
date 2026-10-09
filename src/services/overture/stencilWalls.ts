@@ -59,6 +59,17 @@ export class StencilColliders {
     return true;
   }
 
+  /**
+   * The ground under the same walls changed (a refinement): rebuild them from the segments already held, so y0 / y1
+   * follow the new ground. No digest involved, since the stencil did not change. True when rebuilt.
+   */
+  reground(groundAt: (x: number, z: number) => number): boolean {
+    if (!this.segments) return false;
+    this.walls = stencilWallColliders(this.segments, groundAt);
+    this.builds++;
+    return true;
+  }
+
   clear(): void {
     this.walls = null;
     this.segments = null;

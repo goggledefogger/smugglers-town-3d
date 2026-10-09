@@ -514,6 +514,22 @@ describe('one source: the car hits the stencil it sees', () => {
     }
   });
 
+  it('regrounding rebuilds the same segments against the new ground, y0 and y1 follow it', () => {
+    const m = footprintMaskPacked(packFootprints([{ ring: square(0, 0, 10, 10), holes: [] }]), { size: 64, cell: 1, dilateM: 2, roofCap: true }, Uint8Array.from([7]));
+    const segs = traceStencil(m);
+    const c = new StencilColliders();
+    expect(c.reground(() => 0)).toBe(false);   // nothing landed yet
+    c.land('aaaa', segs, () => 10);
+    expect(c.walls!.every(w => w.min.y === 8 && w.max.y === 17)).toBe(true);
+    const before = c.walls;
+    expect(c.reground(() => 4)).toBe(true);
+    expect(c.walls).not.toBe(before);
+    expect(c.walls!.length).toBe(before!.length);
+    expect(c.walls!.every(w => w.min.y === 2 && w.max.y === 11)).toBe(true);
+    expect(c.segments).toBe(segs);
+    expect(c.builds).toBe(2);
+  });
+
   it('drops a footprint the mesh rises less than 3 m over (an empty lot, a shed)', () => {
     const grid = { n: 8, cell: 10, half: 40 };
     const top = new Float32Array(64).fill(-Infinity);
