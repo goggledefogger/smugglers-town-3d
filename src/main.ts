@@ -31,7 +31,7 @@ import { CutoutDebugOverlay } from './render/CutoutDebugOverlay.ts';
 import type { FootprintMaskJob, FootprintMaskResult, HeightMessage, HeightReply } from './services/overture/footprintMaskWorker.ts';
 import { HeightCapture } from './render/HeightCapture.ts';
 import type { HeightState } from './services/overture/heightField.ts';
-import { VIEW_MODE_CYCLE, traits, parseViewMode, type ViewMode } from './render/viewModes.ts';
+import { VIEW_MODE_CYCLE, DEFAULT_VIEW_MODE, traits, initialViewMode, type ViewMode } from './render/viewModes.ts';
 import { NO_DATA } from './services/tiles/tileColliders.ts';
 import { TileClutterFilter, type ClutterMode } from './render/TileClutterFilter.ts';
 import { VehicleView } from './render/VehicleView.ts';
@@ -100,7 +100,7 @@ app.innerHTML = `
     <div class="hud-corner hud-tl">
       <sr-health></sr-health>
       <button id="view-mode-btn" class="hud-btn" type="button" title="Toggle 3D Visual Mode (Hotkey: V or G)">
-        <span>🎮</span> <span id="view-mode-text">VIEW: REAL 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
+        <span>🎮</span> <span id="view-mode-text">VIEW: CUTOUT 3D</span> <span class="mono" style="opacity:0.6;font-size:9px;">[V]</span>
       </button>
       <button id="clutter-btn" class="hud-btn" type="button" hidden title="Street clutter filter: flatten parked cars, kerbs and street furniture into the road, hide everything but buildings, or sweep the street clean while keeping walls and trees (Hotkey: F)">
         <span>🚗</span> <span id="clutter-text">CLUTTER: OFF</span> <span class="mono" style="opacity:0.6;font-size:9px;">[F]</span>
@@ -246,8 +246,8 @@ if (typeof window !== 'undefined') {
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
 }
 export type { ViewMode } from './render/viewModes.ts';
-/** ?view=cutout-3d (any mode name) starts in that view. */
-let viewMode: ViewMode = parseViewMode(new URLSearchParams(window.location.search).get('view')) ?? 'photoreal';
+/** Cutout 3D unless ?view=<any mode name> picks another (viewModes.ts DEFAULT_VIEW_MODE). */
+let viewMode: ViewMode = initialViewMode(window.location.search);
 let clutterFilter: TileClutterFilter | null = null;
 // the mode survives a relocate: a new filter starts in it
 // swept by default: flattens road clutter while keeping kerbside building facades
@@ -417,7 +417,8 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
 
 function updateViewModeUi(): void {
   if (!viewModeBtn || !viewModeText) return;
-  viewModeBtn.classList.toggle('active', viewMode !== 'photoreal');
+  // the button lights up whenever the player has cycled off the default view
+  viewModeBtn.classList.toggle('active', viewMode !== DEFAULT_VIEW_MODE);
   viewModeText.textContent = traits(viewMode).label;
 }
 
@@ -737,7 +738,11 @@ let cutoutJobId = 0;
 let cutoutWorker: Worker | null = null;
 /** Worker-less runtimes build on this thread with the same builder. */
 let cutoutLocalBuilder: CutoutStencilBuilder | null = null;
-/** Cutout 3D's last stencil build, for the survey script. */
+/**
+ * Cutout 3D's last stencil build, for the survey script. A snapshot taken when a
+ * mask lands: `requests` (cutoutRebuild.starts) only refreshes on an upload, so
+ * read the live count from `heights.rebuildStarts` in __cutoutStats().
+ */
 let cutoutStats: {
   footprints: number; texelM: number; n: number; dilateM: number; fallback: boolean;
   packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean; roofCap?: boolean; uploadMB?: number;

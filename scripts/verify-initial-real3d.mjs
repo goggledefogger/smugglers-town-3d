@@ -13,8 +13,9 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, dev
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
 
-console.log('[verify] Navigating to Russian Hill SF (?lat=37.79344&lon=-122.42127&debug)...');
-await page.goto(`${BASE}/?lat=37.79344&lon=-122.42127&debug`, { waitUntil: 'load' });
+// Real 3D is no longer the default view (Cutout 3D is), so this check names it
+console.log('[verify] Navigating to Russian Hill SF (?lat=37.79344&lon=-122.42127&debug&view=photoreal)...');
+await page.goto(`${BASE}/?lat=37.79344&lon=-122.42127&debug&view=photoreal`, { waitUntil: 'load' });
 
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 60000 });
 await page.waitForFunction(() => !document.querySelector('sr-relocate')?.busy, null, { timeout: 60000 });
@@ -50,9 +51,9 @@ const initialShot = `${SCRATCH}/real3d_01_initial_load.png`;
 await page.screenshot({ path: initialShot });
 console.log(`[verify] Saved initial load screenshot: ${initialShot}`);
 
-// Now cycle through all 7 modes back to Real 3D
+// Now cycle through all 9 modes (VIEW_MODE_CYCLE) back to Real 3D
 console.log('[verify] Cycling through all modes back to Real 3D...');
-for (let i = 0; i < 7; i++) {
+for (let i = 0; i < 9; i++) {
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(300);
 }

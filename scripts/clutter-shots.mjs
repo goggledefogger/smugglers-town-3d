@@ -32,7 +32,8 @@ page.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => { localStorage.setItem('gmap_key', k); localStorage.setItem('smugglers_audio_muted', 'true'); }, key);
-await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
+// the clutter filter's F cycle belongs to the Real 3D view; Cutout 3D (the default) pins its own mode
+await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}&view=photoreal`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
 // a deep link relocates into the garage backdrop; START ENGINE spawns the match
 await page.locator('sr-intro button.play').click();

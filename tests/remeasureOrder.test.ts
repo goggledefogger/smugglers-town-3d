@@ -79,7 +79,6 @@ describe('refinement lands in the same frame as updateHeights (main.ts order)', 
     const g = rig([0, 1]);
     g.drive();
     g.frame(); g.quiet(); g.frame();         // a capture of chunk 0 is submitted and in flight
-    g.tiles.get(0)!.position.x += 0;         // (still holding tiles)
     // the ground lands in this frame; begin() comes with the next updateHeights, after the old readback finished
     g.frame(true);
     g.readback(); g.reply();                 // delivered before begin: posted pre-begin, reply is stale

@@ -1,9 +1,9 @@
 // One street vantage, every view mode, one checkout: hood-cam shots at two
 // headings plus an aerial, and a 3 s drive frame-time sample per mode.
 //
-//   E2E_URL=http://localhost:5173 MODES=photoreal,map-objects node scripts/mode-survey.mjs outdir
-// MODES takes the ViewMode ids from src/render/viewModes.ts (photoreal, masked-tiles, cutout-3d,
-// best-3d, painted-3d, painted-metro, footprint-3d, vector-city, game3d).
+//   E2E_URL=http://localhost:5173 MODES=cutout-3d,photoreal node scripts/mode-survey.mjs outdir
+// MODES takes the ViewMode ids from src/render/viewModes.ts (cutout-3d, the default,
+// photoreal, masked-tiles, best-3d, painted-3d, painted-metro, footprint-3d, vector-city, game3d).
 // PREFIX names the shots (PREFIX=cutout-sf- gives cutout-sf-photoreal-front.png); QUERY appends
 // to the page URL (QUERY=cutoutDilate=2). Cutout 3D's stencil stats and Overture coverage print too.
 // Needs the dev server and .sm-key.txt (or SM_KEY_FILE). Frame stats print to stdout;
@@ -14,7 +14,7 @@ import { readFileSync, mkdirSync } from 'node:fs';
 const OUT = process.argv[2] ?? 'mode-survey';
 mkdirSync(OUT, { recursive: true });
 const BASE = process.env.E2E_URL ?? 'http://localhost:5173';
-const MODES = (process.env.MODES ?? 'photoreal').split(',');
+const MODES = (process.env.MODES ?? 'cutout-3d').split(',');
 const LAT = process.env.LAT ?? '37.7929';
 const LON = process.env.LON ?? '-122.4030';
 const [TX, TZ] = (process.env.TP ?? '15,-5').split(',').map(Number);

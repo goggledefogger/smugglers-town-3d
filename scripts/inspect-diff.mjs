@@ -42,8 +42,8 @@ const dump = async (lbl) => {
 const before = await dump('INITIAL');
 console.log('BEFORE:', JSON.stringify(before, null, 2));
 
-// Cycle 7 times
-for (let i = 0; i < 7; i++) {
+// one full V cycle (the 9 modes of VIEW_MODE_CYCLE) back to the starting view
+for (let i = 0; i < 9; i++) {
   await page.keyboard.press('KeyV');
   await page.waitForTimeout(300);
 }

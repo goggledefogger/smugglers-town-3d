@@ -2,8 +2,8 @@
 // sampling) and print, for every frame over 40 ms, the inclusive time per
 // function inside that frame. p95 never shows a hitch; this does.
 //
-//   node scripts/hitch-profile.mjs              # Empire State, swept (default) mode
-//   MODE=hidden LAT=.. LON=.. node scripts/hitch-profile.mjs
+//   node scripts/hitch-profile.mjs              # Empire State, the default view (Cutout 3D)
+//   MODE=hidden LAT=.. LON=.. node scripts/hitch-profile.mjs   # Real 3D view, clutter F-cycled once
 // Needs the dev server on :5173 and .sm-key.txt. Starting the profiler itself
 // costs one ~150 ms (program) stall in the first frames; ignore that one.
 import { chromium } from 'playwright-core';
@@ -15,7 +15,8 @@ const b = await chromium.launch({ channel: 'chrome', headless: false });
 const page = await b.newPage({ viewport: { width: 1280, height: 800 }, deviceScaleFactor: Number(process.env.DPR ?? 1) });
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
-await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
+// MODE=hidden presses F, the clutter cycle of the Real 3D view, so that view is pinned (the default is Cutout 3D)
+await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}${process.env.MODE ? '&view=photoreal' : ''}`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
 await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });

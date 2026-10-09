@@ -6,9 +6,16 @@
 export type ViewMode =
   'photoreal' | 'masked-tiles' | 'best-3d' | 'painted-3d' | 'painted-metro' | 'footprint-3d' | 'vector-city' | 'game3d' | 'cutout-3d';
 
-/** The V key's order. */
+/**
+ * The view a player lands in with no `?view=` param: Cutout 3D, the chosen
+ * architecture since 2026-10-08 (docs/ARCHITECTURE.md, "View modes"). The
+ * other modes stay reachable through the V key and `?view=` as comparison views.
+ */
+export const DEFAULT_VIEW_MODE: ViewMode = 'cutout-3d';
+
+/** The V key's order: the default first, so V cycles away from it and back. */
 export const VIEW_MODE_CYCLE: readonly ViewMode[] = [
-  'photoreal', 'masked-tiles', 'cutout-3d', 'best-3d', 'painted-3d', 'painted-metro', 'footprint-3d', 'vector-city', 'game3d'
+  'cutout-3d', 'photoreal', 'masked-tiles', 'best-3d', 'painted-3d', 'painted-metro', 'footprint-3d', 'vector-city', 'game3d'
 ];
 
 /**
@@ -53,4 +60,9 @@ export const traits = (m: ViewMode): ViewModeTraits => VIEW_MODES[m];
 /** A `?view=` value, if it names a mode. */
 export function parseViewMode(v: string | null | undefined): ViewMode | null {
   return v != null && Object.prototype.hasOwnProperty.call(VIEW_MODES, v) ? (v as ViewMode) : null;
+}
+
+/** The starting view for a page's query string: `?view=` when it names a mode, else the default. */
+export function initialViewMode(search: string): ViewMode {
+  return parseViewMode(new URLSearchParams(search).get('view')) ?? DEFAULT_VIEW_MODE;
 }
