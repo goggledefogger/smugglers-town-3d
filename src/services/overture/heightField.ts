@@ -34,6 +34,11 @@ export const RISE_MAX_STEP = 62;
 /** Second difference (m) at which a texel is not planar along an axis. */
 export const ROUGH_SECOND_DIFF_M = 1;
 
+/** The hysteresis floor: below this rise (m) a kept texel turns clear. Half the rise it turns kept at. */
+export function keepFloorM(keepRiseM: number): number {
+  return keepRiseM / 2;
+}
+
 /** A rise in metres as its 6-bit step: fine below 15.75 m, coarse above, clamped at 61 m. */
 export function encodeRise(rise: number): number {
   const q = Math.round(rise / RISE_STEP_M);
@@ -145,7 +150,7 @@ export function applyHeightChunk(
   if (worldY.length !== m * m) throw new Error(`height chunk ${chunk}: ${worldY.length} texels, want ${m * m}`);
   const ci = chunk % HEIGHT_CHUNKS, cj = Math.floor(chunk / HEIGHT_CHUNKS);
   const x0 = HEIGHT_ORIGIN + ci * m, z0 = HEIGHT_ORIGIN + cj * m;
-  const dropBelowM = keepRiseM / 2;
+  const dropBelowM = keepFloorM(keepRiseM);
   const f = field.data;
   // one scratch pair for every call (a chunk is a fixed size); every entry is written before it is read
   const before = scratchBefore ??= new Uint8Array(m * m);
@@ -249,14 +254,17 @@ export type HeightState = 'unknown' | 'kept' | 'clear' | 'never';
 
 /**
  * What the field says at world (x, z): 'never' when its chunk was never captured (or the point is outside the
- * square), 'unknown' when the chunk was captured but nothing measured this texel, else 'kept' or 'clear'.
+ * square), 'unknown' when the chunk was captured but nothing measured this texel, else 'kept' or 'clear';
+ * `rough` is the texel's rough bit (false unless measured).
  */
-export function heightAt(field: HeightField, x: number, z: number): { rise: number; state: HeightState; chunk: number } {
+export function heightAt(
+  field: HeightField, x: number, z: number
+): { rise: number; state: HeightState; chunk: number; rough: boolean } {
   const chunk = chunkAt(x, z);
-  if (chunk < 0 || field.chunkSeen[chunk] === 0) return { rise: NaN, state: 'never', chunk };
+  if (chunk < 0 || field.chunkSeen[chunk] === 0) return { rise: NaN, state: 'never', chunk, rough: false };
   const i = Math.floor(x - HEIGHT_ORIGIN), j = Math.floor(z - HEIGHT_ORIGIN);
   const b = field.data[j * HEIGHT_N + i]!;
   const rise = riseAt(field, i, j);
-  if (Number.isNaN(rise)) return { rise, state: 'unknown', chunk };
-  return { rise, state: b & KEPT_BIT ? 'kept' : 'clear', chunk };
+  if (Number.isNaN(rise)) return { rise, state: 'unknown', chunk, rough: false };
+  return { rise, state: b & KEPT_BIT ? 'kept' : 'clear', chunk, rough: (b & ROUGH_BIT) !== 0 };
 }

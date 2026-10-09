@@ -14,7 +14,7 @@ import type { Footprint } from './buildings.ts';
 import type { Grid } from '../tiles/tileColliders.ts';
 import { traceStencil } from './stencilTrace.ts';
 import {
-  HEIGHT_N, HEIGHT_ORIGIN, RISE_MASK, RISE_UNKNOWN, KEPT_BIT, ROUGH_BIT, decodeRise, decodeRiseTop, sampleTerrain,
+  HEIGHT_N, HEIGHT_ORIGIN, RISE_MASK, RISE_UNKNOWN, KEPT_BIT, ROUGH_BIT, decodeRise, decodeRiseTop, sampleTerrain, keepFloorM,
   type HeightField, type HeightTerrain
 } from './heightField.ts';
 
@@ -389,12 +389,27 @@ export interface FootprintMaskOptions {
    * (default 0: off; main sets CUTOUT_GROW_M). Ignored unless the texel is 1 m: a weak device keeps the polygon.
    */
   growM?: number;
+  /**
+   * how far (m, whole texels) the skirt runs out from the grown footprints into low, measured, not kept mesh at
+   * or over the hysteresis floor (default 0: off; main sets CUTOUT_SKIRT_M): a plinth, steps or the strip at a
+   * wall's foot that reads 1.5-3 m and is not kept. Ignored unless the texel is 1 m, like growM.
+   */
+  skirtM?: number;
+  /**
+   * the rise (m) the height field's kept bit turns on at (CUTOUT_MIN_RISE_M times the relief boost); the skirt
+   * enters texels at or over its hysteresis floor (keepFloorM, half of it). Without it the skirt does not run.
+   */
+  keepRiseM?: number;
 }
 
-/** What growFootprints did: texels added, and fronts that stopped at the bound while the mesh still rose. */
+/**
+ * What growFootprints did: texels added by kept growth, fronts that stopped at the bound while the mesh still
+ * rose, and texels added by the skirt.
+ */
 export interface GrowStats {
   grown: number;
   grownTruncated: number;
+  skirted: number;
 }
 
 /**
@@ -417,11 +432,17 @@ export function footprintMaskPacked(
  * parent's cap (a taller one is another building, left to the gap rule), for at most `layers` layers. A grown
  * texel takes its parent's cap byte, and where two fronts meet in a layer the higher cap wins. Neighbours'
  * kept texels are already filled, so a front stops at their edge and the texels between go to the nearer one.
- * Returns the texel indices it added (for the dilation to stamp) and the counts.
+ *
+ * Then the skirt (design 4b, Skirt): from the final front, at most `skirtLayers` more layers into texels that are
+ * unfilled, measured, not kept, not rough, with a rise of at least `skirtFloorM` (the hysteresis floor) and at
+ * most the parent's cap: the low strip at a wall's foot, a plinth, steps. A skirt texel takes its parent's cap
+ * like a grown one; a skirt front only ever enters more skirt texels, never a kept one, so it cannot carry the
+ * kept growth past its bound.
+ * Returns the texel indices it added (grown and skirted, for the dilation to stamp) and the counts.
  */
 function growFootprints(
   filled: Uint8Array, n: number, ch: number, boxes: readonly [number, number, number, number][],
-  field: Uint8Array, dx: number, dz: number, layers: number
+  field: Uint8Array, dx: number, dz: number, layers: number, skirtLayers = 0, skirtFloorM = Infinity
 ): GrowStats & { texels: number[] } {
   const texels: number[] = [];
   /** the field byte under mask texel (i, j) (the 1 m lattice offset by dx, dz) */
@@ -436,21 +457,40 @@ function growFootprints(
     const b = byteAt(i, j);
     return (b & RISE_MASK) !== RISE_UNKNOWN && (b & KEPT_BIT) !== 0 && !(b & ROUGH_BIT) ? b : -1;
   };
-  let frontier: number[] = [];
-  for (const [i0, j0, i1, j1] of boxes) {
-    for (let j = j0; j <= j1; j++) {
-      for (let i = i0; i <= i1; i++) {
-        if (filled[(j * n + i) * ch] === 0) continue;
-        if (open(i - 1, j) >= 0 || open(i + 1, j) >= 0 || open(i, j - 1) >= 0 || open(i, j + 1) >= 0) frontier.push(j * n + i);
+  /** the byte of an unfilled, measured, not kept, not rough texel at or over the floor; -1 for any other */
+  const openSkirt = (i: number, j: number): number => {
+    if (i < 1 || j < 1 || i > n - 2 || j > n - 2) return -1;
+    if (filled[(j * n + i) * ch] !== 0) return -1;
+    const b = byteAt(i, j);
+    const q = b & RISE_MASK;
+    return q !== RISE_UNKNOWN && (b & (KEPT_BIT | ROUGH_BIT)) === 0 && decodeRise(q) >= skirtFloorM ? b : -1;
+  };
+  type Open = (i: number, j: number) => number;
+  /** filled texel c borders a texel `o` may enter */
+  const borders = (c: number, o: Open): boolean => {
+    const i = c % n, j = (c - i) / n;
+    return o(i - 1, j) >= 0 || o(i + 1, j) >= 0 || o(i, j - 1) >= 0 || o(i, j + 1) >= 0;
+  };
+  /** the seeds: filled texels in the boxes that border a texel `o` may enter */
+  const seeds = (o: Open): number[] => {
+    const out: number[] = [];
+    for (const [i0, j0, i1, j1] of boxes) {
+      for (let j = j0; j <= j1; j++) {
+        for (let i = i0; i <= i1; i++) {
+          const c = j * n + i;
+          if (filled[c * ch] !== 0 && borders(c, o)) out.push(c);
+        }
       }
     }
-  }
+    return out;
+  };
+  let frontier: number[] = layers >= 1 ? seeds(open) : [];
   /**
    * One layer: each front texel offers its cap to the four neighbours it may enter. With two channels a claimed
    * texel gets the cap byte alone until the layer ends (so a second parent only raises it and the texel is still
    * "unfilled" to the rest of the layer); with one, the mask byte at once. Returns the texels newly claimed.
    */
-  const step = (from: readonly number[], commit: boolean): number[] => {
+  const step = (from: readonly number[], commit: boolean, o: Open = open): number[] => {
     const next: number[] = [];
     for (const c of from) {
       const i = c % n, j = (c - i) / n;
@@ -458,7 +498,7 @@ function growFootprints(
       const capM = decodeRoofCap(cap);
       for (let k = 0; k < 4; k++) {
         const ni = k === 0 ? i - 1 : k === 1 ? i + 1 : i, nj = k === 2 ? j - 1 : k === 3 ? j + 1 : j;
-        const b = open(ni, nj);
+        const b = o(ni, nj);
         if (b < 0 || decodeRise(b & RISE_MASK) > capM) continue;
         const d = nj * n + ni;
         if (ch === 2) {
@@ -488,7 +528,18 @@ function growFootprints(
       else filled[d] = 0;
     }
   }
-  return { grown: texels.length, grownTruncated: truncated, texels };
+  const grown = texels.length;
+  if (skirtLayers >= 1 && Number.isFinite(skirtFloorM)) {
+    // the final front: every filled texel, polygon or grown, that borders a skirt texel. A grown texel may also
+    // sit inside a box and be seeded twice: harmless, the second offer only re-raises the same cap
+    let skirt = seeds(openSkirt);
+    for (let k = 0; k < grown; k++) if (borders(texels[k]!, openSkirt)) skirt.push(texels[k]!);
+    for (let layer = 0; layer < skirtLayers && skirt.length; layer++) {
+      skirt = step(skirt, true, openSkirt);
+      for (const d of skirt) texels.push(d);
+    }
+  }
+  return { grown, grownTruncated: truncated, skirted: texels.length - grown, texels };
 }
 
 /**
@@ -523,10 +574,12 @@ export function footprintMaskLayers(
     if (b) boxes.push(b);
   }
   const growLayers = Math.floor(opts.growM ?? 0);
+  const skirtLayers = opts.keepRiseM !== undefined ? Math.floor(opts.skirtM ?? 0) : 0;
   let grow: (GrowStats & { texels: number[] }) | null = null;
-  if (heights && cell === 1 && growLayers >= 1) {
+  if (heights && cell === 1 && (growLayers >= 1 || skirtLayers >= 1)) {
     grow = growFootprints(
-      filled, n, ch, boxes, heights.field.data, Math.floor(x0 - HEIGHT_ORIGIN + 0.5), Math.floor(z0 - HEIGHT_ORIGIN + 0.5), growLayers
+      filled, n, ch, boxes, heights.field.data, Math.floor(x0 - HEIGHT_ORIGIN + 0.5), Math.floor(z0 - HEIGHT_ORIGIN + 0.5), growLayers,
+      skirtLayers, opts.keepRiseM !== undefined ? keepFloorM(opts.keepRiseM) : Infinity
     );
   }
   const rad = dilateM / cell;
@@ -535,7 +588,7 @@ export function footprintMaskLayers(
     data = filled.slice();
     const offs = discOffsets(rad);
     for (const [i0, j0, i1, j1] of boxes) dilateBox(filled, data, n, ch, offs, i0, j0, i1, j1);
-    // the grown texels stand outside every box: stamp them from the flood's list
+    // the grown and skirt texels stand outside every box: stamp them from the flood's list
     if (grow) for (const c of grow.texels) dilateTexel(filled, data, n, ch, offs, c);
   }
   const finish = (d: Uint8Array) => {
@@ -550,7 +603,7 @@ export function footprintMaskLayers(
   };
   finish(data);
   const mask: FootprintMask = { n, cell, cx, cz, size, channels: ch, data };
-  const stats = { grown: grow?.grown ?? 0, grownTruncated: grow?.grownTruncated ?? 0 };
+  const stats = { grown: grow?.grown ?? 0, grownTruncated: grow?.grownTruncated ?? 0, skirted: grow?.skirted ?? 0 };
   if (data === filled) return { mask, core: mask, ...stats };
   finish(filled);
   return { mask, core: { ...mask, data: filled }, ...stats };
@@ -994,6 +1047,8 @@ export interface CutoutStats {
   grown: number;
   /** candidate texels past the growth bound that still rose: the survey's "is 8 m short" count */
   grownTruncated: number;
+  /** texels the skirt added: the low, not kept strip at a wall's foot (growFootprints) */
+  skirted: number;
   /** texels the height field marks rough (canopy), over the whole square */
   rough: number;
 }
@@ -1079,7 +1134,7 @@ export class CutoutStencilBuilder {
   /** the undilated raster `base` grew from (=== base when nothing dilated): the walls trace from it */
   private core: FootprintMask | null = null;
   private baseKey = '';
-  private baseGrow: GrowStats = { grown: 0, grownTruncated: 0 };
+  private baseGrow: GrowStats = { grown: 0, grownTruncated: 0, skirted: 0 };
   private baseDroppedByField = 0;
   private baseCaps: Uint8Array | null = null;
   private lastCells: Uint8Array | null = null;
@@ -1128,7 +1183,7 @@ export class CutoutStencilBuilder {
     const rough = heights ? heights.field.chunkRough.reduce((a, v) => a + v, 0) : 0;
     const stats: CutoutStats = {
       coverage, gapCells, baseRebuilt, dropped, unroofedCells, droppedByField: this.baseDroppedByField,
-      grown: this.baseGrow.grown, grownTruncated: this.baseGrow.grownTruncated, rough
+      grown: this.baseGrow.grown, grownTruncated: this.baseGrow.grownTruncated, skirted: this.baseGrow.skirted, rough
     };
     if (this.lastSent && sameCells(cells, this.lastCells)) return { changed: false, ...stats };
     const mask: FootprintMask = { ...base, data: base.data.slice() };

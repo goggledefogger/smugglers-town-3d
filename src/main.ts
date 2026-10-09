@@ -21,7 +21,7 @@ import { PrismMeshView, wallColliders, type Prism } from './render/PrismMeshView
 import { RoadRibbonView } from './render/RoadRibbonView.ts';
 import { pointInRing, type Footprint } from './services/overture/buildings.ts';
 import {
-  packFootprints, CutoutStencilBuilder, cutoutInputDigest, fallbackCarBoxes, ROOF_MIN_M, type CoverageGap, type PackedFootprints, type RoofInput
+  packFootprints, CutoutStencilBuilder, cutoutInputDigest, fallbackCarBoxes, ROOF_MIN_M, type CoverageGap, type FootprintMaskOptions, type PackedFootprints, type RoofInput
 } from './services/overture/footprintMask.ts';
 import { CoalescedRebuild } from './services/overture/coalescedRebuild.ts';
 import { StencilColliders } from './services/overture/stencilWalls.ts';
@@ -697,11 +697,23 @@ const CUTOUT_ROOF_MARGIN_M = 3;
  * short. Off at a 2 m texel (a weak device keeps the polygon), where the field is not read 1:1.
  */
 const CUTOUT_GROW_M = 8;
+/**
+ * How far (m) the skirt runs out past the grown footprints into mesh that rises 1.5-3 m (the hysteresis floor up
+ * to the keep rise) and is not kept: the strip at a wall's foot, a plinth, steps, an entrance canopy. Without it
+ * that strip is cut and the satellite ground shows through a band at the base of the wall. Off with growth at a
+ * 2 m texel. `skirted` in the stats counts it.
+ */
+const CUTOUT_SKIRT_M = 3;
 /** The stencil covers the footprint fetch radius both ways, and no more. */
 const CUTOUT_MASK_OPTS = {
   size: FOOTPRINT_RADIUS_M * 2, cell: CUTOUT_TEXEL_M, dilateM: CUTOUT_DILATE_M, roofCap: CUTOUT_ROOF_CAP,
-  growM: CUTOUT_TEXEL_M === 2 ? 0 : CUTOUT_GROW_M
+  growM: CUTOUT_TEXEL_M === 2 ? 0 : CUTOUT_GROW_M,
+  skirtM: CUTOUT_TEXEL_M === 2 ? 0 : CUTOUT_SKIRT_M
 };
+/** The mask options for a build: the constants plus the keep rise the height field is applied with (its relief). */
+const cutoutMaskOpts = (): FootprintMaskOptions => ({
+  ...CUTOUT_MASK_OPTS, keepRiseM: CUTOUT_MIN_RISE_M * (cutoutTerrain ?? world.terrainProvider).reliefBoost
+});
 /** A classifier building cell with an Overture texel this close (m) is covered; farther, it is a gap. */
 const CUTOUT_GAP_REACH_M = 3;
 /** Streaming tiles rewrite the classifier grid every collider pass: the stencil follows at most this often. */
@@ -729,7 +741,7 @@ let cutoutStats: {
   packMs?: number; buildMs?: number; uploadQueuedMs?: number; gapCells?: number; baseRebuilt?: boolean; roofCap?: boolean; uploadMB?: number;
   requests?: number; uploads?: number; unchanged?: number; digestSkips?: number; inputSkips?: number;
   segments?: number; traceMs?: number; wallsMs?: number; wallBuilds?: number;
-  dropped?: number; droppedByField?: number; grown?: number; grownTruncated?: number; rough?: number;
+  dropped?: number; droppedByField?: number; grown?: number; grownTruncated?: number; skirted?: number; rough?: number;
 } | null = null;
 let cutoutUploads = 0;
 /** Each stencil that landed: when (performance.now), its main-thread ms, its segment count. */
@@ -811,7 +823,8 @@ function runCutoutBuild(): void {
   }
   const packMs = performance.now() - t0;
   // the same footprint set, cells and roof tops as the last posted job: the build would match it
-  const inputDigest = cutoutInputDigest(cutoutSetId, CUTOUT_MASK_OPTS, classifier, cutoutKeepVersion);
+  const maskOpts = cutoutMaskOpts();
+  const inputDigest = cutoutInputDigest(cutoutSetId, maskOpts, classifier, cutoutKeepVersion);
   if (!packed && inputDigest === cutoutLastInputDigest && cutoutMaskFor === polys) {
     cutoutInputSkips++;
     if (cutoutStats) cutoutStats.inputSkips = cutoutInputSkips;
@@ -820,7 +833,7 @@ function runCutoutBuild(): void {
   }
   cutoutLastInputDigest = inputDigest;
   const job: FootprintMaskJob = {
-    id: ++cutoutJobId, setId: cutoutSetId, packed, roof, opts: CUTOUT_MASK_OPTS, classifier, keepVersion: cutoutKeepVersion
+    id: ++cutoutJobId, setId: cutoutSetId, packed, roof, opts: maskOpts, classifier, keepVersion: cutoutKeepVersion
   };
   const finish = (r: FootprintMaskResult): void => {
     const tf = performance.now();
@@ -860,7 +873,7 @@ function runCutoutBuild(): void {
     cutoutStats = {
       footprints: polys.length, texelM: b.mask.cell, n: b.mask.n, dilateM: CUTOUT_DILATE_M, fallback: false,
       packMs, buildMs: r.buildMs, uploadQueuedMs: performance.now() - t1, gapCells: b.gapCells, baseRebuilt: b.baseRebuilt,
-      dropped: b.dropped, droppedByField: b.droppedByField, grown: b.grown, grownTruncated: b.grownTruncated, rough: b.rough,
+      dropped: b.dropped, droppedByField: b.droppedByField, grown: b.grown, grownTruncated: b.grownTruncated, skirted: b.skirted, rough: b.rough,
       roofCap: b.mask.channels === 2, uploadMB: Math.round(b.mask.data.length / 1e4) / 100,
       requests: cutoutRebuild.starts, uploads: cutoutUploads, unchanged: cutoutUnchanged,
       digestSkips: cutoutDigestSkips, inputSkips: cutoutInputSkips,
@@ -869,7 +882,7 @@ function runCutoutBuild(): void {
     log.info('cutout stencil built', cutoutStats);
     if (cutoutDebug) {
       console.info(`[cutoutDebug] stencil landed: ${polys.length} footprints, ${b.dropped} dropped for no rise (${b.droppedByField} by the height field), `
-        + `${b.grown} texels grown (${b.grownTruncated} past the bound), ${b.rough} rough, `
+        + `${b.grown} texels grown (${b.grownTruncated} past the bound), ${b.skirted} skirted, ${b.rough} rough, `
         + `${b.gapCells} gap cells (${b.unroofedCells} unroofed dropped), ${b.segments.length / SEG_STRIDE} segments; skips: ${cutoutDigestSkips} digest, `
         + `${cutoutInputSkips} input, ${cutoutUnchanged} unchanged`);
     }
@@ -956,7 +969,7 @@ function bumpRemeasured(): void {
   cutoutRebuild.request();
 }
 const heightChunkStats = new Map<number, { known: number; kept: number; rough: number; changed: number }>();
-const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number }) => void>();
+const heightAtPending = new Map<number, (r: { rise: number; state: HeightState; chunk: number; rough: boolean }) => void>();
 let heightAtReq = 0;
 
 function heightStats(): { remeasurePending: number; remeasureDrains: number; rebuildStarts: number; chunks: number; captured: number; renderMs: number; readbackMs: number; known: number; kept: number; rough: number } {
@@ -1037,9 +1050,9 @@ function updateHeights(nowMs: number): void {
 }
 
 /** Debug: the height field at world (x, z), asked of the worker that holds it (a round trip, not a mirror). */
-(window as any).__cutoutHeightAt = (x: number, z: number): Promise<{ rise: number; state: HeightState; chunk: number }> =>
+(window as any).__cutoutHeightAt = (x: number, z: number): Promise<{ rise: number; state: HeightState; chunk: number; rough: boolean }> =>
   new Promise(resolve => {
-    if (!cutoutWorker) return resolve({ rise: NaN, state: 'never', chunk: -1 });
+    if (!cutoutWorker) return resolve({ rise: NaN, state: 'never', chunk: -1, rough: false });
     const req = ++heightAtReq;
     heightAtPending.set(req, resolve);
     cutoutWorker.postMessage({ kind: 'heightAt', req, x, z } satisfies HeightMessage);

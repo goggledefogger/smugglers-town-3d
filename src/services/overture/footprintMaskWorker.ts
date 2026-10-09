@@ -40,7 +40,7 @@ export type HeightReply =
   | ({ readonly kind: 'heightsApplied'; readonly chunk: number } & HeightChunkStats)
   /** a heights or terrain message threw (a bad chunk size, say): the field is as it was; this is not a stencil job */
   | { readonly kind: 'heightsError'; readonly message: string; readonly chunk?: number }
-  | { readonly kind: 'heightAtResult'; readonly req: number; readonly rise: number; readonly state: HeightState; readonly chunk: number };
+  | { readonly kind: 'heightAtResult'; readonly req: number; readonly rise: number; readonly state: HeightState; readonly chunk: number; readonly rough: boolean };
 
 export type FootprintMaskResult =
   | { readonly id: number; readonly build: CutoutBuild; /** worker-side build time (ms) */ readonly buildMs: number; readonly error?: undefined; readonly kind?: undefined }
@@ -72,7 +72,7 @@ ctx.onmessage = e => {
       } else if (heightField) {
         ctx.postMessage({ kind: 'heightAtResult', req: m.req, ...heightAt(heightField, m.x, m.z) });
       } else {
-        ctx.postMessage({ kind: 'heightAtResult', req: m.req, rise: NaN, state: 'never', chunk: chunkAt(m.x, m.z) });
+        ctx.postMessage({ kind: 'heightAtResult', req: m.req, rise: NaN, state: 'never', chunk: chunkAt(m.x, m.z), rough: false });
       }
     } catch (err) {
       ctx.postMessage({ kind: 'heightsError', message: String(err), ...(m.kind === 'heights' ? { chunk: m.chunk } : {}) });

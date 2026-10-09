@@ -730,7 +730,9 @@ half measured the old 10 m classifier rule stands. Fill: texels measured not-kep
 before) after a 3x3 open-then-close, so a pole is shed and a stair-step closed; rough is ignored inside a polygon.
 Growth: one multi-source flood on the filled raster, before dilation, enters unfilled kept non-rough texels whose
 rise is at most the parent's cap, at most 8 layers (`CUTOUT_GROW_M`, off at a 2 m texel), taking the parent's
-cap (the higher where fronts meet) and counting `grown` / `grownTruncated`; gap cells paint only kept non-rough
+cap (the higher where fronts meet) and counting `grown` / `grownTruncated`; then a skirt of at most 3 layers
+(`CUTOUT_SKIRT_M`) enters unfilled, measured, not kept, not rough texels at or over the hysteresis floor (half the
+keep rise), parent's cap, never a kept texel, counted as `skirted`, so a wall's 1.5-3 m foot is not cut; gap cells paint only kept non-rough
 texels where the field is measured. Collider rule unchanged: `core` (grown texels included) is walled, `mask` is
 `dilate(core)`. A chunk that flips a kept or rough bit bumps the input digest's keep version and requests a rebuild
 on the usual 2 s cadence. A new tileset sends `terrain` (a fresh, all-unknown field); a ground refinement sends
@@ -738,7 +740,7 @@ on the usual 2 s cadence. A new tileset sends `terrain` (a fresh, all-unknown fi
 stencil does not flicker back to the old rule. The refinement also re-stands the wall colliders on the new ground
 (`StencilColliders.reground`, no digest change), and a `RemeasureTracker` holds every chunk seen before the swap until
 its re-measure lands or the capture turns it away (no fine tile left), then bumps the keep version once so roof caps
-read the new ground even when no bit flipped. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `rough`.
+read the new ground even when no bit flipped. `__cutoutStats()` carries `heights`, `droppedByField`, `grown`, `grownTruncated`, `skirted`, `rough`; `__cutoutHeightAt` reports `rough`.
 
 Roofed over, for the classifier's cells: the classifier calls a 10 m cell a
 building when its TALLEST geometry rises 3.5 m above the ground estimate, so
