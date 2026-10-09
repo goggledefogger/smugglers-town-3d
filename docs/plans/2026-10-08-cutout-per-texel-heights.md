@@ -1,8 +1,6 @@
 # Cutout 3D: per-texel heights from the loaded tiles (option 2)
 
-Status: default view since 2026-10-08 (see docs/ARCHITECTURE.md, "View modes").
-
-Status: design, 2026-10-08. Stage 1 (capture and field) is built, measured, not consumed. Stage 2 is sections 4 and 4b, and 4b ships first. Baseline: `npx vitest run tests/cutout.test.ts` passes, 49/49.
+Status: shipped and the default view since 2026-10-08 (see docs/ARCHITECTURE.md, "View modes"). Written as a design on 2026-10-08, when stage 1 (capture and field) was built and measured but not consumed and stage 2 was sections 4 and 4b, 4b first. Baseline: `npx vitest run tests/cutout.test.ts` passes, 49/49.
 
 ## 0. Measured since stage 1
 
