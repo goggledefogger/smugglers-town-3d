@@ -53,6 +53,7 @@ import type { Heightfield } from '../core/heightfield.ts';
 import type { BuildingCollider } from '../core/physics/VehicleBody.ts';
 import type { Grid } from '../services/tiles/tileColliders.ts';
 import { injectDetailGrain } from './DetailGrain.ts';
+import { injectTileSharpen } from './TileSharpen.ts';
 
 export type ClutterMode = 'off' | 'flatten' | 'hidden' | 'swept' | 'cutout';
 /** Index order is baked into the shader's mode comparisons: append, never reorder. */
@@ -600,6 +601,8 @@ export class TileClutterFilter {
           prev?.call(m, shader, renderer);
           this.inject(shader);
           injectDetailGrain(shader);
+          // after the grain: it reuses the grain's varying and fade, and lands ahead of it in the shader
+          injectTileSharpen(shader);
         };
         m.needsUpdate = true;
       }

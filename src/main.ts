@@ -49,6 +49,7 @@ import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicles/index.ts';
 import { PMREMGenerator, type Texture, type Material, type Mesh, type PlaneGeometry } from 'three';
 import { patchDetailGrain } from './render/DetailGrain.ts';
+import { getTileSharpen, setTileSharpen } from './render/TileSharpen.ts';
 import { GroundShade } from './render/GroundShade.ts';
 import { Heightfield } from './core/heightfield.ts';
 import { generateDesertHeightfieldData, createDesertTerrain } from './core/terrain/ProceduralTerrain.ts';
@@ -239,6 +240,11 @@ if (typeof window !== 'undefined') {
   (window as any).__terrainMesh = terrainMesh;
   (window as any).__renderer = renderer;
   (window as any).__setViewMode = (m: ViewMode) => setViewMode(m);
+  /** Read, or set live (0..1, 0 = off), the tile sharpening strength; one shared uniform, no recompile. */
+  (window as any).__tileSharpen = (v?: number): number => {
+    if (typeof v === 'number' && Number.isFinite(v)) setTileSharpen(v);
+    return getTileSharpen();
+  };
 }
 export type { ViewMode } from './render/viewModes.ts';
 /** Cutout 3D unless ?view=<any mode name> picks another (viewModes.ts DEFAULT_VIEW_MODE). */

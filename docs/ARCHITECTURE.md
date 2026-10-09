@@ -1010,6 +1010,13 @@ the same standard answers:
   too, fading to nothing by 110 m) is multiplied into the albedo. It is
   injected into every tile material by the clutter filter's shader patch and
   into the ground materials directly.
+- **Tile sharpen** (`render/TileSharpen.ts`). Contrast-adaptive sharpening
+  (AMD CAS, per channel) of the Google tile albedo, before the grain and under
+  the grain's 110 m fade: four extra reads of the tile's own texture, texel
+  size from `textureSize`. Tiles only, not the ground. Strength
+  `TILE_SHARPEN_DEFAULT` 0.5 (`render/lookConfig.ts`), `?sharpen=0..1`,
+  live via `window.__tileSharpen(v?)`; 0 skips the branch and leaves the
+  albedo bit-exact.
 - **Patch coverage cutout.** A streamed patch and the base terrain are two
   triangulations of the same heightfield, so polygon offset alone let the
   blurry zoom-15 base bleed through as dark polygons wherever the coarser
