@@ -244,9 +244,8 @@ export type { ViewMode } from './render/viewModes.ts';
 /** Cutout 3D unless ?view=<any mode name> picks another (viewModes.ts DEFAULT_VIEW_MODE). */
 let viewMode: ViewMode = initialViewMode(window.location.search);
 let clutterFilter: TileClutterFilter | null = null;
-// the mode survives a relocate: a new filter starts in it
-// swept by default: flattens road clutter while keeping kerbside building facades
-// and trees over the sharper streamed satellite ground
+// the mode survives a relocate: a new filter starts in it, then setViewMode re-applies the view's own.
+// Off until a view sets it: Cutout 3D sets 'cutout' in setViewMode, masked-tiles 'swept', best-3d 'hidden'
 let clutterMode: ClutterMode = 'off';
 /** Modes that discard the tile's own road surface, so satellite ground must stream beneath tiles. */
 const REVEALS_GROUND: ReadonlySet<ClutterMode> = new Set(['hidden', 'swept', 'cutout']);
@@ -361,12 +360,10 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     terrain.heightfield, streamer.structureGrid, streamer.grid.n, terrain.reliefBoost
   );
   (window as any).__clutterFilter = clutterFilter;
+  // Real 3D's 'off' is not set here: setViewMode at the end of this function sets it
   if (viewMode === 'masked-tiles') {
     clutterFilter.mode = 'hidden';
     clutterMode = 'hidden';
-  } else if (viewMode === 'photoreal') {
-    clutterFilter.mode = 'off';
-    clutterMode = 'off';
   } else {
     clutterFilter.mode = clutterMode;
   }
@@ -1151,7 +1148,9 @@ function rebuildViews(): void {
   for (const actor of world.vehicles) {
     const view = new VehicleView(
       actor, () => world.terrainProvider.heightfield,
-      (x, z) => viewMode === 'photoreal' ? groundShade.shadeAt(x, z) : 1
+      // darken the car where the photo ground under it is in a photographed shadow: Real 3D, and
+      // Cutout 3D, whose ground between the cut buildings is the same satellite imagery
+      (x, z) => viewMode === 'photoreal' || traits(viewMode).cutsToFootprints ? groundShade.shadeAt(x, z) : 1
     );
     vehicleViews.push(view);
     renderer.scene.add(view.group);

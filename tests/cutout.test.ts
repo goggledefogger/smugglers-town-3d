@@ -17,7 +17,7 @@ import { traceStencil, SEG_STRIDE, SEG_SRC_OVERTURE, SEG_SRC_GAP, SEG_SRC_UNKNOW
 import { debugLines, DEBUG_COLOURS } from '../src/render/CutoutDebugOverlay.ts';
 import { stencilWallColliders, StencilColliders, WALL_FULL_HEIGHT } from '../src/services/overture/stencilWalls.ts';
 import { sphereVsWall } from '../src/core/physics/collision.ts';
-import { VIEW_MODES, VIEW_MODE_CYCLE, DEFAULT_VIEW_MODE, traits, parseViewMode, initialViewMode } from '../src/render/viewModes.ts';
+import { VIEW_MODES, VIEW_MODE_CYCLE, traits, parseViewMode } from '../src/render/viewModes.ts';
 
 /** closed square ring, world x,z */
 const square = (x0: number, z0: number, x1: number, z1: number) => [x0, z0, x1, z0, x1, z1, x0, z1, x0, z0];
@@ -849,15 +849,6 @@ describe('Cutout 3D view mode', () => {
     expect(parseViewMode('nope')).toBeNull();
     expect(parseViewMode('toString')).toBeNull();
     expect(parseViewMode(null)).toBeNull();
-  });
-  it('is the default view: no ?view= (or an unknown one) lands in it, and V cycles away from it first', () => {
-    expect(DEFAULT_VIEW_MODE).toBe('cutout-3d');
-    expect(initialViewMode('')).toBe('cutout-3d');
-    expect(initialViewMode('?lat=37.79&lon=-122.40&debug')).toBe('cutout-3d');
-    expect(initialViewMode('?view=nope')).toBe('cutout-3d');
-    expect(initialViewMode('?view=photoreal')).toBe('photoreal');
-    expect(initialViewMode('?lat=1&view=game3d')).toBe('game3d');
-    expect(VIEW_MODE_CYCLE[0]).toBe(DEFAULT_VIEW_MODE);
   });
 });
 

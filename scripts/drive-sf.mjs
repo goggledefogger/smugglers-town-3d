@@ -5,6 +5,7 @@
 //
 // Usage: node scripts/drive-sf.mjs [lat lon]
 // Needs the worktree dev server on :5199 and .sm-key.txt
+// Pins ?view=photoreal: Cutout 3D became the default view on 2026-10-08, and Real 3D keeps these numbers comparable with earlier runs.
 import { chromium } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 
@@ -24,7 +25,7 @@ page.on('console', m => {
 
 await page.goto(`${BASE}/?debug`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
-await page.goto(`${BASE}/?debug&lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
+await page.goto(`${BASE}/?debug&lat=${LAT}&lon=${LON}&view=photoreal`, { waitUntil: 'load' });
 
 await page.waitForFunction(() => window.__capture?.ready, null, { timeout: 180000 });
 console.log('world ready, spawning…');

@@ -5,6 +5,7 @@
  *
  * Usage: node scripts/capture-rasters.mjs <name> <lat> <lon>
  * Needs the dev server on :5173 and .sm-key.txt with a Maps key.
+ * Pins ?view=photoreal: Cutout 3D became the default view on 2026-10-08, and Real 3D keeps these numbers comparable with earlier runs.
  */
 import { chromium } from 'playwright-core';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
@@ -21,7 +22,7 @@ page.on('pageerror', e => errs.push(String(e).slice(0, 200)));
 const BASE = process.env.CAPTURE_URL ?? 'http://localhost:5199';
 await page.goto(`${BASE}/?debug`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
-await page.goto(`${BASE}/?debug&lat=${lat}&lon=${lon}`, { waitUntil: 'load' });
+await page.goto(`${BASE}/?debug&lat=${lat}&lon=${lon}&view=photoreal`, { waitUntil: 'load' });
 
 // wait for the world to settle: tiles loaded, colliders built at least once
 await page.waitForFunction(() => {

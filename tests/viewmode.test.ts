@@ -8,6 +8,7 @@ import { Heightfield } from '../src/core/heightfield.ts';
 import type { BuildingCollider } from '../src/core/physics/VehicleBody.ts';
 import type { Grid } from '../src/services/tiles/tileColliders.ts';
 import { NO_DATA } from '../src/services/tiles/tileColliders.ts';
+import { VIEW_MODE_CYCLE, DEFAULT_VIEW_MODE, initialViewMode } from '../src/render/viewModes.ts';
 
 describe('BuildingMeshView', () => {
   it('instantiates hidden and toggles visibility', () => {
@@ -147,6 +148,18 @@ describe('ViewMode input bindings', () => {
       { kind: 'key', code: 'KeyV' },
       { kind: 'key', code: 'KeyG' }
     ]);
+  });
+});
+
+describe('Default view and the V order', () => {
+  it('is the default view: no ?view= (or an unknown one) lands in it, and V cycles away from it first', () => {
+    expect(DEFAULT_VIEW_MODE).toBe('cutout-3d');
+    expect(initialViewMode('')).toBe('cutout-3d');
+    expect(initialViewMode('?lat=37.79&lon=-122.40&debug')).toBe('cutout-3d');
+    expect(initialViewMode('?view=nope')).toBe('cutout-3d');
+    expect(initialViewMode('?view=photoreal')).toBe('photoreal');
+    expect(initialViewMode('?lat=1&view=game3d')).toBe('game3d');
+    expect(VIEW_MODE_CYCLE[0]).toBe(DEFAULT_VIEW_MODE);
   });
 });
 

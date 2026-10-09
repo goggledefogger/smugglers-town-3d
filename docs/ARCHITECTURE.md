@@ -58,7 +58,7 @@ Details: the "Cutout 3D" section under Services, and
 
 Options considered (all still in the build, none removed):
 
-| Mode (`?view=`) | What it tried | Why Cutout 3D won over it |
+| Mode (`?view=`) | What it tried | Its documented limit (kept as a comparison view) |
 | :--- | :--- | :--- |
 | `photoreal` (Real 3D) | Google's tiles raw; the default until 2026-10-08. | Parked cars, kerbs and street furniture are baked into the mesh, and the car hits classifier boxes it cannot see (the render/collision mismatch noted under the clutter filter). |
 | `masked-tiles` | Real 3D with the Swept clutter filter over satellite ground. | The cut is per vertex on a 10 m mask, so it follows triangle edges, and it is render-side only: what it hides still collides. |

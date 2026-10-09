@@ -1,3 +1,6 @@
+// Real 3D load check: starts pinned in Real 3D (?view=photoreal; Cutout 3D is the default since 2026-10-08),
+// records tiles, layers and clutter mode, then presses V 9 times, one full lap of VIEW_MODE_CYCLE (9 modes,
+// through Cutout 3D), back to Real 3D, and logs the same diagnostics to compare. Change 9 if a mode is added.
 import { chromium } from 'playwright-core';
 import { readFileSync, mkdirSync } from 'node:fs';
 
@@ -51,7 +54,7 @@ const initialShot = `${SCRATCH}/real3d_01_initial_load.png`;
 await page.screenshot({ path: initialShot });
 console.log(`[verify] Saved initial load screenshot: ${initialShot}`);
 
-// Now cycle through all 9 modes (VIEW_MODE_CYCLE) back to Real 3D
+// One full lap of the 9 modes in VIEW_MODE_CYCLE: from Real 3D through Cutout 3D and back to Real 3D
 console.log('[verify] Cycling through all modes back to Real 3D...');
 for (let i = 0; i < 9; i++) {
   await page.keyboard.press('KeyV');

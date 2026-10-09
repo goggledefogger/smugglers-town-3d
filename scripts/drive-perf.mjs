@@ -9,6 +9,7 @@
 //   UNCAP=1 ...   vsync off: frame time = work done, for A/B comparisons
 //   GPU=4 ...     render at 4x pixel ratio so the GPU is the bottleneck
 // Needs the dev server on :5173 and .sm-key.txt.
+// Pins ?view=photoreal: Cutout 3D became the default view on 2026-10-08, and Real 3D keeps these numbers comparable with earlier runs.
 import { chromium } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 
@@ -22,7 +23,7 @@ const page = await b.newPage({ viewport: { width: 1280, height: 800 }, deviceSca
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
 // the Strip in front of Planet Hollywood, heading north past Bellagio and Caesars
-await page.goto(`${BASE}/?lat=${process.env.LAT ?? '36.1075'}&lon=${process.env.LON ?? '-115.1727'}`, { waitUntil: 'load' });
+await page.goto(`${BASE}/?lat=${process.env.LAT ?? '36.1075'}&lon=${process.env.LON ?? '-115.1727'}&view=photoreal`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
 await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });

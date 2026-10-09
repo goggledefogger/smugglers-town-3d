@@ -1,3 +1,4 @@
+// Pins ?view=photoreal: Cutout 3D became the default view on 2026-10-08, and Real 3D keeps these numbers comparable with earlier runs.
 import { chromium } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 
@@ -10,7 +11,7 @@ const page = await browser.newPage({ viewport: { width: 1280, height: 720 }, dev
 try {
   await page.goto(`${BASE}/`, { waitUntil: 'load' });
   await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
-  await page.goto(`${BASE}/?lat=37.79344&lon=-122.42127&debug`, { waitUntil: 'load' });
+  await page.goto(`${BASE}/?lat=37.79344&lon=-122.42127&debug&view=photoreal`, { waitUntil: 'load' });
   await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 60000 });
   await page.waitForFunction(() => !document.querySelector('sr-relocate')?.busy, null, { timeout: 60000 });
   await page.locator('sr-intro button.play').click();

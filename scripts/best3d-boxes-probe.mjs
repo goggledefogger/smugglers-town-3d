@@ -1,5 +1,6 @@
 // For every collider box within reach of the car: bounds, and where the tile
 // vertices around it sit (snapped per face, above the top, out of reach).
+// Pins ?view=photoreal: Cutout 3D became the default view on 2026-10-08, and Real 3D keeps these numbers comparable with earlier runs.
 import { chromium } from 'playwright-core';
 import { readFileSync } from 'node:fs';
 
@@ -13,7 +14,7 @@ const b = await chromium.launch({ channel: 'chrome', headless: false });
 const page = await b.newPage({ viewport: { width: 1280, height: 800 } });
 await page.goto(`${BASE}/`, { waitUntil: 'load' });
 await page.evaluate(k => localStorage.setItem('gmap_key', k), key);
-await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}`, { waitUntil: 'load' });
+await page.goto(`${BASE}/?lat=${LAT}&lon=${LON}&view=photoreal`, { waitUntil: 'load' });
 await page.waitForSelector('sr-loader[hidden]', { state: 'attached', timeout: 180000 });
 await page.locator('sr-intro button.play').click();
 await page.waitForFunction(() => !!window.__tiles && !!window.__game?.player, null, { timeout: 60000 });
