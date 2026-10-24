@@ -186,8 +186,7 @@ the wrong one.**
   the signal already produces a residual above the 3.5 m building threshold,
   peaking at 17.5 m. The unused `slopeAdaptiveRiseCoeff` threshold was removed after confirming
   that even a curvature-corrected ground estimate moved connectivity only
-  5.9% -> 6.0%. Either way it is not worth doing on its own: a
-  curvature-corrected ground estimate moved connectivity 5.9% → 6.0%.
+  5.9% -> 6.0%, so it is not worth doing on its own.
 
 - **Threshold and mask tuning is a dead end.** Relaxed drivable caps,
   curvature correction, height-banded box merging, mask despeckling and

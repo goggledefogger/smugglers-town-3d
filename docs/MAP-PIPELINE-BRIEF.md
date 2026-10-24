@@ -99,9 +99,9 @@ Opening is exact on a constant grade, so a uniformly steep street has near-zero
 error; the error appears at crests and grade changes. Measured residual is about
 0.35 × the geometric sagitta over the structuring element.
 
-Note: `slopeAdaptiveRiseCoeff: 12.0` is declared in the thresholds and **never read
-anywhere in the codebase**. The planned fix was never implemented, and as specified
-it keys on the wrong variable.
+Note: the `slopeAdaptiveRiseCoeff: 12.0` threshold was never read anywhere in the
+codebase, so it has been removed. The planned fix was never implemented, and as
+specified it keys on the wrong variable.
 
 ## 6. What we tried, and the results
 

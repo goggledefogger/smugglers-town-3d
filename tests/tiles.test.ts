@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { Mesh, BufferGeometry, BufferAttribute, Group, Vector3, Matrix4, Float32BufferAttribute } from 'three';
 import {
-  boxDistanceM, collectTiles, glbPlacement, allowedErrorM, DEFAULT_LOD, STREAM_LOD, type TileNode
+  boxDistanceM, collectTiles, glbPlacement, TileStreamer, allowedErrorM, DEFAULT_LOD, STREAM_LOD, type TileNode
 } from '../src/services/tiles/Tileset.ts';
 import {
   buildingCollidersFrom, rasterizeTile, tileGroundOffset, groundEstimate, groundField, TILE_GROUND_GAP,
@@ -11,6 +11,7 @@ import { tileTransformChain } from '../src/core/geo/projection.ts';
 import { latLonToEcef } from '../src/core/geo/ecef.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
 import { tileCache, cacheKeyFor } from '../src/services/tiles/TileCache.ts';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import { satelliteUrl } from '../src/services/maps/MapsApi.ts';
 
 const ORIGIN = { x: 1000, y: 2000, z: 3000 };
@@ -789,3 +790,92 @@ describe('one shared ground', () => {
   });
 });
 
+
+describe('TileStreamer.refine races', () => {
+  const origin = { lat: 45.5152, lon: -122.6784 };
+  const parentNode: TileNode = {
+    content: { uri: 'parent.glb' },
+    children: [{ content: { uri: 'a.glb' } }, { content: { uri: 'b.glb' } }]
+  };
+
+  function setup() {
+    const hf = new Heightfield(5600, 16, new Float32Array(17 * 17));
+    const streamer = new TileStreamer('KEY', { heightfield: hf, reliefBoost: 1 } as never, origin, latLonToEcef(origin.lat, origin.lon, 0));
+    const parentGroup = new Group();
+    const parent = { node: parentNode, session: null, distM: 0, group: parentGroup, raster: null, done: false };
+    const s = streamer as unknown as { tiles: unknown[]; refine(t: unknown): Promise<void> };
+    s.tiles.push(parent);
+    streamer.group.add(parentGroup);
+    return { streamer, s, parent };
+  }
+
+  /** stubs the GLB pipeline; each parse waits on `gate` and yields a one-mesh scene whose geometry.dispose is spied */
+  function stubLoader(opts: { failFirst?: boolean } = {}) {
+    const disposed: ReturnType<typeof vi.fn>[] = [];
+    const scenes: Group[] = [];
+    let started = 0;
+    let release!: () => void;
+    const gate = new Promise<void>(r => { release = r; });
+    vi.spyOn(tileCache, 'getBuffer').mockResolvedValue(new ArrayBuffer(8));
+    vi.spyOn(GLTFLoader.prototype, 'parseAsync').mockImplementation((async () => {
+      const n = started++;
+      await gate;
+      if (opts.failFirst && n === 0) throw new Error('bad glb');
+      const geo = new BufferGeometry();
+      geo.setAttribute('position', new Float32BufferAttribute([0, 0, 0, 1, 0, 0, 0, 1, 0], 3));
+      disposed.push(vi.spyOn(geo, 'dispose') as never);
+      const scene = new Group();
+      scene.add(new Mesh(geo));
+      scenes.push(scene);
+      return { scene };
+    }) as never);
+    return { disposed, scenes, release, started: () => started };
+  }
+
+  afterEach(() => vi.restoreAllMocks());
+
+  it('disposes children and keeps them out of the group when the parent was evicted mid-load', async () => {
+    const { streamer, s, parent } = setup();
+    const onLoaded = vi.fn();
+    streamer.onTileLoaded = onLoaded;
+    const stub = stubLoader();
+    const done = s.refine(parent);
+    await vi.waitFor(() => expect(stub.started()).toBe(2));
+    s.tiles.length = 0;
+    stub.release();
+    await done;
+    expect(stub.scenes).toHaveLength(2);
+    expect(stub.disposed).toHaveLength(2);
+    for (const d of stub.disposed) expect(d).toHaveBeenCalled();
+    for (const sc of stub.scenes) expect(streamer.group.children).not.toContain(sc);
+  });
+
+  it('disposes the surviving child and keeps the parent when a sibling fails', async () => {
+    const { streamer, s, parent } = setup();
+    const stub = stubLoader({ failFirst: true });
+    const done = s.refine(parent);
+    await vi.waitFor(() => expect(stub.started()).toBe(2));
+    stub.release();
+    await done;
+    expect(stub.scenes).toHaveLength(1);
+    expect(stub.disposed[0]).toHaveBeenCalled();
+    expect(streamer.group.children).toEqual([parent.group]);
+    expect(s.tiles).toEqual([parent]);
+  });
+
+  it('disposes a result that lands after the streamer is disposed and never reports it', async () => {
+    const { streamer, s, parent } = setup();
+    const onLoaded = vi.fn();
+    streamer.onTileLoaded = onLoaded;
+    const stub = stubLoader();
+    const done = s.refine(parent);
+    await vi.waitFor(() => expect(stub.started()).toBe(2));
+    streamer.dispose();
+    stub.release();
+    await done;
+    expect(stub.disposed).toHaveLength(2);
+    for (const d of stub.disposed) expect(d).toHaveBeenCalled();
+    expect(onLoaded).not.toHaveBeenCalled();
+    expect(streamer.group.children).toHaveLength(0);
+  });
+});

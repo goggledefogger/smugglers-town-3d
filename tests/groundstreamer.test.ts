@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { GroundStreamer } from '../src/services/maps/GroundStreamer.ts';
 import { Heightfield } from '../src/core/heightfield.ts';
+import { tileCache } from '../src/services/tiles/TileCache.ts';
 
 function createMockHeightfield(): Heightfield {
   return new Heightfield(5600, 16, new Float32Array(17 * 17));
@@ -98,6 +99,49 @@ describe('GroundStreamer', () => {
     expect(streamer.tileSizeUnits).toBeCloseTo(z18Size / 4, 1);
 
     streamer.dispose();
+  });
+
+  describe('stale zoom', () => {
+    afterEach(() => {
+      vi.restoreAllMocks();
+      vi.unstubAllGlobals();
+    });
+
+    it('builds no mesh for a patch whose zoom changed while its fetch was pending', async () => {
+      const streamer = new GroundStreamer({
+        apiKey: 'TEST_KEY',
+        center: { lat: 37.7934, lon: -122.4212 },
+        heightfield: createMockHeightfield(),
+        zoom: 18,
+        maxPatches: 16
+      });
+      let release!: () => void;
+      const gate = new Promise<void>(r => { release = r; });
+      vi.stubGlobal('Image', class {});
+      vi.stubGlobal('fetch', vi.fn(async () => {
+        await gate;
+        return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) };
+      }));
+      vi.spyOn(tileCache, 'getBuffer').mockResolvedValue(null);
+      vi.spyOn(tileCache, 'putBuffer').mockResolvedValue(undefined);
+      const decode = vi.fn(async () => ({}));
+      (streamer as unknown as { decodeBlob: unknown }).decodeBlob = decode;
+      const onPatch = vi.fn();
+      streamer.onPatch = onPatch;
+
+      const pending = (streamer as unknown as {
+        createPatch(k: string, c: number, r: number, x: number, z: number): Promise<void>;
+      }).createPatch('18:0:0', 0, 0, 0, 0);
+      streamer.setZoom(19, 36, 8);
+      release();
+      await pending;
+
+      expect(decode).not.toHaveBeenCalled();
+      expect(onPatch).not.toHaveBeenCalled();
+      expect(streamer.group.children).toHaveLength(0);
+      expect(streamer.patchCount).toBe(0);
+      streamer.dispose();
+    });
   });
 
   describe('GroundShade', () => {

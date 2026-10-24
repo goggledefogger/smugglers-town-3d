@@ -1179,7 +1179,11 @@ function clearTiles(): void {
   prismsFor = null;
   cutoutMaskFor = null;
   cutoutWalls.clear();
-  cutoutDebugOverlay?.clear();
+  if (cutoutDebugOverlay) {
+    renderer.scene.remove(cutoutDebugOverlay.group);
+    cutoutDebugOverlay.dispose();
+    cutoutDebugOverlay = null;
+  }
   cutoutCoverageStat = null;
   cutoutBuilderFor = null;
   cutoutTerrain = null;
