@@ -231,8 +231,11 @@ export class PrismMeshView {
       let tris: number[][];
       try { tris = ShapeUtils.triangulateShape(contour, holes); } catch { return; }
       const verts: number[] = [];
-      for (const v of [contour, ...holes].flat()) verts.push(v.x, v.y);
-      roofs.push({ verts, tris: tris.flat(), y: p.y1 });
+      for (const v of contour) verts.push(v.x, v.y);
+      for (const h of holes) for (const v of h) verts.push(v.x, v.y);
+      const flatTris: number[] = [];
+      for (const t of tris) flatTris.push(t[0]!, t[1]!, t[2]!);
+      roofs.push({ verts, tris: flatTris, y: p.y1 });
       roofVerts += verts.length / 2;
     });
     const nWallV = walls.length * 4;

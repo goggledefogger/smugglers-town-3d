@@ -129,13 +129,15 @@ export class CameraRig {
     const z = this.zoom;
     if (this.mode === 0) {
       this._back.set(0, 0, 14 * z).applyQuaternion(player.quat);
-      this._desired.copy(player.pos).add(new Vector3(0, 6 * z, 0)).add(this._back);
+      this._desired.copy(player.pos).add(this._back);
+      this._desired.y += 6 * z;
       this._desired.y = Math.max(
         this._desired.y, this.ground().sample(this._desired.x, this._desired.z) + 4
       );
     } else if (this.mode === 1) {
       this._back.set(0, 0, 24 * z).applyQuaternion(player.quat);
-      this._desired.copy(player.pos).add(new Vector3(0, 10 * z, 0)).add(this._back);
+      this._desired.copy(player.pos).add(this._back);
+      this._desired.y += 10 * z;
     } else {
       const fwd = this._back.set(0, 0, -1).applyQuaternion(player.quat);
       this.camera.position.copy(player.pos).addScaledVector(fwd, 1.2);
@@ -146,7 +148,8 @@ export class CameraRig {
       this.lookY = null;
       return;
     }
-    this._look.copy(player.pos).add(new Vector3(0, 2, 0));
+    this._look.copy(player.pos);
+    this._look.y += 2;
     this.avoidBuildings(0);
     this.camera.position.copy(this._desired);
     this.lookY = this._look.y;
@@ -221,13 +224,15 @@ export class CameraRig {
     const z = this.zoom;
     if (this.mode === 0) {
       this._back.set(0, 0, 14 * z).applyQuaternion(player.quat);
-      this._desired.copy(player.pos).add(new Vector3(0, 6 * z, 0)).add(this._back);
+      this._desired.copy(player.pos).add(this._back);
+      this._desired.y += 6 * z;
       this._desired.y = Math.max(
         this._desired.y, this.ground().sample(this._desired.x, this._desired.z) + 4
       );
     } else if (this.mode === 1) {
       this._back.set(0, 0, 24 * z).applyQuaternion(player.quat);
-      this._desired.copy(player.pos).add(new Vector3(0, 10 * z, 0)).add(this._back);
+      this._desired.copy(player.pos).add(this._back);
+      this._desired.y += 10 * z;
     } else {
       // hood: rigidly on the bonnet, looking down the road (the prototype's
       // version sat ahead of the car looking back at its own grille)
@@ -240,7 +245,8 @@ export class CameraRig {
       this.lookY = null;
       return;
     }
-    this._look.copy(player.pos).add(new Vector3(0, 2, 0));
+    this._look.copy(player.pos);
+    this._look.y += 2;
     // a chase camera 14 units back is inside the block behind the car in
     // any downtown: pull it in along the line to the car until the view is
     // clear, and if even close in is blocked, climb instead
