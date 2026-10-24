@@ -191,6 +191,12 @@ const cameraRig = new CameraRig(
 const minimapEl = document.querySelector('sr-minimap') as Minimap;
 const showroom = new Showroom(renderer.scene, renderer.camera, () => world.terrainProvider.heightfield);
 const vehicleViews: VehicleView[] = [];
+function poseOfBody(body: import('./core/physics/VehicleBody.ts').VehicleBody): import('./render/VehicleView.ts').Pose | null {
+  for (const v of vehicleViews) {
+    if (v.actor.body === body) return v.pose;
+  }
+  return null;
+}
 let tiles: TileStreamer | null = null;
 let groundStreamer: GroundStreamer | null = null;
 let colliderRefreshAt = 0;
@@ -1995,11 +2001,15 @@ function step(now: number): void {
       groundStreamer.update(player.pos, now);
     }
     profiler.lap('world');
-    for (const v of vehicleViews) v.sync(dt, world.alpha);
+    let playerPose: import('./render/VehicleView.ts').Pose | null = null;
+    for (const v of vehicleViews) {
+      v.sync(dt, world.alpha);
+      if (v.actor.isPlayer) playerPose = v.pose;
+    }
     // each carried crate rides its carrier's interpolated pose, not the body,
     // so it does not judder a frame behind the car it is strapped to
-    pickups.sync(world.state, simTime, dt, body => vehicleViews.find(v => v.actor.body === body)?.pose ?? null);
-    cameraRig.update(dt, vehicleViews.find(v => v.actor.isPlayer)?.pose ?? null);
+    pickups.sync(world.state, simTime, dt, poseOfBody);
+    cameraRig.update(dt, playerPose);
     const nav = world.navMarker();
     if (nav) dirArrowEl.setNav(nav.yaw, nav.distance);
     minimapEl.draw(world.state, world.vehicles, world.player, nav?.target ?? null);

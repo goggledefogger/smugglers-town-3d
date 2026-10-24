@@ -262,6 +262,18 @@ describe('Game line of sight', () => {
     expect(t).toBeGreaterThan(0.5);
     expect(t).toBeLessThan(0.72);
   });
+
+  it('detects buildings in intermediate broadphase cells along long camera rays', () => {
+    const { game } = makeGame();
+    // Building at z = 90..100 sits in broadphase cell cj = 2 (80..120m), outside the 3x3
+    // neighborhood of both endpoints from=(0,5,0) (cells -1..1) and to=(0,5,180) (cells 3..5)
+    game.setBuildingColliders([
+      { min: new Vector3(-20, 0, 90), max: new Vector3(20, 30, 100) }
+    ]);
+    const t = game.lineOfSight(new Vector3(0, 5, 0), new Vector3(0, 5, 180));
+    expect(t).toBeGreaterThan(0.45);
+    expect(t).toBeLessThan(0.55);
+  });
 });
 
 describe('Game terrain adoption (garage relocate)', () => {

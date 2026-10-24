@@ -89,8 +89,6 @@ export interface ColliderThresholds {
   readonly insetIsolatedColumnM: number;
   /** Max bicubic smoothing error in meters between 87m DEM terrain and 10m photogrammetry on steep terrain. */
   readonly terrainSmoothingToleranceM: number;
-  /** Slope-adaptive rise coefficient scaling building rise with local terrain gradient tan(theta). */
-  readonly slopeAdaptiveRiseCoeff: number;
   /** Active driving experiment mode under evaluation. */
   readonly experimentMode?: ColliderExperimentMode;
   /** Slack multiplier for OSM road corridor reach padding (default 0.5; 0.85 in road_carve). */
@@ -130,7 +128,6 @@ export const DEFAULT_COLLIDER_THRESHOLDS: ColliderThresholds = {
   insetExteriorStreetM: 1.0,
   insetIsolatedColumnM: 2.8,
   terrainSmoothingToleranceM: 8.0,
-  slopeAdaptiveRiseCoeff: 12.0,
   experimentMode: 'baseline',
   roadReachSlackMultiplier: 0.5
 };
@@ -220,10 +217,12 @@ const _tri = [new Vector3(), new Vector3(), new Vector3()] as const;
  * a triangle's max over its whole footprint would smear the high end of any
  * large sloped triangle downhill and turn hillsides into "buildings".
  */
+const _tileBounds = new Box3();
+
 export function rasterizeTile(obj: Object3D, grid: Grid): TileRaster | null {
   const { n, cell, half } = grid;
   obj.updateMatrixWorld(true);
-  const bounds = new Box3().setFromObject(obj);
+  const bounds = _tileBounds.setFromObject(obj);
   if (bounds.isEmpty() || bounds.max.x < -half || bounds.min.x >= half || bounds.max.z < -half || bounds.min.z >= half) {
     return null;
   }

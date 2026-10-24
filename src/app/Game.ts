@@ -361,12 +361,23 @@ export class Game {
    * camera and car does not snap the view
    */
   lineOfSight(from: Vector3, to: Vector3): number {
+    if (this.colliderCells.size === 0) return 1;
     let best = 1;
-    for (const p of [from, to]) {
-      for (const box of this.collidersNear(p)) {
-        if (box.kind === 'prop') continue;
-        const t = segmentVsAabb(from, to, box.min, box.max, CAMERA_PAD);
-        if (t < best) best = t;
+    this._seen.clear();
+    const i0 = Math.floor(Math.min(from.x, to.x) / BROAD_CELL) - 1;
+    const i1 = Math.floor(Math.max(from.x, to.x) / BROAD_CELL) + 1;
+    const j0 = Math.floor(Math.min(from.z, to.z) / BROAD_CELL) - 1;
+    const j1 = Math.floor(Math.max(from.z, to.z) / BROAD_CELL) + 1;
+    for (let cj = j0; cj <= j1; cj++) {
+      for (let ci = i0; ci <= i1; ci++) {
+        const list = this.colliderCells.get(cellKey(ci, cj));
+        if (!list) continue;
+        for (const box of list) {
+          if (box.kind === 'prop' || this._seen.has(box)) continue;
+          this._seen.add(box);
+          const t = segmentVsAabb(from, to, box.min, box.max, CAMERA_PAD);
+          if (t < best) best = t;
+        }
       }
     }
     return best;

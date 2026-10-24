@@ -185,9 +185,9 @@ the wrong one.**
   crests and grade changes, and is about 0.35× the geometric sagitta over the
   structuring element. On 5.3% of SF cells, bare terrain with no buildings in
   the signal already produces a residual above the 3.5 m building threshold,
-  peaking at 17.5 m. `slopeAdaptiveRiseCoeff: 12.0` is currently declared in
-  the thresholds and **never read anywhere**; it should be deleted or replaced
-  with a curvature term. Either way it is not worth doing on its own: a
+  peaking at 17.5 m. The unused `slopeAdaptiveRiseCoeff` threshold was removed after confirming
+  that even a curvature-corrected ground estimate moved connectivity only
+  5.9% -> 6.0%. Either way it is not worth doing on its own: a
   curvature-corrected ground estimate moved connectivity 5.9% → 6.0%.
 
 - **Threshold and mask tuning is a dead end.** Relaxed drivable caps,
