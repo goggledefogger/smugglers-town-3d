@@ -154,4 +154,14 @@ describe('GameRenderer adaptive resolution', () => {
     expect(gr.pixelRatio).toBeGreaterThan(reducedRatio);
     gr.dispose();
   });
+
+  it('removes the exact resize listener function reference on dispose', () => {
+    const gr = new GameRenderer({ canvas: mockCanvas });
+    const addMock = (globalThis as any).window.addEventListener;
+    const removeMock = (globalThis as any).window.removeEventListener;
+    const resizeCall = addMock.mock.calls.find((c: any[]) => c[0] === 'resize');
+    expect(resizeCall).toBeDefined();
+    gr.dispose();
+    expect(removeMock).toHaveBeenCalledWith('resize', resizeCall[1]);
+  });
 });

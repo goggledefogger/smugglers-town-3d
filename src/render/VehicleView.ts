@@ -259,6 +259,7 @@ export class VehicleView {
         for (const m of Array.isArray(mats) ? mats : [mats]) m.dispose();
       }
     });
+    this.healthBar.material.dispose();
     this.barTexture.dispose();
   }
 }

@@ -286,6 +286,10 @@ describe('TOWN Procedural Graffiti Renderers Suite (16 Styles)', () => {
       // Horizontal position stays directly under the vehicle (X=10, Z=-20)
       expect(shadowWorld.x).toBeCloseTo(10, 1);
       expect(shadowWorld.z).toBeCloseTo(-20, 1);
+
+      const spriteMatDispose = vi.spyOn((view as any).healthBar.material, 'dispose');
+      view.dispose();
+      expect(spriteMatDispose).toHaveBeenCalledTimes(1);
     });
   });
 });

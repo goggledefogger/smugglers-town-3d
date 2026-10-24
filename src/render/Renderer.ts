@@ -53,6 +53,7 @@ export class GameRenderer {
   private readonly sun: DirectionalLight;
   private readonly ambient: AmbientLight;
   private readonly hemi: HemisphereLight;
+  private readonly onResize = (): void => this.handleResize();
 
   private computeDisplayLimits(): { baseRatio: number; minScale: number } {
     const dpr = typeof window !== 'undefined' ? (window.devicePixelRatio || 1) : 1;
@@ -113,7 +114,7 @@ export class GameRenderer {
     this.setLightRig('arcade');
 
     if (typeof window !== 'undefined') {
-      window.addEventListener('resize', () => this.handleResize());
+      window.addEventListener('resize', this.onResize);
       deps.canvas.addEventListener('webglcontextlost', (e) => {
         e.preventDefault();
         log.warn('WebGL context lost — reload recommended');
@@ -238,8 +239,9 @@ export class GameRenderer {
 
   dispose(): void {
     if (typeof window !== 'undefined') {
-      window.removeEventListener('resize', this.handleResize);
+      window.removeEventListener('resize', this.onResize);
     }
+    (this.scene.background as Texture | null)?.dispose();
     this.renderer.dispose();
   }
 }

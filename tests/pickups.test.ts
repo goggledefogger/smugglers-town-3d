@@ -18,6 +18,10 @@ describe('Pickups & Terrain-Projected Base Visuals', () => {
       fillRect: () => {},
       strokeRect: () => {},
       createLinearGradient: () => ({ addColorStop: () => {} }),
+      createRadialGradient: () => ({ addColorStop: () => {} }),
+      beginPath: () => {},
+      arc: () => {},
+      fill: () => {},
       getImageData: () => ({ data: new Uint8ClampedArray(512 * 512 * 4).fill(230) }),
       putImageData: () => {}
     };
@@ -189,5 +193,23 @@ describe('Pickups & Terrain-Projected Base Visuals', () => {
 
     expect(() => pickups.sync(dummyState, 0, 0.016, () => null)).not.toThrow();
     pickups.dispose();
+  });
+
+  it('removes base and crate groups from the scene on dispose', () => {
+    const sceneWithRemove = { add: vi.fn(), remove: vi.fn() };
+    const pickups = new Pickups(sceneWithRemove, null, () => mockHeightfield);
+    const dummyState: MatchState = {
+      scores: { 0: 0, 1: 0 },
+      winner: null,
+      contraband: [{ id: 0, pos: new Vector3(0, 10, 0), carrier: null, delivered: false, lastTransfer: -Infinity }],
+      bases: {
+        0: new Vector3(0, 10, 0),
+        1: new Vector3(50, 10, 0)
+      }
+    };
+    pickups.sync(dummyState, 0, 0.016, () => null);
+    expect(sceneWithRemove.add).toHaveBeenCalledTimes(3);
+    pickups.dispose();
+    expect(sceneWithRemove.remove).toHaveBeenCalledTimes(3);
   });
 });

@@ -79,7 +79,7 @@ export class SmokingToilet {
       roughness: 0.24,
       emissive: 0x4a3200,
       emissiveIntensity: 0.15,
-      envMap: env ?? undefined,
+      ...(env ? { envMap: env } : {}),
       envMapIntensity: 1.0
     });
 
@@ -87,7 +87,7 @@ export class SmokingToilet {
       color: 0xffd952,
       metalness: 0.94,
       roughness: 0.16,
-      envMap: env ?? undefined,
+      ...(env ? { envMap: env } : {}),
       envMapIntensity: 1.1
     });
 
@@ -95,7 +95,7 @@ export class SmokingToilet {
       color: 0xffffff,
       metalness: 0.95,
       roughness: 0.1,
-      envMap: env ?? undefined,
+      ...(env ? { envMap: env } : {}),
       envMapIntensity: 1.2
     });
 

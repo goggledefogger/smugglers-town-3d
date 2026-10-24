@@ -262,7 +262,8 @@ export class GroundStreamer {
   private async createPatch(
     key: string, col: number, row: number, cellWx: number, cellWz: number
   ): Promise<void> {
-    const centerPix = latLonToWorldPixel(this.center.lat, this.center.lon, this.zoom);
+    const zoom = this.zoom;
+    const centerPix = latLonToWorldPixel(this.center.lat, this.center.lon, zoom);
     const patchPixX = centerPix.x + col * 640;
     const patchPixY = centerPix.y + row * 640;
     const { lat, lon } = worldPixelToLatLon(patchPixX, patchPixY, this.zoom);
@@ -284,7 +285,7 @@ export class GroundStreamer {
       }
     }
 
-    if (this.disposed || !buf) return;
+    if (this.disposed || this.zoom !== zoom || !buf) return;
     if (typeof Image === 'undefined') return;
 
     let img: HTMLImageElement | null = null;
@@ -294,7 +295,7 @@ export class GroundStreamer {
       return;
     }
 
-    if (this.disposed || !img) return;
+    if (this.disposed || this.zoom !== zoom || !img) return;
 
     const tex = new Texture(img);
     tex.colorSpace = SRGBColorSpace;
