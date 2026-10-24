@@ -139,9 +139,8 @@ phase plan. The per-driver input-source interface now exists
 
 - ESLint with typescript-eslint and `npm run lint` are not set up on `main`
   yet; a one-commit attempt sits unmerged on `chore/eslint-ci`.
-- CI. The checks themselves exist — `npm run typecheck`, `npm test`,
-  `npm run build`, `npm run smoke` (no key needed) and `npm run e2e:online` —
-  but nothing runs them on a push.
+- **CI (Done)**: `.github/workflows/ci.yml` runs `npm ci`, `npm run typecheck`,
+  `npm test`, and `npm run build` automatically on pushes to `main` and pull requests.
 - A per-frame HUD channel like the direction arrow's for speed and integrity,
   so they don't tick at 10 Hz.
 

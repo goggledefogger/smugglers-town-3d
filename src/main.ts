@@ -43,7 +43,6 @@ import { PropScatter } from './render/PropScatter.ts';
 import { Pickups } from './render/Pickups.ts';
 import { CameraRig } from './render/CameraRig.ts';
 import { AudioManager } from './audio/AudioManager.ts';
-import { Vector3 } from 'three';
 
 import { Showroom } from './render/Showroom.ts';
 import { setVehicleEnvMap } from './render/vehicles/index.ts';
@@ -62,16 +61,14 @@ import { FrameProfiler } from './app/frameProfiler.ts';
 import { PROTOCOL_VERSION } from './net/protocol.ts';
 import { relocate, relocateTo } from './services/relocate.ts';
 import { FOOTPRINT_RADIUS_M, type TileStreamer } from './services/tiles/Tileset.ts';
-import { AmortizedGroundBuilder, TILE_GROUND_GAP, type ColliderExperimentMode } from './services/tiles/tileColliders.ts';
+import { AmortizedGroundBuilder, TILE_GROUND_GAP } from './services/tiles/tileColliders.ts';
 import {
-  type Resolution3DMode, RESOLUTION_3D_MODES, getResolutionProfile,
-  loadResolution3D, saveResolution3D, setWeakDeviceHint
+  type Resolution3DMode, setWeakDeviceHint
 } from './services/tiles/resolutionProfiles.ts';
 import { SurfaceHeightfield, surfaceGate, type SurfaceGate } from './core/terrain/SurfaceHeightfield.ts';
-import { SurfaceCapture, SurfacePreview } from './render/SurfaceCapture.ts';
+import { SurfaceCapture } from './render/SurfaceCapture.ts';
 import { GroundStreamer } from './services/maps/GroundStreamer.ts';
-import { getScenario, findScenarioByCoords, type TestScenario } from './core/geo/testScenarios.ts';
-import { worldToLl } from './core/geo/projection.ts';
+import { DiagnosticHud } from './ui/hud/DiagnosticHud.ts';
 import { SpeedGauge } from './ui/hud/SpeedGauge.ts';
 import { ScorePanel } from './ui/hud/ScorePanel.ts';
 import { ObjectiveBar } from './ui/hud/ObjectiveBar.ts';
@@ -292,8 +289,7 @@ let surfaceState: SurfaceGate = 'off';
 // made once and kept: switching the mode back on, or relocating, then costs no shader compile
 let surfaceField: SurfaceHeightfield | null = null;
 let surfaceCapture: SurfaceCapture | null = null;
-let surfacePreview: SurfacePreview | null = null;
-let surfacePreviewAt = 0;
+let diagnosticHud: DiagnosticHud;
 const surfaceBtn = document.getElementById('surface-btn') as HTMLButtonElement | null;
 const surfaceText = document.getElementById('surface-text') as HTMLSpanElement | null;
 
@@ -318,7 +314,7 @@ function deactivateSurface(): void {
   surfaceActive = false;
   surfaceCapture?.reset();
   game.setVehicleGround(undefined);
-  if (surfacePreview) surfacePreview.visible = false;
+  diagnosticHud?.hideSurfacePreview();
 }
 
 /** Bring the composite in line with surfaceOn, the loaded tiles and the current game. Idempotent. */
@@ -351,14 +347,14 @@ function applySurface(): void {
 
 function toggleSurfaceMode(): void {
   if (isOnlineClient()) {
-    showToast('True Surface changes physics: the host decides');
+    diagnosticHud.showToast('True Surface changes physics: the host decides');
     return;
   }
   surfaceOn = !surfaceOn;
   applySurface();
-  if (!tiles) showToast(`True Surface ${surfaceOn ? 'armed' : 'off'}: it needs a real place with 3D tiles`);
-  else if (surfaceState === 'hidden') showToast('True Surface on, paused: this view hides the 3D tiles, so the wheels keep the 10 m grid');
-  else showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface' : 'True Surface off: 10 m ground grid');
+  if (!tiles) diagnosticHud.showToast(`True Surface ${surfaceOn ? 'armed' : 'off'}: it needs a real place with 3D tiles`);
+  else if (surfaceState === 'hidden') diagnosticHud.showToast('True Surface on, paused: this view hides the 3D tiles, so the wheels keep the 10 m grid');
+  else diagnosticHud.showToast(surfaceOn ? 'True Surface: wheels ride the 1 m tile surface' : 'True Surface off: 10 m ground grid');
 }
 
 surfaceBtn?.addEventListener('click', toggleSurfaceMode);
@@ -384,15 +380,15 @@ function attachTiles(streamer: TileStreamer, terrain: TerrainProvider): void {
     groundStreamer.useHeightfield(terrain.heightfield);
     groundStreamer.underTiles = REVEALS_GROUND.has(clutterMode);
   }
-  if (currentExperiment !== 'baseline') {
-    streamer.setExperimentMode(currentExperiment);
+  if (diagnosticHud.experimentMode !== 'baseline') {
+    streamer.setExperimentMode(diagnosticHud.experimentMode);
   }
-  streamer.setResolutionMode(currentResolution3D);
+  streamer.setResolutionMode(diagnosticHud.resolutionMode);
   streamer.onRoadsLoaded = () => {
     log.info('OSM roads arrived in background, refreshing colliders');
     refreshColliders();
     if (viewMode === 'vector-city') rebuildRibbons();
-    showToast('OSM Road Mask Loaded: Road Corridors Carved');
+    diagnosticHud.showToast('OSM Road Mask Loaded: Road Corridors Carved');
   };
   streamer.onBuildingsLoaded = () => {
     log.info('building footprints arrived in background, refreshing colliders');
@@ -1421,7 +1417,7 @@ settingsEl.addEventListener('settings-close', () => {
 });
 settingsEl.addEventListener('resolution-change', (e: Event) => {
   const mode = (e as CustomEvent).detail.mode as Resolution3DMode;
-  applyResolutionProfile(mode);
+  diagnosticHud.applyResolutionProfile(mode);
 });
 
 /** The lobby and its network code load on first use, so single player never pays for Firebase. */
@@ -1448,7 +1444,7 @@ async function openOnline(type: number): Promise<void> {
         loaderEl.hidden = false;
         try {
           const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocateTo(
-            map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy, currentResolution3D
+            map, apiKey, msg => { loaderEl.message = msg; }, renderer.maxAnisotropy, diagnosticHud.resolutionMode
           );
           clearTiles();
           tiles = newTiles;
@@ -1537,7 +1533,7 @@ relocateBarEl.onSearch = async (q, key) => {
   try {
     const { terrain: loaded, tiles: newTiles, groundStreamer: newGround } = await relocate({
       query: q, apiKey: key, anisotropy: renderer.maxAnisotropy,
-      resolutionMode: currentResolution3D,
+      resolutionMode: diagnosticHud.resolutionMode,
       onProgress: (msg) => { loaderEl.message = msg; }
     });
     // one ground for everything: physics, spawn, drape and props all sample
@@ -1597,255 +1593,21 @@ dirArrowEl.bind(store);
 minimapEl.bind(store);
 
 // ---- live alignment diagnostic HUD (toggle with F8 or ?debug / ?scenario) ----
-const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
-let showDiagnostic = !!urlParams && (urlParams.has('debug') || urlParams.has('scenario') || urlParams.has('lat'));
-const diagEl = document.createElement('div');
-diagEl.id = 'debug-diagnostic';
-diagEl.style.cssText = 'position:fixed;top:12px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(11,15,23,0.92);backdrop-filter:blur(8px);border:1px solid #ff5500;border-radius:8px;padding:8px 16px;font-family:\'JetBrains Mono\',monospace;font-size:11px;color:#f1f5f9;pointer-events:none;display:flex;gap:14px;align-items:center;box-shadow:0 4px 20px rgba(0,0,0,0.6);';
-diagEl.style.display = showDiagnostic ? 'flex' : 'none';
-diagEl.innerHTML = `
-  <span style="color:#ff5a1f;font-weight:700;">[F8 DIAG]</span>
-  <span id="diag-gps" style="color:#ffb84d;font-weight:600;display:none;"></span>
-  <span id="diag-xz">X:0 Z:0</span>
-  <span id="diag-ground">Ground: 0.0m</span>
-  <span id="diag-car">Car Y: 0.0m</span>
-  <span id="diag-status" style="font-weight:700;"></span>
-  <span id="diag-tiles">Tiles: off</span>
-  <span id="diag-surface" style="font-weight:600;color:#c4b5fd;display:none;"></span>
-  <span id="diag-osm" style="font-weight:600;color:#eab308;">OSM: ⏳ Pending</span>
-  <button id="res-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #10b981;color:#34d399;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
-    RES: Balanced [F10]
-  </button>
-  <button id="exp-toggle-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #38bdf8;color:#38bdf8;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
-    EXP: Baseline (10m) [F9]
-  </button>
-  <button id="exp-teleport-btn" style="pointer-events:auto;cursor:pointer;background:#1e293b;border:1px solid #a855f7;color:#c084fc;border-radius:4px;padding:2px 8px;font-family:inherit;font-size:11px;font-weight:700;">
-    Teleport [T]
-  </button>
-`;
-document.body.appendChild(diagEl);
-
-const diagGpsEl = diagEl.querySelector('#diag-gps') as HTMLElement | null;
-const diagXzEl = diagEl.querySelector('#diag-xz') as HTMLElement | null;
-const diagGroundEl = diagEl.querySelector('#diag-ground') as HTMLElement | null;
-const diagCarEl = diagEl.querySelector('#diag-car') as HTMLElement | null;
-const diagStatusEl = diagEl.querySelector('#diag-status') as HTMLElement | null;
-const diagTilesEl = diagEl.querySelector('#diag-tiles') as HTMLElement | null;
-const diagOsmEl = diagEl.querySelector('#diag-osm') as HTMLElement | null;
-const diagSurfaceEl = diagEl.querySelector('#diag-surface') as HTMLElement | null;
-const resToggleBtn = diagEl.querySelector('#res-toggle-btn') as HTMLButtonElement | null;
-const expToggleBtn = diagEl.querySelector('#exp-toggle-btn') as HTMLButtonElement | null;
-
-window.addEventListener('keydown', (e) => {
-  if (e.code === 'F8') {
-    showDiagnostic = !showDiagnostic;
-    diagEl.style.display = showDiagnostic ? 'flex' : 'none';
-  }
-  // letter hotkeys are bare keys: any of Cmd/Ctrl/Alt held means the
-  // keystroke belongs to the browser (Cmd+R reload, Cmd+Shift+R hard reload),
-  // so neither fire the hotkey nor preventDefault it
-  const bareKey = !e.metaKey && !e.ctrlKey && !e.altKey;
-  if (e.code === 'F9' || (e.code === 'KeyE' && bareKey && !e.repeat && !isTypingInField())) {
-    cycleExperimentMode();
-    e.preventDefault();
-  }
-  if (e.code === 'F10' || ((e.code === 'KeyV' || e.code === 'KeyR') && e.shiftKey && bareKey && !e.repeat && !isTypingInField())) {
-    cycleResolutionMode();
-    e.preventDefault();
-  }
-  if (e.code === 'KeyT' && bareKey && !e.repeat && !isTypingInField()) {
-    teleportToObstacle();
-    e.preventDefault();
-  }
+diagnosticHud = new DiagnosticHud({
+  urlParams: typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null,
+  weakDevice: WEAK_DEVICE,
+  renderer,
+  settingsEl,
+  relocateBarEl,
+  cameraRig,
+  getWorld: () => world,
+  getTiles: () => tiles,
+  getGroundStreamer: () => groundStreamer,
+  getClutterFilter: () => clutterFilter,
+  applyColliders: () => applyColliders(),
+  getSurface: () => ({ active: surfaceActive, field: surfaceField, capture: surfaceCapture })
 });
-
-// ---- 3D Resolution & Photogrammetry Fidelity Profiles ----
-// the renderer exists since the top of the file and cutoutDeviceSettings has run by here, so the
-// weak signal (same one as the Cutout stencil texel) is known before the first tile load
-let currentResolution3D: Resolution3DMode = loadResolution3D(urlParams?.get('res3d') ?? null, WEAK_DEVICE);
-
-function applyResolutionProfile(mode: Resolution3DMode): void {
-  currentResolution3D = mode;
-  saveResolution3D(mode);
-  const profile = getResolutionProfile(mode);
-  renderer.setDprCap(profile.dprCap);
-  if (tiles) {
-    tiles.setResolutionMode(mode);
-  }
-  if (groundStreamer) {
-    groundStreamer.setZoom(profile.satelliteZoom, profile.satelliteMaxPatches, profile.anisotropy);
-  }
-  if (settingsEl) {
-    settingsEl.resolutionMode = mode;
-  }
-  if (resToggleBtn) {
-    resToggleBtn.textContent = `RES: ${profile.label} [F10]`;
-  }
-  showToast(`[3D RES: ${profile.label}] ${profile.description}`);
-}
-
-function cycleResolutionMode(): void {
-  const idx = RESOLUTION_3D_MODES.indexOf(currentResolution3D);
-  const next = RESOLUTION_3D_MODES[(idx + 1) % RESOLUTION_3D_MODES.length]!;
-  applyResolutionProfile(next);
-}
-
-// Initialize renderer DPR cap from chosen profile
-renderer.setDprCap(getResolutionProfile(currentResolution3D).dprCap);
-if (settingsEl) {
-  settingsEl.resolutionMode = currentResolution3D;
-}
-if (resToggleBtn) {
-  resToggleBtn.textContent = `RES: ${getResolutionProfile(currentResolution3D).label} [F10]`;
-}
-
-// ---- Driving Experiments (Road Clearance & Building Collider Fidelity) ----
-const EXPERIMENT_MODES: readonly ColliderExperimentMode[] = [
-  'baseline',
-  'road_carve',
-  'curbside_inset',
-  'high_res'
-];
-
-let currentExperiment: ColliderExperimentMode = 'baseline';
-const expParam = urlParams?.get('colliderExp') as ColliderExperimentMode | null;
-if (expParam && EXPERIMENT_MODES.includes(expParam)) {
-  currentExperiment = expParam;
-}
-
-function experimentLabel(mode: ColliderExperimentMode): string {
-  switch (mode) {
-    case 'baseline': return 'Baseline (10m)';
-    case 'road_carve': return 'Road-Carve (OSM)';
-    case 'curbside_inset': return 'Curbside-Inset (2.4m)';
-    case 'high_res': return 'High-Res 5m Grid';
-  }
-}
-
-function experimentDescription(mode: ColliderExperimentMode): string {
-  switch (mode) {
-    case 'baseline': return '10m grid, 1.0m inset (reproduces road obstruction)';
-    case 'road_carve': return 'OSM Overpass reactive rebuild + 0.85 reach clearance corridor';
-    case 'curbside_inset': return '2.4m exterior street insetting (100% offline-safe)';
-    case 'high_res': return '5m sub-lane grid resolution (fine-grained geometry)';
-  }
-}
-
-const toastEl = document.createElement('div');
-toastEl.id = 'exp-toast';
-toastEl.style.cssText = 'position:fixed;bottom:80px;left:50%;transform:translateX(-50%);z-index:9999;background:rgba(15,23,42,0.94);backdrop-filter:blur(10px);border:1px solid #38bdf8;border-radius:8px;padding:8px 18px;font-family:\'JetBrains Mono\',monospace;font-size:12px;color:#f1f5f9;box-shadow:0 8px 30px rgba(0,0,0,0.6);transition:opacity 0.3s ease, transform 0.3s ease;pointer-events:none;opacity:0;';
-document.body.appendChild(toastEl);
-let toastTimer: ReturnType<typeof setTimeout> | null = null;
-
-function showToast(msg: string): void {
-  toastEl.textContent = msg;
-  toastEl.style.opacity = '1';
-  toastEl.style.transform = 'translateX(-50%) translateY(0)';
-  if (toastTimer) clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
-    toastEl.style.opacity = '0';
-    toastEl.style.transform = 'translateX(-50%) translateY(8px)';
-  }, 3500);
-}
-
-function setExperiment(mode: ColliderExperimentMode): void {
-  currentExperiment = mode;
-  if (tiles) {
-    tiles.setExperimentMode(mode);
-    if (clutterFilter) {
-      clutterFilter.updateStructureGrid(tiles.structureGrid, tiles.grid.n);
-    }
-    applyColliders();
-  }
-  if (expToggleBtn) {
-    expToggleBtn.textContent = `EXP: ${experimentLabel(mode)} [F9]`;
-  }
-  showToast(`[EXP: ${experimentLabel(mode)}] ${experimentDescription(mode)}`);
-}
-
-function cycleExperimentMode(): void {
-  const idx = EXPERIMENT_MODES.indexOf(currentExperiment);
-  const next = EXPERIMENT_MODES[(idx + 1) % EXPERIMENT_MODES.length]!;
-  setExperiment(next);
-}
-
-function teleportToObstacle(): void {
-  const player = world.player;
-  if (!player) return;
-  const targetX = 290;
-  const targetZ = 12;
-  const hf = world.terrainProvider.heightfield;
-  const targetY = (tiles ? tiles.surfaceElevation(targetX, targetZ, 15, hf.sample(targetX, targetZ)) : null)
-    ?? (hf.sample(targetX, targetZ) + 1.2);
-
-  player.body.pos.set(targetX, targetY, targetZ);
-  player.body.vel.set(0, 0, 0);
-  player.body.angVel.set(0, 0, 0);
-  player.body.quat.setFromAxisAngle(new Vector3(0, 1, 0), -Math.PI / 2);
-  player.body.snapPrev();
-  cameraRig.skipIntro(player.body);
-  cameraRig.snap(player.body);
-  showToast('Teleported in front of St. Johns Bridge road test spot (X:290, Z:12)');
-}
-
-diagEl.addEventListener('click', (e) => {
-  const target = e.target as HTMLElement | null;
-  if (!target) return;
-  if (target.id === 'res-toggle-btn' || target.closest('#res-toggle-btn')) {
-    cycleResolutionMode();
-  } else if (target.id === 'exp-toggle-btn' || target.closest('#exp-toggle-btn')) {
-    cycleExperimentMode();
-  } else if (target.id === 'exp-teleport-btn' || target.closest('#exp-teleport-btn')) {
-    teleportToObstacle();
-  }
-});
-
-// ---- URL test scenarios / deep linking (?scenario=<id> | ?lat=<lat>&lon=<lon> | ?key=<apiKey>) ----
-if (urlParams) {
-  const urlKey = urlParams.get('key');
-  if (urlKey) {
-    localStorage.setItem('gmap_key', urlKey.trim());
-  }
-  const scenarioId = urlParams.get('scenario');
-  const latStr = urlParams.get('lat');
-  const lonStr = urlParams.get('lon');
-
-  let targetCoords: string | null = null;
-  let targetScenario: TestScenario | undefined = undefined;
-
-  if (scenarioId) {
-    targetScenario = getScenario(scenarioId);
-    if (targetScenario) {
-      targetCoords = `${targetScenario.lat}, ${targetScenario.lon}`;
-    }
-  } else if (latStr && lonStr) {
-    const lat = parseFloat(latStr);
-    const lon = parseFloat(lonStr);
-    if (!isNaN(lat) && !isNaN(lon)) {
-      targetCoords = `${lat}, ${lon}`;
-      targetScenario = findScenarioByCoords(lat, lon);
-    }
-  }
-
-  if (targetCoords) {
-    const activeKey = urlKey || localStorage.getItem('gmap_key') || '';
-    if (activeKey) {
-      relocateBarEl.busy = true;
-      relocateBarEl.hidden = true;
-      relocateBarEl.featured = false;
-      setTimeout(() => {
-        // a deep link relocates into the garage backdrop — START ENGINE (or a
-        // game already in progress) plays from there; no forced match start
-        relocateBarEl.onSearch?.(targetCoords, activeKey);
-      }, 50);
-    } else {
-      setTimeout(() => {
-        relocateBarEl.setQuery(targetCoords);
-        relocateBarEl.status = `Scenario: ${targetScenario?.name ?? targetCoords}. Enter Google Maps API key to relocate.`;
-      }, 200);
-    }
-  }
-}
+diagnosticHud.bootstrapUrlScenario();
 
 // ---- frame loop ----
 let last = performance.now();
@@ -1864,54 +1626,7 @@ function step(now: number): void {
     renderer.adapt(rawDt, now);
   }
 
-  if (showDiagnostic && world.player?.body) {
-    const b = world.player.body;
-    const hf = world.terrainProvider.heightfield;
-    const groundY = hf.sample(b.pos.x, b.pos.z);
-    const diff = b.pos.y - groundY;
-    const isUnder = diff < -0.3;
-    const center = world.terrainProvider.center;
-    if (center && diagGpsEl) {
-      const gps = worldToLl(b.pos.x, b.pos.z, center);
-      const matched = findScenarioByCoords(gps.lat, gps.lon);
-      diagGpsEl.style.display = 'inline';
-      diagGpsEl.textContent = `${matched ? `[${matched.name}]` : 'GPS'} ${gps.lat.toFixed(5)}, ${gps.lon.toFixed(5)}`;
-    } else if (diagGpsEl) {
-      diagGpsEl.style.display = 'none';
-    }
-    if (diagXzEl) diagXzEl.textContent = `X:${b.pos.x.toFixed(0)} Z:${b.pos.z.toFixed(0)}`;
-    if (diagGroundEl) diagGroundEl.textContent = `Ground: ${groundY.toFixed(1)}m`;
-    if (diagCarEl) diagCarEl.textContent = `Car Y: ${b.pos.y.toFixed(1)}m`;
-    if (diagStatusEl) {
-      diagStatusEl.style.color = isUnder ? '#ff2d55' : '#7dd87d';
-      diagStatusEl.textContent = isUnder ? `⚠️ UNDERGROUND (${Math.abs(diff).toFixed(1)}m)` : `✅ ON SURFACE (Δ ${diff.toFixed(2)}m)`;
-    }
-    if (diagTilesEl) {
-      diagTilesEl.textContent = `Tiles: ${tiles ? `${tiles.tileCount} active` : 'off'}${groundStreamer ? ` | Sat: Z${groundStreamer.activeZoom} (${groundStreamer.patchCount}p)` : ''}`;
-    }
-    if (diagOsmEl) {
-      diagOsmEl.style.color = tiles?.hasRoadGrid ? '#38bdf8' : '#eab308';
-      diagOsmEl.textContent = `OSM: ${tiles?.hasRoadGrid ? '✅ Loaded' : '⏳ Pending'}`;
-    }
-    if (diagSurfaceEl) {
-      const on = surfaceActive && surfaceField !== null && surfaceCapture !== null;
-      diagSurfaceEl.style.display = on ? 'inline' : 'none';
-      if (on) {
-        const t = surfaceCapture!.timings;
-        diagSurfaceEl.textContent = `Surface: ${surfaceField!.sample(b.pos.x, b.pos.z).toFixed(2)}m (Δ ${surfaceField!.deltaAt(b.pos.x, b.pos.z).toFixed(2)}) cap ${t.renderMs.toFixed(1)}/${t.readbackMs.toFixed(0)}/${t.processMs.toFixed(1)}ms ×${t.captures}`;
-      }
-    }
-  }
-
-  // F8 corner view of the captured surface, redrawn at 10 Hz (the field itself only changes per capture)
-  if (showDiagnostic && surfaceActive && surfaceField && world.player?.body && now - surfacePreviewAt > 100) {
-    surfacePreviewAt = now;
-    surfacePreview ??= new SurfacePreview();
-    surfacePreview.visible = true;
-    surfacePreview.draw(surfaceField, world.player.body.pos.x, world.player.body.pos.z);
-  } else if (surfacePreview && (!showDiagnostic || !surfaceActive)) {
-    surfacePreview.visible = false;
-  }
+  diagnosticHud.update(now);
 
   // poll every source each frame so gamepad edges fire on menus too — the
   // gamepad has no keydown event, so its edge scan must run even when nothing
