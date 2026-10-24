@@ -371,6 +371,7 @@ export class TileStreamer {
   /** OSM road-centreline mask on the same grid; null until fetched or when the fetch failed. */
   private roadGrid: RoadGrid | null = null;
   private inFlight = false;
+  private disposed = false;
   private lastPickMs = 0;
   private dirty = false;
   private shiftY = 0;
@@ -575,14 +576,18 @@ export class TileStreamer {
       // as the imagery, lands first; OSM ways from Overpass add the alleys Google omits
       // whenever a mirror answers, and stand alone if the Google raster fails
       try {
-        this.roadRaster = await fetchRoadRasters(origin.lat, origin.lon, this.apiKey);
+        const raster = await fetchRoadRasters(origin.lat, origin.lon, this.apiKey);
+        if (this.disposed) return;
+        this.roadRaster = raster;
         log.info('road mask from google roadmap');
         this.publishRoadGrid();
       } catch (e) {
         log.warn('google road raster failed', String(e).slice(0, 120));
       }
+      if (this.disposed) return;
       try {
         const polys = await fetchRoadPolylines({ lat: origin.lat, lon: origin.lon, halfM: this.grid.half });
+        if (this.disposed) return;
         if (polys) {
           this.roadPolys = polys;
           log.info('road mask: osm ways added', { ways: polys.length });
@@ -591,7 +596,7 @@ export class TileStreamer {
       } catch (e) {
         log.warn('osm road mask failed', e);
       }
-      if (this.roadGrid) return;
+      if (this.disposed || this.roadGrid) return;
       // Overpass is down for hours at a time, and without the corridor mask whole blocks
       // merge into one collider: keep asking, backing off to two minutes, until it answers
       this.roadRetryTimer = setTimeout(() => {
@@ -616,6 +621,7 @@ export class TileStreamer {
       const origin = this.origin;
       try {
         const polys = await fetchFootprints(origin, FOOTPRINT_RADIUS_M);
+        if (this.disposed) return;
         if (polys.length > 0) {
           this.footprintPolys = polys;
           this.buildingRaster = footprintRasterFromPolygons(polys, origin);
@@ -627,8 +633,11 @@ export class TileStreamer {
       } catch (e) {
         log.warn('overture footprints failed', String(e).slice(0, 120));
       }
+      if (this.disposed) return;
       try {
-        this.buildingRaster = await fetchBuildingRaster(origin.lat, origin.lon, this.apiKey);
+        const raster = await fetchBuildingRaster(origin.lat, origin.lon, this.apiKey);
+        if (this.disposed) return;
+        this.buildingRaster = raster;
         log.info('building footprints from google roadmap');
         this.publishBuildingGrid();
       } catch (e) {
@@ -916,7 +925,7 @@ export class TileStreamer {
    * Optional lookDirection and velocity prioritize tiles ahead along the player's trajectory.
    */
   update(playerWorld: Vector3, nowMs: number, lookDirection?: Vector3, velocity?: Vector3): void {
-    if (this.inFlight || nowMs - this.lastPickMs < this.refineIntervalMs) return;
+    if (this.disposed || this.inFlight || nowMs - this.lastPickMs < this.refineIntervalMs) return;
     this.lastPickMs = nowMs;
 
     // Velocity lookahead: offset focus position along vehicle trajectory (up to 120m)
@@ -1098,16 +1107,19 @@ export class TileStreamer {
   }
 
   dispose(): void {
+    this.disposed = true;
     if (this.roadRetryTimer) clearTimeout(this.roadRetryTimer);
     this.roadRetryTimer = null;
     for (const t of this.tiles) disposeTiles(t.group);
     this.tiles.length = 0;
+    this.parked.length = 0;
     this.group.clear();
     this.worker?.terminate();
     this.worker = null;
   }
 
   private async loadChild(tile: CollectedTile): Promise<LoadedTile | null> {
+    if (this.disposed) return null;
     let g: Group | null = null;
     try {
       g = await loadTileGlb(tile, this.placement, this.apiKey, this.anisotropy);
@@ -1115,6 +1127,10 @@ export class TileStreamer {
       noteFailure('parse failed', e);
     }
     if (!g) return null;
+    if (this.disposed) {
+      disposeTiles(g);
+      return null;
+    }
     this.onTileLoaded?.(g);
     return { ...tile, group: g, raster: this.rasterOf(tile.node, g), done: !tile.node.children?.length };
   }
@@ -1122,6 +1138,10 @@ export class TileStreamer {
   private async add(tile: CollectedTile): Promise<LoadedTile | null> {
     const loaded = await this.loadChild(tile);
     if (!loaded) return null;
+    if (this.disposed) {
+      disposeTiles(loaded.group);
+      return null;
+    }
     this.group.add(loaded.group);
     this.tiles.push(loaded);
     this.widenDirty(loaded.group);
@@ -1181,12 +1201,14 @@ export class TileStreamer {
 
   /** Replace a tile with its children; on any failure keep the parent intact. */
   private async refine(tile: LoadedTile): Promise<void> {
+    if (this.disposed) return;
     tile.done = true;
     const kids = await nextLevel(tile.node, tile.session, this.apiKey);
-    if (kids.length === 0) return;
+    if (this.disposed || kids.length === 0) return;
     const parent: CollectedTile = { node: tile.node, session: tile.session, distM: tile.distM, ...(tile.parent ? { parent: tile.parent } : {}) };
     const loaded = await Promise.all(kids.map(k => this.loadChild({ ...k, parent })));
-    if (loaded.some(l => l === null)) {
+    const i = this.tiles.indexOf(tile);
+    if (this.disposed || i < 0 || loaded.some(l => l === null)) {
       for (const l of loaded) {
         if (l) disposeTiles(l.group);
       }
@@ -1197,8 +1219,7 @@ export class TileStreamer {
     this.widenDirty(tile.group);
     this.group.remove(tile.group);
     disposeTiles(tile.group);
-    const i = this.tiles.indexOf(tile);
-    if (i >= 0) this.tiles.splice(i, 1, ...(loaded as LoadedTile[]));
+    this.tiles.splice(i, 1, ...(loaded as LoadedTile[]));
     for (const l of loaded as LoadedTile[]) {
       this.group.add(l.group);
       this.widenDirty(l.group);

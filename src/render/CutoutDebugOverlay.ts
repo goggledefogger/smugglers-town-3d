@@ -81,4 +81,9 @@ export class CutoutDebugOverlay {
     this.lines.geometry.dispose();
     this.lines = null;
   }
+
+  dispose(): void {
+    this.clear();
+    this.material.dispose();
+  }
 }

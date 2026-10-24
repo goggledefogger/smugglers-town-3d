@@ -504,6 +504,7 @@ export class TerrainMesh {
       this._sourceTexture.dispose();
       this._sourceTexture = null;
     }
+    this._uCover.value.dispose();
     this._photorealMat = null;
     this._game3dMat = null;
     this._uCoverCell.value = 0;

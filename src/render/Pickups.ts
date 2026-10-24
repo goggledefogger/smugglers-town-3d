@@ -478,7 +478,7 @@ export class Pickups {
   private visible = true;
 
   constructor(
-    private readonly scene: { add(o: Group): void },
+    private readonly scene: { add(o: Group): void; remove?(o: Group): void },
     private readonly cameraSource?: Camera | (() => Camera | null) | null,
     private readonly ground?: () => Heightfield
   ) {
@@ -563,13 +563,16 @@ export class Pickups {
   dispose(): void {
     for (const c of this.crates) {
       c.toilet.dispose();
+      this.scene.remove?.(c.group);
     }
+    this.crates.length = 0;
     for (const b of this.bases) {
       b.group.traverse(obj => {
         const m = obj as Mesh;
         if (m.geometry) m.geometry.dispose();
         if (m.material) (m.material as Material).dispose();
       });
+      this.scene.remove?.(b.group);
     }
     this.fade.dispose();
     this.dashTex.dispose();
